@@ -1,5 +1,5 @@
 /** CoreCare Cloudflare Worker — v0.5.0 client records */
-const VERSION = "0.8.3";
+const VERSION = "0.9.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, sprint: "Sprint 8.3 — separated platform and organisation workspaces" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, sprint: "Sprint 9 — complete SaaS platform" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -26,6 +26,15 @@ export default {
         if (url.pathname === "/api/dashboard" && request.method === "GET") return dashboardSummary(env.DB, session);
         if (url.pathname === "/api/care-plans" && request.method === "GET") return listAllCarePlans(env.DB, session, url);
         if (url.pathname === "/api/platform/dashboard" && request.method === "GET") return platformDashboard(env.DB, session);
+        if (url.pathname === "/api/platform/search" && request.method === "GET") return platformSearch(env.DB, session, url);
+        if (url.pathname === "/api/platform/audit" && request.method === "GET") return platformAudit(env.DB, session, url);
+        if (url.pathname === "/api/platform/notifications" && request.method === "GET") return platformNotifications(env.DB, session);
+        if (url.pathname === "/api/platform/system-health" && request.method === "GET") return platformSystemHealth(env.DB, session);
+        if (url.pathname === "/api/platform/plans") {
+          if (request.method === "GET") return listSubscriptionPlans(env.DB, session);
+          if (request.method === "POST") return saveSubscriptionPlan(request, env.DB, session);
+        }
+        if (url.pathname === "/api/platform/users" && request.method === "GET") return listPlatformUsers(env.DB, session);
         if (url.pathname === "/api/platform/organisations" && request.method === "GET") return listOrganisations(env.DB, session);
         if (url.pathname === "/api/platform/organisations" && request.method === "POST") return createOrganisation(request, env.DB, session);
         const orgMatch = url.pathname.match(/^\/api\/platform\/organisations\/([^/]+)$/);
@@ -538,6 +547,56 @@ function fromBase64(value) { const binary = atob(value); return Uint8Array.from(
 function json(payload, status = 200, headers = {}) { return new Response(JSON.stringify(payload), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers } }); }
 
 
+
+async function platformSearch(db,session,url){
+  if(!requirePlatform(session)) return forbidden();
+  const q=clean(url.searchParams.get('q')).toLowerCase();
+  if(q.length<2) return json({results:[]});
+  const like=`%${q}%`;
+  const [clients,staff,users]=await Promise.all([
+    db.prepare(`SELECT c.id,c.first_name||' '||c.last_name AS name,'client' AS type,o.id AS organisation_id,o.name AS organisation_name,b.name AS branch_name FROM clients c JOIN organisations o ON o.id=c.organisation_id LEFT JOIN branches b ON b.id=c.branch_id WHERE c.status<>'Archived' AND (lower(c.first_name||' '||c.last_name) LIKE ? OR lower(COALESCE(c.nhs_number,'')) LIKE ?) LIMIT 20`).bind(like,like).all(),
+    db.prepare(`SELECT s.id,s.first_name||' '||s.last_name AS name,'staff' AS type,o.id AS organisation_id,o.name AS organisation_name,b.name AS branch_name FROM staff s JOIN organisations o ON o.id=s.organisation_id LEFT JOIN branches b ON b.id=s.branch_id WHERE s.status<>'Archived' AND lower(s.first_name||' '||s.last_name) LIKE ? LIMIT 20`).bind(like).all(),
+    db.prepare(`SELECT u.id,u.display_name AS name,'user' AS type,o.id AS organisation_id,o.name AS organisation_name,b.name AS branch_name FROM users u JOIN organisations o ON o.id=u.organisation_id LEFT JOIN branches b ON b.id=u.home_branch_id WHERE lower(u.display_name) LIKE ? OR lower(u.email) LIKE ? LIMIT 20`).bind(like,like).all()
+  ]);
+  return json({results:[...(clients.results||[]),...(staff.results||[]),...(users.results||[])].slice(0,40)});
+}
+async function platformAudit(db,session,url){
+  if(!requirePlatform(session)) return forbidden();
+  const limit=Math.min(Math.max(Number(url.searchParams.get('limit'))||100,1),250);
+  const r=await db.prepare(`SELECT a.id,a.action,a.entity_type,a.entity_id,a.detail_json,a.created_at,o.name AS organisation_name,u.display_name AS user_name FROM audit_log a JOIN organisations o ON o.id=a.organisation_id LEFT JOIN users u ON u.id=a.user_id ORDER BY a.created_at DESC LIMIT ?`).bind(limit).all();
+  return json({events:r.results||[]});
+}
+async function platformNotifications(db,session){
+  if(!requirePlatform(session)) return forbidden();
+  const today=new Date();today.setHours(0,0,0,0);const soon=new Date(today);soon.setDate(soon.getDate()+30);
+  const [trials,plans,dbs]=await Promise.all([
+    db.prepare(`SELECT id,name,trial_ends_at FROM organisations WHERE status='active' AND trial_ends_at IS NOT NULL`).all(),
+    db.prepare(`SELECT cp.id,cp.review_date,c.first_name||' '||c.last_name AS client_name,o.name AS organisation_name FROM care_plans cp JOIN clients c ON c.id=cp.client_id JOIN organisations o ON o.id=cp.organisation_id WHERE cp.status='Active' AND cp.review_date IS NOT NULL`).all(),
+    db.prepare(`SELECT s.id,s.dbs_expiry,s.first_name||' '||s.last_name AS staff_name,o.name AS organisation_name FROM staff s JOIN organisations o ON o.id=s.organisation_id WHERE s.status='Active' AND s.dbs_expiry IS NOT NULL`).all()
+  ]);
+  const notices=[];
+  for(const o of trials.results||[]){const d=new Date(o.trial_ends_at+'T00:00:00');if(d<=soon)notices.push({type:d<today?'danger':'warning',title:d<today?'Trial expired':'Trial ending',message:`${o.name} · ${o.trial_ends_at}`,organisationId:o.id});}
+  for(const p of plans.results||[]){const d=new Date(p.review_date+'T00:00:00');if(d<=soon)notices.push({type:d<today?'danger':'warning',title:d<today?'Care plan overdue':'Care plan due',message:`${p.client_name} · ${p.organisation_name} · ${p.review_date}`});}
+  for(const x of dbs.results||[]){const d=new Date(x.dbs_expiry+'T00:00:00');if(d<=soon)notices.push({type:d<today?'danger':'warning',title:d<today?'DBS expired':'DBS expiring',message:`${x.staff_name} · ${x.organisation_name} · ${x.dbs_expiry}`});}
+  return json({notifications:notices.sort((a,b)=>a.type==='danger'?-1:1).slice(0,100)});
+}
+async function platformSystemHealth(db,session){
+  if(!requirePlatform(session)) return forbidden();
+  const [sessions,errors,auditCount]=await Promise.all([
+    db.prepare("SELECT COUNT(*) total FROM sessions WHERE expires_at>CURRENT_TIMESTAMP").first(),
+    db.prepare("SELECT COUNT(*) total FROM api_error_log WHERE created_at>=datetime('now','-24 hours')").first(),
+    db.prepare("SELECT COUNT(*) total FROM audit_log WHERE created_at>=datetime('now','-24 hours')").first()
+  ]);
+  return json({database:'healthy',activeSessions:Number(sessions?.total||0),errors24h:Number(errors?.total||0),auditEvents24h:Number(auditCount?.total||0),workerVersion:VERSION,checkedAt:new Date().toISOString()});
+}
+async function listSubscriptionPlans(db,session){if(!requirePlatform(session))return forbidden();const r=await db.prepare("SELECT * FROM subscription_plans ORDER BY monthly_price_pence,name").all();return json({plans:r.results||[]});}
+async function saveSubscriptionPlan(request,db,session){
+  if(!requirePlatform(session)||session.access_level!=='platform_owner')return forbidden();const i=await readJson(request),name=clean(i.name),id=clean(i.id)||name.toLowerCase().replace(/[^a-z0-9]+/g,'-');if(!name)return json({error:{code:'VALIDATION_ERROR',message:'Enter a plan name.'}},400);
+  await db.prepare(`INSERT INTO subscription_plans(id,name,monthly_price_pence,max_users,max_clients,max_branches,storage_mb,feature_flags_json,status) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,monthly_price_pence=excluded.monthly_price_pence,max_users=excluded.max_users,max_clients=excluded.max_clients,max_branches=excluded.max_branches,storage_mb=excluded.storage_mb,feature_flags_json=excluded.feature_flags_json,status=excluded.status,updated_at=CURRENT_TIMESTAMP`).bind(id,name,Number(i.monthlyPricePence)||0,nullableNumber(i.maxUsers),nullableNumber(i.maxClients),nullableNumber(i.maxBranches),Number(i.storageMb)||1024,typeof i.featureFlags==='object'?JSON.stringify(i.featureFlags):'{}',clean(i.status)||'active').run();
+  await audit(db,session.organisation_id,session.user_id,'platform.plan_saved','subscription_plan',id,{name});return json({ok:true,id},201);
+}
+async function listPlatformUsers(db,session){if(!requirePlatform(session))return forbidden();const r=await db.prepare(`SELECT u.id,u.email,u.display_name,u.access_level,u.status,u.last_login_at,o.name AS organisation_name FROM users u JOIN organisations o ON o.id=u.organisation_id WHERE u.is_platform_user=1 OR u.access_level IN ('platform_owner','platform_admin') ORDER BY u.display_name`).all();return json({users:r.results||[]});}
+
 function requirePlatform(session) {
   return session.is_platform_user || session.access_level === "platform_owner" || session.access_level === "platform_admin";
 }
@@ -600,11 +659,23 @@ async function createOrganisation(request, db, session) {
   return json({organisation:{id,name,slug,status:"active",subscription_plan:plan}},201);
 }
 async function updateOrganisationAdmin(request,db,session,id){
-  if(!requirePlatform(session)) return forbidden(); const input=await readJson(request); const name=clean(input.name),status=clean(input.status)||"active",plan=clean(input.subscriptionPlan)||"development";
-  if(!name||!["active","suspended"].includes(status)) return json({error:{code:"VALIDATION_ERROR",message:"Enter a name and valid status."}},400);
-  const r=await db.prepare("UPDATE organisations SET name=?,status=?,subscription_plan=?,suspended_at=CASE WHEN ?='suspended' THEN CURRENT_TIMESTAMP ELSE NULL END,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(name,status,plan,status,id).run();
-  if(!r.meta.changes)return json({error:{code:"NOT_FOUND",message:"Organisation not found."}},404); await audit(db,session.organisation_id,session.user_id,"platform.organisation_updated","organisation",id,{name,status,plan}); return json({ok:true});
+  if(!requirePlatform(session)) return forbidden();
+  const input=await readJson(request);
+  const existing=await db.prepare("SELECT * FROM organisations WHERE id=?").bind(id).first();
+  if(!existing) return json({error:{code:"NOT_FOUND",message:"Organisation not found."}},404);
+  const name=clean(input.name)||existing.name;
+  const status=clean(input.status)||existing.status||"active";
+  if(!["active","suspended","archived"].includes(status)) return json({error:{code:"VALIDATION_ERROR",message:"Choose a valid organisation status."}},400);
+  const plan=clean(input.subscriptionPlan)||existing.subscription_plan||"development";
+  const flags=typeof input.featureFlags==='object'?JSON.stringify(input.featureFlags):(clean(input.featureFlagsJson)||existing.feature_flags_json||'{}');
+  await db.prepare(`UPDATE organisations SET name=?,status=?,subscription_plan=?,subscription_status=?,trial_ends_at=?,renewal_date=?,licence_reference=?,max_users=?,max_clients=?,max_branches=?,storage_limit_mb=?,logo_url=?,primary_colour=?,contact_email=?,contact_phone=?,feature_flags_json=?,suspended_at=CASE WHEN ?='suspended' THEN COALESCE(suspended_at,CURRENT_TIMESTAMP) ELSE NULL END,archived_at=CASE WHEN ?='archived' THEN COALESCE(archived_at,CURRENT_TIMESTAMP) ELSE NULL END,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(
+    name,status,plan,clean(input.subscriptionStatus)||existing.subscription_status||'trial',clean(input.trialEndsAt)||null,clean(input.renewalDate)||null,clean(input.licenceReference)||null,
+    nullableNumber(input.maxUsers,existing.max_users),nullableNumber(input.maxClients,existing.max_clients),nullableNumber(input.maxBranches,existing.max_branches),nullableNumber(input.storageLimitMb,existing.storage_limit_mb)||1024,
+    clean(input.logoUrl)||null,clean(input.primaryColour)||'#1f6f5f',clean(input.contactEmail)||null,clean(input.contactPhone)||null,flags,status,status,id).run();
+  await audit(db,session.organisation_id,session.user_id,"platform.organisation_updated","organisation",id,{name,status,plan});
+  return json({ok:true});
 }
+function nullableNumber(value,fallback=null){if(value===undefined||value===null||value==='')return fallback===undefined?null:fallback;const n=Number(value);return Number.isFinite(n)?n:null;}
 async function switchOrganisation(request,db,session){
   if(!requirePlatform(session)) return forbidden(); const input=await readJson(request),orgId=clean(input.organisationId),branchId=clean(input.branchId)||null;
   const org=await db.prepare("SELECT id,name,status FROM organisations WHERE id=?").bind(orgId).first(); if(!org)return json({error:{code:"NOT_FOUND",message:"Organisation not found."}},404);

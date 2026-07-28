@@ -1,8 +1,8 @@
 {
   "name": "corecare",
-  "version": "0.7.1",
+  "version": "0.9.0",
   "private": true,
-  "description": "CoreCare staff workspace, live dashboard and client records",
+  "description": "CoreCare multi-tenant care management SaaS platform",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
