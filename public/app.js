@@ -116,7 +116,7 @@ function updateIdentity() {
   document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
-const CORECARE_FALLBACK_VERSION = '1.2.1';
+const CORECARE_FALLBACK_VERSION = '1.2.2';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -140,21 +140,35 @@ const platformViewMeta = {
   'platform-admin-drawer': { title: 'Security & audit', kicker: 'Governance' }
 };
 
-const platformMovableViews = new Map();
+const platformDedicatedTargets = [
+  'revenue-centre',
+  'customer-success-centre',
+  'organisation-portfolio',
+  'platform-global-search-panel',
+  'platform-operations-panel',
+  'platform-admin-drawer'
+];
 
 function initialisePlatformViews() {
-  ['organisation-portfolio','platform-global-search-panel','platform-operations-panel'].forEach(id => {
-    const node = document.getElementById(id);
-    if (!node || platformMovableViews.has(id)) return;
-    platformMovableViews.set(id, { node, parent: node.parentNode, next: node.nextSibling });
-  });
-}
+  const platformPage = document.getElementById('platform-page');
+  if (!platformPage || platformPage.querySelector(':scope > .platform-view-host')) return;
 
-function restorePlatformSummaryPanels() {
-  for (const { node, parent, next } of platformMovableViews.values()) {
-    if (next && next.parentNode === parent) parent.insertBefore(node, next);
-    else parent.appendChild(node);
-  }
+  const host = document.createElement('div');
+  host.className = 'platform-view-host';
+  platformPage.appendChild(host);
+
+  platformDedicatedTargets.forEach(id => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    const shell = document.createElement('section');
+    shell.className = 'platform-dedicated-view';
+    shell.dataset.platformView = id;
+    shell.hidden = true;
+    host.appendChild(shell);
+    shell.appendChild(node);
+    node.hidden = false;
+    if (node.tagName === 'DETAILS') node.open = true;
+  });
 }
 
 function showPlatformView(targetId = 'platform-page', updateHistory = true) {
@@ -162,28 +176,17 @@ function showPlatformView(targetId = 'platform-page', updateHistory = true) {
   const platformPage = document.getElementById('platform-page');
   if (!platformPage) return;
 
-  restorePlatformSummaryPanels();
-  platformPage.querySelectorAll(':scope > .platform-dedicated-view').forEach(view => view.remove());
-
   const commandChildren = Array.from(platformPage.children).filter(node =>
     node.classList.contains('executive-hero') || node.classList.contains('executive-kpis') || node.classList.contains('executive-grid')
   );
-  const standalone = ['revenue-centre','customer-success-centre','platform-admin-drawer']
-    .map(id => document.getElementById(id)).filter(Boolean);
-
   commandChildren.forEach(node => node.hidden = targetId !== 'platform-page');
-  standalone.forEach(node => node.hidden = true);
 
-  if (targetId !== 'platform-page') {
-    const target = document.getElementById(targetId);
-    if (!target) return;
-    const shell = document.createElement('section');
-    shell.className = 'platform-dedicated-view';
-    shell.dataset.platformView = targetId;
-    platformPage.prepend(shell);
-    shell.appendChild(target);
-    target.hidden = false;
-    if (target.tagName === 'DETAILS') target.open = true;
+  const shells = Array.from(platformPage.querySelectorAll(':scope > .platform-view-host > .platform-dedicated-view'));
+  shells.forEach(shell => { shell.hidden = shell.dataset.platformView !== targetId; });
+
+  if (targetId !== 'platform-page' && !shells.some(shell => shell.dataset.platformView === targetId)) {
+    targetId = 'platform-page';
+    commandChildren.forEach(node => node.hidden = false);
   }
 
   const meta = platformViewMeta[targetId] || platformViewMeta['platform-page'];
