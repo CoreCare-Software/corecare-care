@@ -1,5 +1,5 @@
-/** CoreCare Cloudflare Worker — v0.5.0 client records */
-const VERSION = "0.13.0";
+/** CoreCare Enterprise 1.1.0 — Executive Platform Command Centre */
+const VERSION = "1.1.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, sprint: "Sprint 13 — isolated support mode" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.1.0 — Executive Platform Command Centre" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -643,43 +643,36 @@ function requirePlatform(session) {
 
 async function platformDashboard(db, session) {
   if(!requirePlatform(session)) return forbidden();
-  const today = new Date(); today.setHours(0,0,0,0);
-  const inThirty = new Date(today); inThirty.setDate(inThirty.getDate()+30);
-  const [orgs, branches, users, clients, staff, plans, risks, activity] = await Promise.all([
-    db.prepare(`SELECT o.id,o.name,o.slug,o.status,o.subscription_plan,o.subscription_status,o.trial_ends_at,o.logo_url,o.primary_colour,o.max_users,o.max_clients,o.created_at,
-      COUNT(DISTINCT b.id) AS branch_count,COUNT(DISTINCT u.id) AS user_count,
-      COUNT(DISTINCT c.id) AS client_count,COUNT(DISTINCT s.id) AS staff_count
-      FROM organisations o
-      LEFT JOIN branches b ON b.organisation_id=o.id
-      LEFT JOIN users u ON u.organisation_id=o.id
-      LEFT JOIN clients c ON c.organisation_id=o.id AND c.status<>'Archived'
-      LEFT JOIN staff s ON s.organisation_id=o.id AND s.status='Active'
+  const today=new Date(); today.setHours(0,0,0,0); const inThirty=new Date(today); inThirty.setDate(inThirty.getDate()+30);
+  const [orgs,branches,users,activeUsers,clients,staff,plans,risks,activity,errors,sessions] = await Promise.all([
+    db.prepare(`SELECT o.id,o.name,o.slug,o.status,o.subscription_plan,o.subscription_status,o.trial_ends_at,o.renewal_date,o.created_at,
+      COUNT(DISTINCT b.id) AS branch_count,COUNT(DISTINCT u.id) AS user_count,COUNT(DISTINCT c.id) AS client_count,COUNT(DISTINCT s.id) AS staff_count,
+      MAX(a.created_at) AS last_activity_at,sp.name AS plan_name,COALESCE(sp.monthly_price_pence,0) AS monthly_price_pence
+      FROM organisations o LEFT JOIN branches b ON b.organisation_id=o.id LEFT JOIN users u ON u.organisation_id=o.id
+      LEFT JOIN clients c ON c.organisation_id=o.id AND c.status<>'Archived' LEFT JOIN staff s ON s.organisation_id=o.id AND s.status='Active'
+      LEFT JOIN audit_log a ON a.organisation_id=o.id LEFT JOIN subscription_plans sp ON sp.id=o.subscription_plan
       GROUP BY o.id ORDER BY o.name COLLATE NOCASE`).all(),
-    db.prepare("SELECT COUNT(*) AS total FROM branches WHERE status='active'").first(),
-    db.prepare("SELECT COUNT(*) AS total FROM users WHERE status='active'").first(),
-    db.prepare("SELECT COUNT(*) AS total FROM clients WHERE status<>'Archived'").first(),
-    db.prepare("SELECT COUNT(*) AS total FROM staff WHERE status='Active'").first(),
-    db.prepare("SELECT cp.organisation_id,cp.review_date,cp.status,o.name AS organisation_name FROM care_plans cp JOIN organisations o ON o.id=cp.organisation_id WHERE cp.status='Active'").all(),
-    db.prepare("SELECT r.organisation_id,r.severity,r.status,r.review_date,o.name AS organisation_name FROM risk_assessments r JOIN organisations o ON o.id=r.organisation_id WHERE r.status='Active'").all(),
-    db.prepare(`SELECT a.action,a.entity_type,a.created_at,o.name AS organisation_name,u.display_name AS user_name
-      FROM audit_log a JOIN organisations o ON o.id=a.organisation_id
-      LEFT JOIN users u ON u.id=a.user_id ORDER BY a.created_at DESC LIMIT 12`).all()
+    db.prepare("SELECT COUNT(*) AS total FROM branches WHERE status='active'").first(), db.prepare("SELECT COUNT(*) AS total FROM users WHERE status='active'").first(),
+    db.prepare("SELECT COUNT(DISTINCT user_id) AS total FROM sessions WHERE last_seen_at>=datetime('now','-30 days')").first(),
+    db.prepare("SELECT COUNT(*) AS total FROM clients WHERE status<>'Archived'").first(), db.prepare("SELECT COUNT(*) AS total FROM staff WHERE status='Active'").first(),
+    db.prepare("SELECT organisation_id,review_date,status FROM care_plans WHERE status='Active'").all(), db.prepare("SELECT organisation_id,severity,status FROM risk_assessments WHERE status='Active'").all(),
+    db.prepare(`SELECT a.action,a.entity_type,a.created_at,o.name AS organisation_name,u.display_name AS user_name FROM audit_log a JOIN organisations o ON o.id=a.organisation_id LEFT JOIN users u ON u.id=a.user_id ORDER BY a.created_at DESC LIMIT 18`).all(),
+    db.prepare("SELECT COUNT(*) AS total FROM api_error_log WHERE created_at>=datetime('now','-1 day')").first(), db.prepare("SELECT COUNT(*) AS total FROM sessions WHERE expires_at>CURRENT_TIMESTAMP").first()
   ]);
-  const activePlans = plans.results || [];
-  const overduePlans = activePlans.filter(p => p.review_date && new Date(p.review_date+'T00:00:00') < today).length;
-  const duePlans = activePlans.filter(p => { if(!p.review_date) return false; const d=new Date(p.review_date+'T00:00:00'); return d>=today && d<=inThirty; }).length;
-  const activeRisks = risks.results || [];
-  return json({
-    summary:{
-      organisations:(orgs.results||[]).length,
-      activeOrganisations:(orgs.results||[]).filter(o=>o.status==='active').length,
-      suspendedOrganisations:(orgs.results||[]).filter(o=>o.status==='suspended').length,
-      branches:Number(branches?.total||0), users:Number(users?.total||0), clients:Number(clients?.total||0), staff:Number(staff?.total||0),
-      carePlansDue:duePlans, carePlansOverdue:overduePlans, highRisks:activeRisks.filter(r=>r.severity==='High').length
-    },
-    organisations:orgs.results||[],
-    activity:activity.results||[]
-  });
+  const orgRows=orgs.results||[], planRows=plans.results||[], riskRows=risks.results||[];
+  const perOrgPlans={},perOrgRisks={}; for(const p of planRows)(perOrgPlans[p.organisation_id]??=[]).push(p); for(const r of riskRows)(perOrgRisks[r.organisation_id]??=[]).push(r);
+  const enriched=orgRows.map(o=>{const last=o.last_activity_at?new Date(o.last_activity_at+'Z'):null,daysInactive=last?Math.floor((Date.now()-last.getTime())/86400000):999; const op=perOrgPlans[o.id]||[],or=perOrgRisks[o.id]||[]; const overdue=op.filter(p=>p.review_date&&new Date(p.review_date+'T00:00:00')<today).length; let score=100;if(o.status!=='active')score-=45;if(daysInactive>30)score-=25;else if(daysInactive>14)score-=12;if(overdue)score-=Math.min(25,overdue*5);if(or.some(r=>r.severity==='High'))score-=10;if(!o.user_count)score-=15;score=Math.max(0,Math.min(100,score));return {...o,health_score:score,days_inactive:daysInactive,overdue_plans:overdue};});
+  const billable=enriched.filter(o=>o.status==='active'&&o.subscription_status!=='cancelled'); const mrrPence=billable.reduce((n,o)=>n+Number(o.monthly_price_pence||0),0); const avgHealth=enriched.length?enriched.reduce((n,o)=>n+o.health_score,0)/enriched.length:100; const atRisk=enriched.filter(o=>o.health_score<70).sort((a,b)=>a.health_score-b.health_score).slice(0,8).map(o=>({...o,reason:o.status!=='active'?'Account not active':o.days_inactive>14?`No activity for ${o.days_inactive} days`:o.overdue_plans?`${o.overdue_plans} overdue care plan review${o.overdue_plans===1?'':'s'}`:'Low adoption'}));
+  const renewals=enriched.filter(o=>o.renewal_date).map(o=>{const d=Math.ceil((new Date(o.renewal_date+'T00:00:00')-today)/86400000);return {...o,days_until:d}}).filter(o=>o.days_until>=0&&o.days_until<=30).sort((a,b)=>a.days_until-b.days_until);
+  const overduePlans=planRows.filter(p=>p.review_date&&new Date(p.review_date+'T00:00:00')<today).length, highRisks=riskRows.filter(r=>r.severity==='High').length, errorCount=Number(errors?.total||0);
+  const briefingItems=[
+    {icon:'£',title:`MRR is ${new Intl.NumberFormat('en-GB',{style:'currency',currency:'GBP',maximumFractionDigits:0}).format(mrrPence/100)}`,detail:`Annual run rate ${new Intl.NumberFormat('en-GB',{style:'currency',currency:'GBP',maximumFractionDigits:0}).format(mrrPence*12/100)}`,tone:'success'},
+    {icon:'◆',title:`${billable.length} active customer organisation${billable.length===1?'':'s'}`,detail:`${Number(activeUsers?.total||0)} users active in the last 30 days`,tone:'neutral'},
+    {icon:'!',title:atRisk.length?`${atRisk.length} organisation${atRisk.length===1?'':'s'} need attention`:'Customer portfolio is healthy',detail:atRisk.length?'Open Customer Success to review risk':'No immediate retention risks identified',tone:atRisk.length?'warning':'success'},
+    {icon:'◷',title:renewals.length?`${renewals.length} renewal${renewals.length===1?'':'s'} due within 30 days`:'No imminent renewals',detail:renewals[0]?`${renewals[0].name} is next in ${renewals[0].days_until} days`:'Your renewal calendar is clear',tone:'neutral'},
+    {icon:'✓',title:errorCount?`${errorCount} platform error${errorCount===1?'':'s'} recorded in 24 hours`:'No platform errors recorded',detail:`${Number(sessions?.total||0)} active sessions · Database healthy`,tone:errorCount?'warning':'success'}
+  ];
+  return json({summary:{organisations:enriched.length,activeOrganisations:enriched.filter(o=>o.status==='active').length,suspendedOrganisations:enriched.filter(o=>o.status==='suspended').length,branches:Number(branches?.total||0),users:Number(users?.total||0),activeUsers30d:Number(activeUsers?.total||0),clients:Number(clients?.total||0),staff:Number(staff?.total||0),carePlansOverdue:overduePlans,highRisks},financials:{mrrPence,arrPence:mrrPence*12,averageRevenuePence:billable.length?Math.round(mrrPence/billable.length):0},customerSuccess:{averageHealth:avgHealth,needsAttention:atRisk.length,healthy:enriched.filter(o=>o.health_score>=80).length},operations:{overall:errorCount===0?'Healthy':errorCount<5?'Monitoring':'Attention',database:'Healthy',activeSessions:Number(sessions?.total||0),errors24h:errorCount},briefing:{headline:atRisk.length?`${atRisk.length} customer organisation${atRisk.length===1?' requires':'s require'} your attention today. Otherwise, the platform is operating normally.`:'Your customer portfolio and CoreCare platform are operating normally.',items:briefingItems},organisations:enriched,atRiskOrganisations:atRisk,renewals,activity:activity.results||[]});
 }
 async function listOrganisations(db, session) {
   if (!requirePlatform(session)) return forbidden();

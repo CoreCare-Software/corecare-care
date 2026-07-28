@@ -74,7 +74,7 @@
         <button class="nav-item organisation-workspace-nav" data-page="reports"><span>▥</span>Reports</button>
         <button class="nav-item organisation-workspace-nav" data-page="settings"><span>⚙</span>Settings</button>
       </nav>
-      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>Development</strong><small>CoreCare <span id="dev-version">v0.5.0</span></small></div></div>
+      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>Development</strong><small>CoreCare <span id="dev-version">v1.1.0</span></small></div></div>
     </aside>
 
     <div class="workspace">
@@ -92,33 +92,47 @@
       </div>
       <main id="main-content" tabindex="-1">
         <section id="platform-page" class="page">
-          <div class="platform-hero">
-            <div><p class="eyebrow">CoreCare platform owner</p><h2>Platform administration</h2><p>View every organisation, monitor platform-wide activity and enter an organisation securely when support is needed.</p></div>
-            <div class="platform-context"><span>Current workspace</span><strong>CoreCare Platform</strong><small>Organisation care records are hidden until you enter Support Mode.</small></div>
+          <div class="executive-hero">
+            <div>
+              <p class="eyebrow">CoreCare Enterprise 1.1</p>
+              <h2 id="executive-greeting">Executive Command Centre</h2>
+              <p id="executive-briefing">Preparing your live platform briefing…</p>
+              <div class="executive-actions"><button id="platform-add-organisation" class="primary-button compact">+ New organisation</button><button id="executive-refresh" class="secondary-button compact">Refresh command centre</button></div>
+            </div>
+            <div class="executive-health-card"><span>Platform status</span><strong id="executive-health-score">Checking</strong><small id="executive-health-copy">Reviewing live services</small><div class="health-pulse"></div></div>
           </div>
-          <section class="metrics platform-metrics" aria-label="Platform totals">
-            <article class="metric-card"><div class="metric-icon">◆</div><div><span>Organisations</span><strong id="platform-org-count">0</strong><small><span id="platform-active-orgs">0</span> active</small></div><em><span id="platform-suspended-orgs">0</span> suspended</em></article>
-            <article class="metric-card"><div class="metric-icon">⌂</div><div><span>Branches</span><strong id="platform-branch-count">0</strong><small>Across all organisations</small></div><em><span id="platform-user-count">0</span> user accounts</em></article>
-            <article class="metric-card"><div class="metric-icon">◉</div><div><span>Clients</span><strong id="platform-client-count">0</strong><small>Current client records</small></div><em><span id="platform-staff-count">0</span> active staff</em></article>
-            <article class="metric-card alert"><div class="metric-icon">!</div><div><span>Care plan attention</span><strong id="platform-overdue-count">0</strong><small>overdue reviews</small></div><em><span id="platform-due-count">0</span> due within 30 days · <span id="platform-risk-count">0</span> high risks</em></article>
+
+          <section class="executive-kpis" aria-label="Executive key performance indicators">
+            <article class="executive-kpi revenue"><span>Monthly recurring revenue</span><strong id="executive-mrr">£0</strong><small id="executive-mrr-note">Across active subscriptions</small></article>
+            <article class="executive-kpi"><span>Annual recurring revenue</span><strong id="executive-arr">£0</strong><small>Current run rate</small></article>
+            <article class="executive-kpi"><span>Active organisations</span><strong id="platform-active-orgs">0</strong><small><span id="platform-org-count">0</span> total · <span id="platform-suspended-orgs">0</span> suspended</small></article>
+            <article class="executive-kpi"><span>Licensed users</span><strong id="platform-user-count">0</strong><small><span id="executive-active-users">0</span> recently active</small></article>
+            <article class="executive-kpi"><span>Customer health</span><strong id="executive-customer-health">0%</strong><small><span id="executive-attention-count">0</span> need attention</small></article>
+            <article class="executive-kpi"><span>Renewals approaching</span><strong id="executive-renewals-count">0</strong><small>Within the next 30 days</small></article>
           </section>
-          <section class="content-grid platform-grid">
-            <article class="panel span-two">
-              <div class="panel-heading"><div><p class="eyebrow">Organisations</p><h2>Organisation overview</h2></div><button id="platform-add-organisation" class="primary-button compact">+ Add organisation</button></div>
-              <div class="client-controls platform-controls"><label class="search-field"><span>Search</span><input id="platform-org-search" type="search" placeholder="Search organisation name or plan"></label><label><span>Status</span><select id="platform-org-status"><option value="all">All statuses</option><option value="active">Active</option><option value="suspended">Suspended</option></select></label></div>
-              <div class="table-wrap"><table class="client-table"><thead><tr><th>Organisation</th><th>Plan</th><th>Branches</th><th>Clients</th><th>Staff</th><th>Users</th><th>Status</th><th></th></tr></thead><tbody id="platform-org-table"></tbody></table></div>
+
+          <section class="executive-grid">
+            <article class="panel executive-span-two">
+              <div class="panel-heading"><div><p class="eyebrow">Customer portfolio</p><h2>Organisation health</h2><p>Commercial status, adoption and risk in one view.</p></div><div class="executive-filters"><input id="platform-org-search" type="search" placeholder="Search organisations"><select id="platform-org-status"><option value="all">All statuses</option><option value="active">Active</option><option value="suspended">Suspended</option></select></div></div>
+              <div class="table-wrap"><table class="client-table executive-table"><thead><tr><th>Organisation</th><th>Plan</th><th>MRR</th><th>Health</th><th>Users</th><th>Clients</th><th>Last activity</th><th></th></tr></thead><tbody id="platform-org-table"></tbody></table></div>
               <div id="platform-org-empty" class="empty-state" hidden><strong>No organisations found</strong><span>Change the search or create an organisation.</span></div>
             </article>
-            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Platform activity</p><h2>Recent updates</h2></div></div><div id="platform-activity" class="timeline"><div><p>Loading activity…</p></div></div></article>
+            <article class="panel executive-brief-panel"><div class="panel-heading"><div><p class="eyebrow">Today</p><h2>Executive briefing</h2></div><span class="badge success">Live</span></div><div id="executive-brief-list" class="brief-list"><p class="muted">Loading briefing…</p></div></article>
+
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Customer success</p><h2>Needs attention</h2></div><span id="executive-risk-badge" class="badge neutral">0</span></div><div id="executive-risk-list" class="platform-result-list padded"><p class="muted">Loading…</p></div></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Renewals</p><h2>Upcoming decisions</h2></div></div><div id="executive-renewals" class="platform-result-list padded"><p class="muted">Loading…</p></div></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Platform operations</p><h2>Service health</h2></div><span id="platform-health-badge" class="badge success">Checking</span></div><div id="platform-health" class="health-list padded"></div></article>
+
+            <article class="panel executive-span-two"><div class="panel-heading"><div><p class="eyebrow">Live platform feed</p><h2>Latest activity</h2></div></div><div id="platform-activity" class="timeline executive-timeline"><div><p>Loading activity…</p></div></div></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Global search</p><h2>Find anything</h2></div></div><div class="padded"><label class="search-field"><span>Organisations, users, clients or staff</span><input id="platform-global-search" type="search" placeholder="Enter at least 2 characters"></label><div id="platform-search-results" class="platform-result-list"><p class="muted">No search performed.</p></div></div></article>
           </section>
-          <section class="platform-tools-grid">
-            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Global search</p><h2>Find records securely</h2><p>Search clients, staff and users across the platform. Every result identifies its organisation.</p></div></div><div class="padded"><label class="search-field"><span>Search all organisations</span><input id="platform-global-search" type="search" placeholder="Enter at least 2 characters"></label><div id="platform-search-results" class="platform-result-list"><p class="muted">No search performed.</p></div></div></article>
+
+          <details class="executive-admin-drawer"><summary>Platform administration and audit</summary><section class="platform-tools-grid">
             <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Notifications</p><h2>Platform attention</h2></div><span id="platform-notification-count" class="badge neutral">0</span></div><div id="platform-notifications" class="platform-result-list padded"><p class="muted">Loading…</p></div></article>
-            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">System health</p><h2>Service status</h2></div><span id="platform-health-badge" class="badge success">Checking</span></div><div id="platform-health" class="health-list padded"></div></article>
             <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Subscription plans</p><h2>Plans and licensing</h2></div></div><div id="platform-plans" class="plan-list padded"><p class="muted">Loading…</p></div></article>
             <article class="panel span-two"><div class="panel-heading"><div><p class="eyebrow">Platform audit</p><h2>Security and support history</h2></div></div><div class="table-wrap"><table class="client-table"><thead><tr><th>Time</th><th>Organisation</th><th>User</th><th>Action</th><th>Entity</th></tr></thead><tbody id="platform-audit-table"></tbody></table></div></article>
             <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Platform users</p><h2>CoreCare administrators</h2></div></div><div id="platform-users" class="platform-result-list padded"><p class="muted">Loading…</p></div></article>
-          </section>
+          </section></details>
         </section>
 
         <section id="dashboard-page" class="page active-page">
