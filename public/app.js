@@ -28,10 +28,32 @@ const clientSearch=document.querySelector('#client-search');
 const clientStatusFilter=document.querySelector('#client-status-filter');
 const labels={staff:['Staff','Staff records, employment information, availability and compliance will live here.'],family:['Family portal','Secure family access, updates and messaging will be introduced in a later milestone.'],care:['Care plans','Person-centred care plans, risks, goals, outcomes and reviews will be managed here.'],medication:['Medication','Medication profiles, electronic MAR and administration records will be built here.'],visits:['Visits','Live visits, daily notes, outcomes and evidence of care will be managed here.'],rota:['Rota','Scheduling, recurring calls, assignments, travel and availability will be managed here.'],tasks:['Tasks','Operational tasks, reminders, ownership and escalation will be managed here.'],incidents:['Incidents','Incident reporting, investigation, actions and audit history will be managed here.'],finance:['Finance','Invoices, rates, funding arrangements and payment tracking will be built here.'],reports:['Reports','Operational, quality, compliance and management reporting will be built here.'],settings:['Settings','Organisations, branches, users, roles, permissions and system configuration will be managed here.']};
 let clients=loadClients();
+let storageMode='local';
 function loadClients(){try{const saved=JSON.parse(localStorage.getItem(STORAGE_KEY));return Array.isArray(saved)?saved:seedClients}catch{return seedClients}}
 function saveClients(){localStorage.setItem(STORAGE_KEY,JSON.stringify(clients))}
+
+async function initialiseClientStorage(){
+  try{
+    const response=await fetch('/api/clients',{headers:{'accept':'application/json'}});
+    if(!response.ok)throw new Error('Cloud database unavailable');
+    const payload=await response.json();
+    if(Array.isArray(payload.clients)){clients=payload.clients;storageMode='cloud';}
+  }catch{storageMode='local';clients=loadClients();}
+}
+async function persistClient(client,isUpdate){
+  if(storageMode!=='cloud'){const index=clients.findIndex(item=>item.id===client.id);if(index>=0)clients[index]=client;else clients.unshift(client);saveClients();return client;}
+  const url=isUpdate?`/api/clients/${encodeURIComponent(client.id)}`:'/api/clients';
+  const response=await fetch(url,{method:isUpdate?'PUT':'POST',headers:{'content-type':'application/json','accept':'application/json'},body:JSON.stringify(client)});
+  const payload=await response.json();
+  if(!response.ok)throw new Error(payload?.error?.message||'Unable to save the client record.');
+  const saved=payload.client;
+  const index=clients.findIndex(item=>item.id===saved.id);
+  if(index>=0)clients[index]=saved;else clients.unshift(saved);
+  return saved;
+}
+
 function setDate(){const now=new Date();pageKicker.textContent=new Intl.DateTimeFormat('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).format(now)}
-function showApplication(){loginView.hidden=true;appView.hidden=false;sessionStorage.setItem('corecare-demo-session','active');setDate();renderClients();document.querySelector('#main-content').focus()}
+async function showApplication(){loginView.hidden=true;appView.hidden=false;sessionStorage.setItem('corecare-demo-session','active');setDate();await initialiseClientStorage();renderClients();document.querySelector('#main-content').focus()}
 function showLogin(){appView.hidden=true;loginView.hidden=false;sessionStorage.removeItem('corecare-demo-session');document.querySelector('#email').focus()}
 function showPage(page){[dashboardPage,clientsPage,placeholderPage].forEach(item=>item.classList.remove('active-page'));if(page==='dashboard'){dashboardPage.classList.add('active-page');setDate();pageTitle.textContent='Good afternoon, Chris';return}if(page==='clients'){clientsPage.classList.add('active-page');pageKicker.textContent='People';pageTitle.textContent='Clients';renderClients();return}placeholderPage.classList.add('active-page');const[title,copy]=labels[page];placeholderTitle.textContent=title;placeholderCopy.textContent=copy;pageKicker.textContent='CoreCare module';pageTitle.textContent=title}
 function formatDate(value){if(!value)return'—';return new Intl.DateTimeFormat('en-GB',{day:'2-digit',month:'short',year:'numeric'}).format(new Date(`${value}T12:00:00`))}
@@ -52,5 +74,5 @@ document.querySelector('#close-client-dialog').addEventListener('click',closeCli
 document.querySelector('#cancel-client').addEventListener('click',closeClientDialog);
 clientSearch.addEventListener('input',renderClients);
 clientStatusFilter.addEventListener('change',renderClients);
-clientForm.addEventListener('submit',event=>{event.preventDefault();const data=Object.fromEntries(new FormData(clientForm));const error=document.querySelector('#client-form-error');if(!data.firstName.trim()||!data.lastName.trim()||!data.town.trim()||!data.dateOfBirth||!data.nextReview){error.textContent='Complete all required fields before saving.';error.hidden=false;return}const client={...data,id:data.id||`cl-${Date.now()}`};const index=clients.findIndex(item=>item.id===client.id);if(index>=0)clients[index]=client;else clients.unshift(client);saveClients();renderClients();closeClientDialog()});
+clientForm.addEventListener('submit',async event=>{event.preventDefault();const data=Object.fromEntries(new FormData(clientForm));const error=document.querySelector('#client-form-error');if(!data.firstName.trim()||!data.lastName.trim()||!data.town.trim()||!data.dateOfBirth||!data.nextReview){error.textContent='Complete all required fields before saving.';error.hidden=false;return}const isUpdate=Boolean(data.id);const client={...data,id:data.id||`cl-${Date.now()}`};try{await persistClient(client,isUpdate);renderClients();closeClientDialog()}catch(saveError){error.textContent=saveError.message;error.hidden=false}});
 if(sessionStorage.getItem('corecare-demo-session')==='active')showApplication();
