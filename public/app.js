@@ -7,72 +7,42 @@ const seedClients=[
   {id:'cl-1003',firstName:'Jean',lastName:'Parker',dateOfBirth:'1949-02-21',nhsNumber:'392 701 6654',town:'Horncastle',carePackage:'Wellbeing visits',nextReview:'2026-09-03',status:'Active',risk:'Standard'},
   {id:'cl-1004',firstName:'David',lastName:'Collins',dateOfBirth:'1955-09-08',nhsNumber:'207 996 3145',town:'Boston',carePackage:'Domestic and companionship',nextReview:'2026-08-01',status:'Paused',risk:'Medium'}
 ];
-const loginView=document.querySelector('#login-view');
-const appView=document.querySelector('#app-view');
-const loginForm=document.querySelector('#login-form');
-const loginError=document.querySelector('#login-error');
-const sidebar=document.querySelector('.sidebar');
-const menuButton=document.querySelector('#menu-button');
-const pageTitle=document.querySelector('#page-title');
-const pageKicker=document.querySelector('#page-kicker');
-const dashboardPage=document.querySelector('#dashboard-page');
-const clientsPage=document.querySelector('#clients-page');
-const placeholderPage=document.querySelector('#placeholder-page');
-const placeholderTitle=document.querySelector('#placeholder-title');
-const placeholderCopy=document.querySelector('#placeholder-copy');
-const clientDialog=document.querySelector('#client-dialog');
-const clientForm=document.querySelector('#client-form');
-const clientTableBody=document.querySelector('#client-table-body');
-const clientEmpty=document.querySelector('#client-empty');
-const clientSearch=document.querySelector('#client-search');
-const clientStatusFilter=document.querySelector('#client-status-filter');
+const $=selector=>document.querySelector(selector);
+const loginView=$('#login-view'),appView=$('#app-view'),loginForm=$('#login-form'),loginError=$('#login-error');
+const sidebar=$('.sidebar'),menuButton=$('#menu-button'),pageTitle=$('#page-title'),pageKicker=$('#page-kicker');
+const dashboardPage=$('#dashboard-page'),clientsPage=$('#clients-page'),placeholderPage=$('#placeholder-page');
+const placeholderTitle=$('#placeholder-title'),placeholderCopy=$('#placeholder-copy');
+const clientDialog=$('#client-dialog'),clientForm=$('#client-form'),clientTableBody=$('#client-table-body');
+const clientEmpty=$('#client-empty'),clientSearch=$('#client-search'),clientStatusFilter=$('#client-status-filter');
 const labels={staff:['Staff','Staff records, employment information, availability and compliance will live here.'],family:['Family portal','Secure family access, updates and messaging will be introduced in a later milestone.'],care:['Care plans','Person-centred care plans, risks, goals, outcomes and reviews will be managed here.'],medication:['Medication','Medication profiles, electronic MAR and administration records will be built here.'],visits:['Visits','Live visits, daily notes, outcomes and evidence of care will be managed here.'],rota:['Rota','Scheduling, recurring calls, assignments, travel and availability will be managed here.'],tasks:['Tasks','Operational tasks, reminders, ownership and escalation will be managed here.'],incidents:['Incidents','Incident reporting, investigation, actions and audit history will be managed here.'],finance:['Finance','Invoices, rates, funding arrangements and payment tracking will be built here.'],reports:['Reports','Operational, quality, compliance and management reporting will be built here.'],settings:['Settings','Organisations, branches, users, roles, permissions and system configuration will be managed here.']};
-let clients=loadClients();
-let storageMode='local';
+let clients=loadClients(),storageMode='local',currentUser=null;
 function loadClients(){try{const saved=JSON.parse(localStorage.getItem(STORAGE_KEY));return Array.isArray(saved)?saved:seedClients}catch{return seedClients}}
 function saveClients(){localStorage.setItem(STORAGE_KEY,JSON.stringify(clients))}
-
-async function initialiseClientStorage(){
-  try{
-    const response=await fetch('/api/clients',{headers:{'accept':'application/json'}});
-    if(!response.ok)throw new Error('Cloud database unavailable');
-    const payload=await response.json();
-    if(Array.isArray(payload.clients)){clients=payload.clients;storageMode='cloud';}
-  }catch{storageMode='local';clients=loadClients();}
-}
-async function persistClient(client,isUpdate){
-  if(storageMode!=='cloud'){const index=clients.findIndex(item=>item.id===client.id);if(index>=0)clients[index]=client;else clients.unshift(client);saveClients();return client;}
-  const url=isUpdate?`/api/clients/${encodeURIComponent(client.id)}`:'/api/clients';
-  const response=await fetch(url,{method:isUpdate?'PUT':'POST',headers:{'content-type':'application/json','accept':'application/json'},body:JSON.stringify(client)});
-  const payload=await response.json();
-  if(!response.ok)throw new Error(payload?.error?.message||'Unable to save the client record.');
-  const saved=payload.client;
-  const index=clients.findIndex(item=>item.id===saved.id);
-  if(index>=0)clients[index]=saved;else clients.unshift(saved);
-  return saved;
-}
-
-function setDate(){const now=new Date();pageKicker.textContent=new Intl.DateTimeFormat('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).format(now)}
-async function showApplication(){loginView.hidden=true;appView.hidden=false;sessionStorage.setItem('corecare-demo-session','active');setDate();await initialiseClientStorage();renderClients();document.querySelector('#main-content').focus()}
-function showLogin(){appView.hidden=true;loginView.hidden=false;sessionStorage.removeItem('corecare-demo-session');document.querySelector('#email').focus()}
-function showPage(page){[dashboardPage,clientsPage,placeholderPage].forEach(item=>item.classList.remove('active-page'));if(page==='dashboard'){dashboardPage.classList.add('active-page');setDate();pageTitle.textContent='Good afternoon, Chris';return}if(page==='clients'){clientsPage.classList.add('active-page');pageKicker.textContent='People';pageTitle.textContent='Clients';renderClients();return}placeholderPage.classList.add('active-page');const[title,copy]=labels[page];placeholderTitle.textContent=title;placeholderCopy.textContent=copy;pageKicker.textContent='CoreCare module';pageTitle.textContent=title}
+async function api(url,options={}){const response=await fetch(url,{credentials:'same-origin',headers:{accept:'application/json',...(options.body?{'content-type':'application/json'}:{}),...(options.headers||{})},...options});let payload={};try{payload=await response.json()}catch{}if(response.status===401){showLogin('Your session has expired. Sign in again.');throw new Error('Your session has expired.')}if(!response.ok)throw new Error(payload?.error?.message||'CoreCare could not complete the request.');return payload}
+async function initialiseClientStorage(){try{const payload=await api('/api/clients');clients=Array.isArray(payload.clients)?payload.clients:[];storageMode='cloud'}catch(error){if(!currentUser){storageMode='local';clients=loadClients();return}throw error}}
+async function persistClient(client,isUpdate){if(storageMode!=='cloud'){const index=clients.findIndex(item=>item.id===client.id);if(index>=0)clients[index]=client;else clients.unshift(client);saveClients();return client}const payload=await api(isUpdate?`/api/clients/${encodeURIComponent(client.id)}`:'/api/clients',{method:isUpdate?'PUT':'POST',body:JSON.stringify(client)});const saved=payload.client,index=clients.findIndex(item=>item.id===saved.id);if(index>=0)clients[index]=saved;else clients.unshift(saved);return saved}
+function setDate(){pageKicker.textContent=new Intl.DateTimeFormat('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'}).format(new Date())}
+function updateIdentity(){const name=currentUser?.displayName||'Chris';pageTitle.textContent=`Good afternoon, ${name.split(' ')[0]}`;$('#user-name').textContent=name;$('#user-role').textContent=roleLabel(currentUser?.role);$('#user-avatar').textContent=initialsFromName(name);$('#organisation-name').textContent=currentUser?.organisationName||'Local development mode'}
+function roleLabel(role){return({owner:'Organisation owner',manager:'Manager',carer:'Carer',auditor:'Read-only auditor'})[role]||'Development user'}
+function initialsFromName(name){return name.split(/\s+/).filter(Boolean).slice(0,2).map(part=>part[0]).join('').toUpperCase()||'CC'}
+async function showApplication(user){currentUser=user||currentUser;loginView.hidden=true;appView.hidden=false;setDate();updateIdentity();await initialiseClientStorage();renderClients();loadDevelopmentStatus();$('#main-content').focus()}
+function showLogin(message=''){currentUser=null;appView.hidden=true;loginView.hidden=false;if(message){loginError.textContent=message;loginError.hidden=false}$('#email').focus()}
+async function restoreSession(){try{const payload=await api('/api/auth/session');await showApplication(payload.user)}catch{showLogin()}}
+function showPage(page){[dashboardPage,clientsPage,placeholderPage].forEach(item=>item.classList.remove('active-page'));if(page==='dashboard'){dashboardPage.classList.add('active-page');setDate();updateIdentity();return}if(page==='clients'){clientsPage.classList.add('active-page');pageKicker.textContent='People';pageTitle.textContent='Clients';renderClients();return}placeholderPage.classList.add('active-page');const[title,copy]=labels[page];placeholderTitle.textContent=title;placeholderCopy.textContent=copy;pageKicker.textContent='CoreCare module';pageTitle.textContent=title}
+async function loadDevelopmentStatus(){try{const status=await api('/api/development/status');$('#dev-db').textContent=status.database.connected?'Connected':'Not connected';$('#dev-auth').textContent=status.authentication.mode;$('#dev-user').textContent=status.user.email;$('#dev-org').textContent=status.user.organisationName;$('#dev-version').textContent=`v${status.version}`;$('#dev-checked').textContent=new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date(status.deployment.checkedAt))}catch{$('#dev-db').textContent='Unavailable'}}
 function formatDate(value){if(!value)return'—';return new Intl.DateTimeFormat('en-GB',{day:'2-digit',month:'short',year:'numeric'}).format(new Date(`${value}T12:00:00`))}
 function initials(client){return`${client.firstName?.[0]||''}${client.lastName?.[0]||''}`.toUpperCase()}
 function reviewDue(client){return client.status==='Active'&&new Date(`${client.nextReview}T23:59:59`)<new Date()}
-function renderClients(){const term=clientSearch.value.trim().toLowerCase();const status=clientStatusFilter.value;const filtered=clients.filter(client=>{const haystack=`${client.firstName} ${client.lastName} ${client.town} ${client.nhsNumber}`.toLowerCase();return(!term||haystack.includes(term))&&(status==='all'||client.status===status)});clientTableBody.innerHTML=filtered.map(client=>`<tr><td><div class="client-person"><span class="person-avatar">${initials(client)}</span><div><strong>${escapeHtml(client.firstName)} ${escapeHtml(client.lastName)}</strong><span>DOB ${formatDate(client.dateOfBirth)} · NHS ${escapeHtml(client.nhsNumber||'Not recorded')}</span></div></div></td><td>${escapeHtml(client.town)}</td><td>${escapeHtml(client.carePackage||'Not set')}</td><td><span class="review-date ${reviewDue(client)?'overdue':''}">${formatDate(client.nextReview)}${reviewDue(client)?' · overdue':''}</span></td><td><span class="badge ${client.status==='Active'?'success':client.status==='Paused'?'active':'neutral'}">${client.status}</span>${client.risk==='High'?'<span class="risk-tag">High risk</span>':''}</td><td><button class="row-action" data-edit-client="${client.id}">Edit</button></td></tr>`).join('');clientEmpty.hidden=filtered.length>0;document.querySelector('#client-active-count').textContent=clients.filter(c=>c.status==='Active').length;document.querySelector('#client-review-count').textContent=clients.filter(reviewDue).length;document.querySelector('#client-risk-count').textContent=clients.filter(c=>c.status==='Active'&&c.risk==='High').length;document.querySelectorAll('[data-edit-client]').forEach(button=>button.addEventListener('click',()=>openClientDialog(button.dataset.editClient)))}
+function renderClients(){const term=clientSearch.value.trim().toLowerCase(),status=clientStatusFilter.value;const filtered=clients.filter(client=>{const haystack=`${client.firstName} ${client.lastName} ${client.town} ${client.nhsNumber}`.toLowerCase();return(!term||haystack.includes(term))&&(status==='all'||client.status===status)});clientTableBody.innerHTML=filtered.map(client=>`<tr><td><div class="client-person"><span class="person-avatar">${initials(client)}</span><div><strong>${escapeHtml(client.firstName)} ${escapeHtml(client.lastName)}</strong><span>DOB ${formatDate(client.dateOfBirth)} · NHS ${escapeHtml(client.nhsNumber||'Not recorded')}</span></div></div></td><td>${escapeHtml(client.town)}</td><td>${escapeHtml(client.carePackage||'Not set')}</td><td><span class="review-date ${reviewDue(client)?'overdue':''}">${formatDate(client.nextReview)}${reviewDue(client)?' · overdue':''}</span></td><td><span class="badge ${client.status==='Active'?'success':client.status==='Paused'?'active':'neutral'}">${client.status}</span>${client.risk==='High'?'<span class="risk-tag">High risk</span>':''}</td><td><button class="row-action" data-edit-client="${client.id}">Edit</button></td></tr>`).join('');clientEmpty.hidden=filtered.length>0;$('#client-active-count').textContent=clients.filter(c=>c.status==='Active').length;$('#client-review-count').textContent=clients.filter(reviewDue).length;$('#client-risk-count').textContent=clients.filter(c=>c.status==='Active'&&c.risk==='High').length;document.querySelectorAll('[data-edit-client]').forEach(button=>button.addEventListener('click',()=>openClientDialog(button.dataset.editClient)))}
 function escapeHtml(value){return String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]))}
-function openClientDialog(id){clientForm.reset();document.querySelector('#client-form-error').hidden=true;document.querySelector('#client-id').value='';document.querySelector('#client-dialog-title').textContent=id?'Edit client':'Add client';if(id){const client=clients.find(item=>item.id===id);if(client){Object.entries(client).forEach(([key,value])=>{const field=clientForm.elements.namedItem(key);if(field)field.value=value})}}clientDialog.showModal()}
-function closeClientDialog(){clientDialog.close()}
-loginForm.addEventListener('submit',event=>{event.preventDefault();const data=new FormData(loginForm);const email=String(data.get('email')||'').trim().toLowerCase();const password=String(data.get('password')||'');if(email!==DEMO_EMAIL||password!==DEMO_PASSWORD){loginError.textContent='Use the demonstration email address and password shown below the form.';loginError.hidden=false;return}loginError.hidden=true;showApplication()});
-document.querySelector('#toggle-password').addEventListener('click',event=>{const field=document.querySelector('#password');const reveal=field.type==='password';field.type=reveal?'text':'password';event.currentTarget.textContent=reveal?'Hide':'Show'});
-document.querySelector('#sign-out').addEventListener('click',showLogin);
+function openClientDialog(id){clientForm.reset();$('#client-form-error').hidden=true;$('#client-id').value='';$('#client-dialog-title').textContent=id?'Edit client':'Add client';if(id){const client=clients.find(item=>item.id===id);if(client)Object.entries(client).forEach(([key,value])=>{const field=clientForm.elements.namedItem(key);if(field)field.value=value})}clientDialog.showModal()}
+loginForm.addEventListener('submit',async event=>{event.preventDefault();loginError.hidden=true;const data=new FormData(loginForm),email=String(data.get('email')||'').trim().toLowerCase(),password=String(data.get('password')||'');const submit=loginForm.querySelector('[type="submit"]');submit.disabled=true;submit.textContent='Signing in…';try{const payload=await api('/api/auth/login',{method:'POST',body:JSON.stringify({email,password})});await showApplication(payload.user)}catch(error){loginError.textContent=error.message;loginError.hidden=false}finally{submit.disabled=false;submit.textContent='Sign in to CoreCare'}});
+$('#toggle-password').addEventListener('click',event=>{const field=$('#password'),reveal=field.type==='password';field.type=reveal?'text':'password';event.currentTarget.textContent=reveal?'Hide':'Show'});
+$('#sign-out').addEventListener('click',async()=>{try{await api('/api/auth/logout',{method:'POST'})}catch{}showLogin()});
 menuButton.addEventListener('click',()=>{const open=sidebar.classList.toggle('open');menuButton.setAttribute('aria-expanded',String(open))});
 document.querySelectorAll('.nav-item').forEach(button=>button.addEventListener('click',()=>{document.querySelectorAll('.nav-item').forEach(item=>item.classList.remove('active'));button.classList.add('active');sidebar.classList.remove('open');menuButton.setAttribute('aria-expanded','false');showPage(button.dataset.page)}));
-document.querySelector('[data-return-dashboard]').addEventListener('click',()=>document.querySelector('[data-page="dashboard"]').click());
-document.querySelector('#add-client').addEventListener('click',()=>openClientDialog());
-document.querySelector('#close-client-dialog').addEventListener('click',closeClientDialog);
-document.querySelector('#cancel-client').addEventListener('click',closeClientDialog);
-clientSearch.addEventListener('input',renderClients);
-clientStatusFilter.addEventListener('change',renderClients);
-clientForm.addEventListener('submit',async event=>{event.preventDefault();const data=Object.fromEntries(new FormData(clientForm));const error=document.querySelector('#client-form-error');if(!data.firstName.trim()||!data.lastName.trim()||!data.town.trim()||!data.dateOfBirth||!data.nextReview){error.textContent='Complete all required fields before saving.';error.hidden=false;return}const isUpdate=Boolean(data.id);const client={...data,id:data.id||`cl-${Date.now()}`};try{await persistClient(client,isUpdate);renderClients();closeClientDialog()}catch(saveError){error.textContent=saveError.message;error.hidden=false}});
-if(sessionStorage.getItem('corecare-demo-session')==='active')showApplication();
+$('[data-return-dashboard]').addEventListener('click',()=>document.querySelector('[data-page="dashboard"]').click());
+$('#add-client').addEventListener('click',()=>openClientDialog());$('#close-client-dialog').addEventListener('click',()=>clientDialog.close());$('#cancel-client').addEventListener('click',()=>clientDialog.close());
+clientSearch.addEventListener('input',renderClients);clientStatusFilter.addEventListener('change',renderClients);
+clientForm.addEventListener('submit',async event=>{event.preventDefault();const data=Object.fromEntries(new FormData(clientForm)),error=$('#client-form-error');if(!data.firstName.trim()||!data.lastName.trim()||!data.town.trim()||!data.dateOfBirth||!data.nextReview){error.textContent='Complete all required fields before saving.';error.hidden=false;return}const isUpdate=Boolean(data.id),client={...data,id:data.id||`cl-${Date.now()}`};try{await persistClient(client,isUpdate);renderClients();clientDialog.close()}catch(saveError){error.textContent=saveError.message;error.hidden=false}});
+restoreSession();

@@ -1,29 +1,23 @@
-# CoreCare
+# CoreCare v0.4.1 — Sprint 4B
 
-CoreCare is a cloud-based care management platform deployed with Cloudflare Workers and Static Assets.
+CoreCare is a developing care-management SaaS application deployed through GitHub and Cloudflare Workers.
 
-## Version 0.4.0 — Sprint 4A
+## Included in this release
 
-This build introduces the first real cloud-data foundation:
+- D1-backed user authentication
+- PBKDF2-SHA-256 password verification
+- Secure HTTP-only session cookies
+- Session expiry and logout
+- Organisation-scoped client API access
+- Role checks for client changes
+- Login and client audit events
+- Development platform-status panel
+- CoreCare version `0.4.1`
 
-- Cloudflare D1 migration structure
-- organisations, users, clients and audit-log tables
-- organisation-scoped client API
-- client create and update audit entries
-- automatic browser-storage fallback until D1 is connected
-- database health and capability reporting
-- versioned migration commands
+## Database setup
 
-Read `SETUP-D1.md` to connect the database.
+Apply both migrations in order. See `SETUP-D1.md` and `SETUP-AUTH.md`.
 
-## Important development limitation
+## Development warning
 
-The current login remains a demonstration login. The D1 API is organisation-scoped to a fixed development organisation, but it is not yet protected by production authentication. Use fictional information only.
-
-## Commands
-
-- `npm run dev`
-- `npm run check`
-- `npm run deploy`
-- `npm run db:migrate:local`
-- `npm run db:migrate:remote`
+Use fictional test records only. CoreCare is not yet approved for live personal, medical or care data.

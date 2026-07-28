@@ -73,7 +73,7 @@
         <button class="nav-item" data-page="reports"><span>▥</span>Reports</button>
         <button class="nav-item" data-page="settings"><span>⚙</span>Settings</button>
       </nav>
-      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>Development</strong><small>CoreCare v0.4.0</small></div></div>
+      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>Development</strong><small>CoreCare <span id="dev-version">v0.4.1</span></small></div></div>
     </aside>
 
     <div class="workspace">
@@ -81,12 +81,23 @@
         <button id="menu-button" class="icon-button" aria-label="Open navigation" aria-expanded="false">☰</button>
         <div class="page-heading"><p id="page-kicker" class="eyebrow"></p><h1 id="page-title">Good afternoon, Chris</h1></div>
         <div class="top-actions"><button class="quick-action">+ Quick add</button><button class="notification-button" aria-label="Notifications">●<span>3</span></button></div>
-        <div class="user-menu"><div class="avatar">CW</div><div><strong>Chris Warman</strong><span>Organisation administrator</span></div><button id="sign-out" class="text-button">Sign out</button></div>
+        <div class="user-menu"><div id="user-avatar" class="avatar">CC</div><div><strong id="user-name">CoreCare user</strong><span id="user-role">Authenticated user</span></div><button id="sign-out" class="text-button">Sign out</button></div>
       </header>
 
       <main id="main-content" tabindex="-1">
         <section id="dashboard-page" class="page active-page">
-          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release introduces the Cloudflare D1 database foundation. Continue using fictional information during development.</span></div><span class="badge">Sprint 4A</span></div>
+          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release introduces real database-backed login sessions and organisation isolation. Continue using fictional information during development.</span></div><span class="badge">Sprint 4B</span></div>
+          <section class="dev-status panel" aria-label="Development status">
+            <div class="panel-heading"><div><p class="eyebrow">Development mode</p><h2>Platform status</h2></div><span id="organisation-name" class="badge neutral">Organisation</span></div>
+            <div class="dev-status-grid">
+              <div><span>Database</span><strong id="dev-db">Checking…</strong></div>
+              <div><span>Authentication</span><strong id="dev-auth">Checking…</strong></div>
+              <div><span>Signed-in user</span><strong id="dev-user">Checking…</strong></div>
+              <div><span>Organisation</span><strong id="dev-org">Checking…</strong></div>
+              <div><span>Last health check</span><strong id="dev-checked">Checking…</strong></div>
+            </div>
+          </section>
+
           <section class="metrics" aria-label="Key figures">
             <article class="metric-card"><div class="metric-icon">◉</div><div><span>Active clients</span><strong>20</strong><small>2 reviews due</small></div><em>+2 this month</em></article>
             <article class="metric-card"><div class="metric-icon">◎</div><div><span>Staff available</span><strong>13</strong><small>of 15 team members</small></div><em>87% available</em></article>
