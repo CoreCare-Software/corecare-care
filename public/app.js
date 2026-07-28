@@ -116,7 +116,7 @@ function updateIdentity() {
   document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
-const CORECARE_FALLBACK_VERSION = '1.2.3';
+const CORECARE_FALLBACK_VERSION = '1.3.0';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -136,6 +136,7 @@ const platformViewMeta = {
   'customer-success-centre': { title: 'Customer success', kicker: 'Commercial' },
   'organisation-portfolio': { title: 'Organisations', kicker: 'Customers' },
   'platform-global-search-panel': { title: 'Global search', kicker: 'Customers' },
+  'platform-ai-assistant': { title: 'AI executive assistant', kicker: 'Intelligence' },
   'platform-operations-panel': { title: 'Platform operations', kicker: 'Governance' },
   'platform-admin-drawer': { title: 'Security & audit', kicker: 'Governance' }
 };
@@ -145,6 +146,7 @@ const platformDedicatedTargets = [
   'customer-success-centre',
   'organisation-portfolio',
   'platform-global-search-panel',
+  'platform-ai-assistant',
   'platform-operations-panel',
   'platform-admin-drawer'
 ];
@@ -324,6 +326,7 @@ async function loadPlatformWorkspace(){
     ['Revenue Centre', '#revenue-centre', loadRevenueCentre],
     ['Customer Success Centre', '#customer-success-centre', loadCustomerSuccess],
     ['Notifications', '#platform-notifications', loadPlatformNotifications],
+    ['AI Executive Assistant', '#platform-ai-assistant', loadAiAssistantHistory],
     ['Platform health', '#platform-health', loadPlatformHealth],
     ['Plans', '#platform-plans', loadPlatformPlans],
     ['Audit', '#platform-audit-table', loadPlatformAudit],
@@ -1137,3 +1140,37 @@ $('#revenue-export')?.addEventListener('click',exportRevenueCsv);
 
 $('#success-refresh')?.addEventListener('click',loadCustomerSuccess);
 $('#success-filter')?.addEventListener('change',renderCustomerSuccess);
+
+
+let aiConversationId = null;
+function aiMessage(role, content, meta = '') {
+  const chat = $('#ai-chat'); if (!chat) return;
+  const node = document.createElement('div'); node.className = `ai-message ${role}`;
+  node.innerHTML = `<div class="ai-avatar">${role === 'assistant' ? '✦' : escapeHtml((currentUser?.displayName||'You').slice(0,1))}</div><div><strong>${role === 'assistant' ? 'CoreCare Assistant' : escapeHtml(currentUser?.displayName||'You')}</strong><p>${escapeHtml(content).replaceAll('\n','<br>')}</p>${meta ? `<small>${escapeHtml(meta)}</small>` : ''}</div>`;
+  chat.appendChild(node); chat.scrollTop = chat.scrollHeight;
+}
+async function loadAiAssistantHistory(){
+  if (!$('#platform-ai-assistant')) return;
+  try {
+    const p = await api('/api/platform/assistant/history');
+    aiConversationId = p.conversationId || null;
+    if ((p.messages||[]).length) {
+      $('#ai-chat').innerHTML = '';
+      p.messages.forEach(m => aiMessage(m.role, m.content, m.created_at ? new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(new Date(`${m.created_at}Z`)) : ''));
+    }
+  } catch (error) { console.warn('Assistant history unavailable', error); }
+}
+async function askAiAssistant(question){
+  aiMessage('user', question);
+  const send=$('#ai-send'), input=$('#ai-question'); if(send) send.disabled=true; if(input) input.disabled=true;
+  const typing=document.createElement('div'); typing.id='ai-typing'; typing.className='ai-message assistant typing'; typing.innerHTML='<div class="ai-avatar">✦</div><div><strong>CoreCare Assistant</strong><p>Analysing live platform data…</p></div>'; $('#ai-chat')?.appendChild(typing);
+  try {
+    const p=await api('/api/platform/assistant',{method:'POST',body:JSON.stringify({question,conversationId:aiConversationId})});
+    aiConversationId=p.conversationId||aiConversationId; typing.remove(); aiMessage('assistant',p.answer,p.generatedAt?'Generated from live data':'');
+  } catch(error){ typing.remove(); aiMessage('assistant',`I could not complete that analysis: ${error.message}`); }
+  finally { if(send) send.disabled=false; if(input){input.disabled=false;input.focus();} }
+}
+
+$('#ai-form')?.addEventListener('submit',e=>{e.preventDefault();const q=$('#ai-question')?.value.trim();if(!q)return;$('#ai-question').value='';askAiAssistant(q);});
+$$('[data-ai-question]').forEach(b=>b.addEventListener('click',()=>askAiAssistant(b.dataset.aiQuestion)));
+$('#ai-new-conversation')?.addEventListener('click',async()=>{aiConversationId=null;const chat=$('#ai-chat');if(chat)chat.innerHTML='<div class="ai-message assistant"><div class="ai-avatar">✦</div><div><strong>CoreCare Assistant</strong><p>New conversation started. What would you like to know?</p></div></div>';});

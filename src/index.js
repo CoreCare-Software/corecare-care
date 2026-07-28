@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.2.3 — Platform Operations Centre */
-const VERSION = "1.2.3";
+/** CoreCare Enterprise 1.3.0 — AI Executive Assistant */
+const VERSION = "1.3.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.2.3 — Platform Operations Centre" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.3.0 — AI Executive Assistant" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -28,6 +28,8 @@ export default {
         if (url.pathname === "/api/platform/dashboard" && request.method === "GET") return platformDashboard(env.DB, session);
         if (url.pathname === "/api/platform/revenue" && request.method === "GET") return platformRevenue(env.DB, session);
         if (url.pathname === "/api/platform/customer-success" && request.method === "GET") return platformCustomerSuccess(env.DB, session);
+        if (url.pathname === "/api/platform/assistant" && request.method === "POST") return platformAssistant(request, env.DB, session);
+        if (url.pathname === "/api/platform/assistant/history" && request.method === "GET") return platformAssistantHistory(env.DB, session);
         if (url.pathname === "/api/platform/search" && request.method === "GET") return platformSearch(env.DB, session, url);
         if (url.pathname === "/api/platform/audit" && request.method === "GET") return platformAudit(env.DB, session, url);
         if (url.pathname === "/api/platform/notifications" && request.method === "GET") return platformNotifications(env.DB, session);
@@ -945,3 +947,92 @@ async function updateSecurityPolicy(request,db,session){if(!canManageSecurity(se
 async function listLoginHistory(db,session){if(!canManageSecurity(session))return forbidden();const r=await db.prepare(`SELECT lh.*,u.display_name,u.email FROM login_history lh LEFT JOIN users u ON u.id=lh.user_id WHERE lh.organisation_id=? ORDER BY lh.created_at DESC LIMIT 100`).bind(session.organisation_id).all();return json({events:r.results||[]});}
 async function effectiveAccess(db,session,url){if(!canManageSecurity(session))return forbidden();const userId=clean(url.searchParams.get('userId'));const user=await db.prepare('SELECT id,display_name,email,access_level,home_branch_id FROM users WHERE id=? AND organisation_id=?').bind(userId,session.organisation_id).first();if(!user)return json({error:{code:'NOT_FOUND',message:'User not found.'}},404);const catalog=await db.prepare('SELECT permission_key,category,name,risk_level FROM permission_catalog ORDER BY category,name').all();const fake={...session,user_id:user.id,access_level:user.access_level,home_branch_id:user.home_branch_id,is_platform_user:0};const permissions=[];for(const p of catalog.results||[])if(await userHasPermission(db,fake,p.permission_key))permissions.push(p);return json({user,permissions});}
 async function updateEmergencyMode(request,db,session){if(!canManageSecurity(session))return forbidden();const i=await readJson(request),enabled=!!i.enabled,reason=clean(i.reason);if(enabled&&reason.length<8)return json({error:{code:'REASON_REQUIRED',message:'Enter a clear reason for enabling emergency mode.'}},400);await db.batch([db.prepare(`INSERT INTO organisation_security_policies(organisation_id,emergency_mode,emergency_reason,emergency_started_at,emergency_started_by) VALUES(?,?,?,?,?) ON CONFLICT(organisation_id) DO UPDATE SET emergency_mode=excluded.emergency_mode,emergency_reason=excluded.emergency_reason,emergency_started_at=excluded.emergency_started_at,emergency_started_by=excluded.emergency_started_by,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,enabled?1:0,enabled?reason:null,enabled?new Date().toISOString():null,enabled?session.user_id:null),auditStatement(db,session.organisation_id,session.user_id,enabled?'security.emergency_mode_enabled':'security.emergency_mode_disabled','organisation',session.organisation_id,{reason})]);return getSecurityPolicy(db,session);}
+
+async function platformAssistantHistory(db, session) {
+  if (!requirePlatform(session)) return forbidden();
+  const conversation = await db.prepare("SELECT id FROM ai_conversations WHERE user_id=? ORDER BY updated_at DESC LIMIT 1").bind(session.user_id).first();
+  if (!conversation) return json({ conversationId: null, messages: [] });
+  const rows = await db.prepare("SELECT role,content,created_at FROM ai_messages WHERE conversation_id=? ORDER BY created_at,id LIMIT 60").bind(conversation.id).all();
+  return json({ conversationId: conversation.id, messages: rows.results || [] });
+}
+
+async function platformAssistant(request, db, session) {
+  if (!requirePlatform(session)) return forbidden();
+  const input = await readJson(request);
+  const question = clean(input.question).slice(0, 500);
+  if (question.length < 2) return json({ error: { code: 'VALIDATION_ERROR', message: 'Enter a question.' } }, 400);
+
+  let conversationId = clean(input.conversationId);
+  if (conversationId) {
+    const own = await db.prepare("SELECT id FROM ai_conversations WHERE id=? AND user_id=?").bind(conversationId, session.user_id).first();
+    if (!own) conversationId = '';
+  }
+  if (!conversationId) {
+    conversationId = crypto.randomUUID();
+    await db.prepare("INSERT INTO ai_conversations(id,user_id,title) VALUES(?,?,?)").bind(conversationId, session.user_id, question.slice(0, 80)).run();
+  }
+
+  const [orgs, users, clients, carePlans, risks, errors, sessions, support, revenueEvents] = await Promise.all([
+    db.prepare(`SELECT o.id,o.name,o.status,o.subscription_status,o.renewal_date,
+      COALESCE(sp.name,o.subscription_plan,'Unassigned') plan_name,
+      COALESCE(sp.monthly_price_pence,0) monthly_price_pence,
+      MAX(a.created_at) last_activity_at,COUNT(DISTINCT u.id) user_count
+      FROM organisations o LEFT JOIN subscription_plans sp ON sp.id=o.subscription_plan
+      LEFT JOIN users u ON u.organisation_id=o.id LEFT JOIN audit_log a ON a.organisation_id=o.id
+      GROUP BY o.id ORDER BY o.name`).all(),
+    db.prepare("SELECT COUNT(*) total,COUNT(CASE WHEN last_login_at>=datetime('now','-30 days') THEN 1 END) active30 FROM users").first(),
+    db.prepare("SELECT COUNT(*) total FROM clients WHERE status<>'Archived'").first(),
+    db.prepare("SELECT organisation_id,COUNT(*) total,COUNT(CASE WHEN review_date<date('now') AND status='Active' THEN 1 END) overdue FROM care_plans GROUP BY organisation_id").all(),
+    db.prepare("SELECT organisation_id,COUNT(*) total,COUNT(CASE WHEN severity='High' AND status='Active' THEN 1 END) high FROM risk_assessments GROUP BY organisation_id").all(),
+    db.prepare("SELECT COUNT(*) total FROM api_error_log WHERE created_at>=datetime('now','-1 day')").first(),
+    db.prepare("SELECT COUNT(*) total FROM sessions WHERE expires_at>CURRENT_TIMESTAMP").first(),
+    db.prepare("SELECT COUNT(*) total FROM support_sessions WHERE ended_at IS NULL").first(),
+    db.prepare("SELECT COALESCE(SUM(amount_pence),0) total FROM revenue_events WHERE occurred_at>=date('now','start of month')").first()
+  ]);
+
+  const planMap = Object.fromEntries((carePlans.results || []).map(x => [x.organisation_id, x]));
+  const riskMap = Object.fromEntries((risks.results || []).map(x => [x.organisation_id, x]));
+  const organisations = (orgs.results || []).map(o => {
+    let score = 100;
+    const daysInactive = o.last_activity_at ? Math.floor((Date.now() - new Date(o.last_activity_at + 'Z')) / 86400000) : 999;
+    const overdue = Number(planMap[o.id]?.overdue || 0);
+    const high = Number(riskMap[o.id]?.high || 0);
+    if (o.status !== 'active') score -= 45;
+    if (daysInactive > 30) score -= 25; else if (daysInactive > 14) score -= 12;
+    if (overdue) score -= Math.min(25, overdue * 5);
+    if (high) score -= 10;
+    if (!o.user_count) score -= 15;
+    return { ...o, daysInactive, overdue, high, health: Math.max(0, score) };
+  });
+
+  const billable = organisations.filter(o => o.status === 'active' && o.subscription_status !== 'cancelled');
+  const mrr = billable.reduce((n, o) => n + Number(o.monthly_price_pence || 0), 0);
+  const atRisk = organisations.filter(o => o.health < 70).sort((a, b) => a.health - b.health);
+  const renewals = organisations.filter(o => o.renewal_date).map(o => ({ ...o, days: Math.ceil((new Date(o.renewal_date + 'T00:00:00Z') - new Date()) / 86400000) })).filter(o => o.days >= 0 && o.days <= 90).sort((a, b) => a.days - b.days);
+  const q = question.toLowerCase();
+  const money = p => new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP', maximumFractionDigits: 0 }).format(p / 100);
+  let answer = '';
+
+  if (/revenue|mrr|arr|income|commercial/.test(q)) {
+    answer = `Current MRR is ${money(mrr)} and annual run rate is ${money(mrr * 12)} across ${billable.length} billable organisation${billable.length === 1 ? '' : 's'}. Revenue events recorded this month total ${money(Number(revenueEvents?.total || 0))}. Average revenue per billable organisation is ${money(billable.length ? Math.round(mrr / billable.length) : 0)}.`;
+  } else if (/risk|attention|health|inactive|customer/.test(q)) {
+    answer = atRisk.length ? `${atRisk.length} organisation${atRisk.length === 1 ? ' needs' : 's need'} attention:\n${atRisk.slice(0, 8).map(o => `• ${o.name}: health ${o.health}%, ${o.status !== 'active' ? 'account not active' : o.daysInactive > 14 ? `inactive for ${o.daysInactive} days` : o.overdue ? `${o.overdue} overdue care-plan review${o.overdue === 1 ? '' : 's'}` : o.high ? `${o.high} high risk${o.high === 1 ? '' : 's'}` : 'low adoption'}`).join('\n')}` : 'No organisations currently score below the attention threshold. The customer portfolio is healthy.';
+  } else if (/renewal|renew/.test(q)) {
+    answer = renewals.length ? `${renewals.length} renewal${renewals.length === 1 ? ' is' : 's are'} due in the next 90 days:\n${renewals.slice(0, 10).map(o => `• ${o.name}: ${o.days} days, ${o.plan_name}, ${money(o.monthly_price_pence)}/month`).join('\n')}` : 'There are no organisation renewals due in the next 90 days.';
+  } else if (/error|operation|system|platform|healthy|session/.test(q)) {
+    answer = `Platform status is ${Number(errors?.total || 0) === 0 ? 'healthy' : 'being monitored'}. There ${Number(errors?.total || 0) === 1 ? 'has' : 'have'} been ${Number(errors?.total || 0)} API error${Number(errors?.total || 0) === 1 ? '' : 's'} in the last 24 hours, ${Number(sessions?.total || 0)} active session${Number(sessions?.total || 0) === 1 ? '' : 's'}, and ${Number(support?.total || 0)} active Support Mode session${Number(support?.total || 0) === 1 ? '' : 's'}.`;
+  } else if (/care plan|review|compliance/.test(q)) {
+    const overdue = organisations.reduce((n, o) => n + o.overdue, 0);
+    answer = `There ${overdue === 1 ? 'is' : 'are'} ${overdue} overdue active care-plan review${overdue === 1 ? '' : 's'} across the platform. ${overdue ? organisations.filter(o => o.overdue).map(o => `${o.name}: ${o.overdue}`).join('; ') : 'No immediate care-plan review action is required.'}`;
+  } else {
+    answer = `Executive briefing:\n• ${organisations.length} organisations, of which ${billable.length} are active and billable.\n• MRR ${money(mrr)}; ARR ${money(mrr * 12)}.\n• ${atRisk.length} organisations need attention.\n• ${renewals.length} renewals are due within 90 days.\n• ${Number(users?.active30 || 0)} of ${Number(users?.total || 0)} users were active in the last 30 days.\n• ${Number(clients?.total || 0)} active clients are recorded.\n• ${Number(errors?.total || 0)} API errors were recorded in the last 24 hours.`;
+  }
+
+  await db.batch([
+    db.prepare("INSERT INTO ai_messages(id,conversation_id,role,content) VALUES(?,?,?,?)").bind(crypto.randomUUID(), conversationId, 'user', question),
+    db.prepare("INSERT INTO ai_messages(id,conversation_id,role,content) VALUES(?,?,?,?)").bind(crypto.randomUUID(), conversationId, 'assistant', answer),
+    db.prepare("UPDATE ai_conversations SET updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(conversationId),
+    auditStatement(db, session.organisation_id, session.user_id, 'platform.ai_question', 'ai_conversation', conversationId, { question: question.slice(0, 120) })
+  ]);
+  return json({ conversationId, answer, generatedAt: new Date().toISOString() });
+}
