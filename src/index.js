@@ -24,6 +24,7 @@ export default {
         if (url.pathname === "/api/auth/change-password" && request.method === "POST") return changePassword(request, env.DB, session);
         if (url.pathname === "/api/development/status") return developmentStatus(env, session);
         if (url.pathname === "/api/dashboard" && request.method === "GET") return dashboardSummary(env.DB, session);
+        if (url.pathname === "/api/care-plans" && request.method === "GET") return listAllCarePlans(env.DB, session, url);
         if (url.pathname === "/api/staff") {
           if (request.method === "GET") return listStaff(env.DB, session, url);
           if (request.method === "POST") return createStaff(request, env.DB, session);
