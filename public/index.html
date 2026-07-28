@@ -54,8 +54,10 @@
         <div><strong>CoreCare</strong><small>Management platform</small></div>
       </div>
       <nav aria-label="Primary navigation">
+        <p id="platform-nav-section" class="nav-section" hidden>Platform</p>
+        <button id="platform-nav" class="nav-item" data-page="platform" hidden><span>◆</span>Platform administration</button>
         <p class="nav-section">Overview</p>
-        <button class="nav-item active" data-page="dashboard"><span>⌂</span>Dashboard</button>
+        <button class="nav-item active" data-page="dashboard"><span>⌂</span>Organisation dashboard</button>
         <p class="nav-section">People</p>
         <button class="nav-item" data-page="clients"><span>◉</span>Clients</button>
         <button class="nav-item" data-page="staff"><span>◎</span>Staff</button>
@@ -84,8 +86,30 @@
       </header>
 
       <main id="main-content" tabindex="-1">
+        <section id="platform-page" class="page">
+          <div class="platform-hero">
+            <div><p class="eyebrow">CoreCare platform owner</p><h2>Platform administration</h2><p>View every organisation, monitor platform-wide activity and enter an organisation securely when support is needed.</p></div>
+            <div class="platform-context"><span>Current organisation view</span><strong id="platform-current-org">Organisation</strong><button id="return-platform" class="secondary-button">Stay in platform view</button></div>
+          </div>
+          <section class="metrics platform-metrics" aria-label="Platform totals">
+            <article class="metric-card"><div class="metric-icon">◆</div><div><span>Organisations</span><strong id="platform-org-count">0</strong><small><span id="platform-active-orgs">0</span> active</small></div><em><span id="platform-suspended-orgs">0</span> suspended</em></article>
+            <article class="metric-card"><div class="metric-icon">⌂</div><div><span>Branches</span><strong id="platform-branch-count">0</strong><small>Across all organisations</small></div><em><span id="platform-user-count">0</span> user accounts</em></article>
+            <article class="metric-card"><div class="metric-icon">◉</div><div><span>Clients</span><strong id="platform-client-count">0</strong><small>Current client records</small></div><em><span id="platform-staff-count">0</span> active staff</em></article>
+            <article class="metric-card alert"><div class="metric-icon">!</div><div><span>Care plan attention</span><strong id="platform-overdue-count">0</strong><small>overdue reviews</small></div><em><span id="platform-due-count">0</span> due within 30 days · <span id="platform-risk-count">0</span> high risks</em></article>
+          </section>
+          <section class="content-grid platform-grid">
+            <article class="panel span-two">
+              <div class="panel-heading"><div><p class="eyebrow">Organisations</p><h2>Organisation overview</h2></div><button id="platform-add-organisation" class="primary-button compact">+ Add organisation</button></div>
+              <div class="client-controls platform-controls"><label class="search-field"><span>Search</span><input id="platform-org-search" type="search" placeholder="Search organisation name or plan"></label><label><span>Status</span><select id="platform-org-status"><option value="all">All statuses</option><option value="active">Active</option><option value="suspended">Suspended</option></select></label></div>
+              <div class="table-wrap"><table class="client-table"><thead><tr><th>Organisation</th><th>Plan</th><th>Branches</th><th>Clients</th><th>Staff</th><th>Users</th><th>Status</th><th></th></tr></thead><tbody id="platform-org-table"></tbody></table></div>
+              <div id="platform-org-empty" class="empty-state" hidden><strong>No organisations found</strong><span>Change the search or create an organisation.</span></div>
+            </article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Platform activity</p><h2>Recent updates</h2></div></div><div id="platform-activity" class="timeline"><div><p>Loading activity…</p></div></div></article>
+          </section>
+        </section>
+
         <section id="dashboard-page" class="page active-page">
-          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release adds a complete care-plan overview alongside client care plans, risks, review tracking and document records. Continue using fictional information during development.</span></div><span class="badge">Sprint 7.1</span></div>
+          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release adds a complete care-plan overview alongside client care plans, risks, review tracking and document records. Continue using fictional information during development.</span></div><span class="badge">Sprint 8.1</span></div>
           <section class="dev-status panel" aria-label="Development status">
             <div class="panel-heading"><div><p class="eyebrow">Development mode</p><h2>Platform status</h2></div><span id="organisation-name" class="badge neutral">Organisation</span></div>
             <div class="dev-status-grid">

@@ -47,6 +47,7 @@ let users = [];
 let selectedClientId = null;
 let branches = [];
 let organisations = [];
+let platformData = null;
 
 async function api(url, options = {}) {
   const response = await fetch(url, {
@@ -91,6 +92,10 @@ function updateIdentity() {
   $('#user-role').textContent = roleLabel(currentUser?.accessLevel || currentUser?.role);
   $('#user-avatar').textContent = initialsFromName(name);
   $('#organisation-name').textContent = `${currentUser?.organisationName || 'Organisation'}${currentUser?.branchName ? ' · '+currentUser.branchName : ''}`;
+  const platformUser = Boolean(currentUser?.isPlatformUser);
+  $('#platform-nav').hidden = !platformUser;
+  $('#platform-nav-section').hidden = !platformUser;
+  if ($('#platform-current-org')) $('#platform-current-org').textContent = currentUser?.organisationName || 'Organisation';
 }
 
 async function showApplication(user) {
@@ -134,6 +139,14 @@ function activatePage(id) {
 
 function showPage(page) {
   selectedClientId = page === 'client-profile' ? selectedClientId : null;
+  if (page === 'platform') {
+    if (!currentUser?.isPlatformUser) return showPage('dashboard');
+    activatePage('#platform-page');
+    pageKicker.textContent = 'Platform owner';
+    pageTitle.textContent = 'Platform administration';
+    loadPlatformDashboard().catch(showToastError);
+    return;
+  }
   if (page === 'dashboard') {
     activatePage('#dashboard-page');
     setDate();
@@ -192,6 +205,37 @@ async function loadDevelopmentStatus() {
 }
 
 
+async function loadPlatformDashboard(){
+  const payload=await api('/api/platform/dashboard');
+  platformData=payload;
+  const s=payload.summary||{};
+  $('#platform-org-count').textContent=s.organisations||0;
+  $('#platform-active-orgs').textContent=s.activeOrganisations||0;
+  $('#platform-suspended-orgs').textContent=s.suspendedOrganisations||0;
+  $('#platform-branch-count').textContent=s.branches||0;
+  $('#platform-user-count').textContent=s.users||0;
+  $('#platform-client-count').textContent=s.clients||0;
+  $('#platform-staff-count').textContent=s.staff||0;
+  $('#platform-due-count').textContent=s.carePlansDue||0;
+  $('#platform-overdue-count').textContent=s.carePlansOverdue||0;
+  $('#platform-risk-count').textContent=s.highRisks||0;
+  renderPlatformOrganisations();
+  $('#platform-activity').innerHTML=(payload.activity||[]).map(event=>`<div><span class="timeline-dot"></span><div><strong>${escapeHtml((event.action||'activity').replaceAll('.',' '))}</strong><p>${escapeHtml(event.organisation_name||'Organisation')} · ${escapeHtml(event.user_name||'System')}</p><time>${new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(new Date(`${event.created_at}Z`))}</time></div></div>`).join('')||'<div><p>No platform activity yet.</p></div>';
+}
+function renderPlatformOrganisations(){
+  const query=($('#platform-org-search')?.value||'').trim().toLowerCase();
+  const status=$('#platform-org-status')?.value||'all';
+  const rows=(platformData?.organisations||[]).filter(o=>(status==='all'||o.status===status)&&`${o.name} ${o.subscription_plan}`.toLowerCase().includes(query));
+  $('#platform-org-empty').hidden=rows.length>0;
+  $('#platform-org-table').innerHTML=rows.map(o=>`<tr><td><strong>${escapeHtml(o.name)}</strong><small class="table-subtext">${escapeHtml(o.slug||'')}</small></td><td>${escapeHtml(o.subscription_plan||'development')}</td><td>${o.branch_count||0}</td><td>${o.client_count||0}</td><td>${o.staff_count||0}</td><td>${o.user_count||0}</td><td><span class="badge ${o.status==='active'?'success':'danger'}">${escapeHtml(o.status)}</span></td><td><button class="row-action" data-platform-open-org="${escapeHtml(o.id)}">Open</button></td></tr>`).join('');
+  $$('[data-platform-open-org]').forEach(button=>button.addEventListener('click',()=>openPlatformOrganisation(button.dataset.platformOpenOrg)));
+}
+async function openPlatformOrganisation(organisationId){
+  const row=(platformData?.organisations||[]).find(o=>o.id===organisationId);
+  if(!confirm(`Open ${row?.name||'this organisation'}? You will only see that organisation's records until you return to Platform administration.`)) return;
+  await api('/api/platform/switch-organisation',{method:'POST',body:JSON.stringify({organisationId})});
+  location.reload();
+}
 async function loadAllCarePlans() {
   const payload = await api('/api/care-plans');
   allCarePlans = payload.carePlans || [];
@@ -760,5 +804,10 @@ branchForm?.addEventListener('submit',async e=>{e.preventDefault();try{await api
 $('#add-organisation')?.addEventListener('click',()=>{organisationAdminForm.reset();$('#organisation-admin-error').hidden=true;organisationDialog.showModal();});
 $('#close-organisation-dialog')?.addEventListener('click',()=>organisationDialog.close());$('#cancel-organisation')?.addEventListener('click',()=>organisationDialog.close());
 organisationAdminForm?.addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/platform/organisations',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(organisationAdminForm)))});organisationDialog.close();await loadOrganisations();}catch(x){$('#organisation-admin-error').textContent=x.message;$('#organisation-admin-error').hidden=false;}});
+
+$('#platform-org-search')?.addEventListener('input',renderPlatformOrganisations);
+$('#platform-org-status')?.addEventListener('change',renderPlatformOrganisations);
+$('#return-platform')?.addEventListener('click',()=>showPage('platform'));
+$('#platform-add-organisation')?.addEventListener('click',()=>$('#add-organisation')?.click());
 
 restoreSession();

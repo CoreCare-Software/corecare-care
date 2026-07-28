@@ -1,5 +1,5 @@
 /** CoreCare Cloudflare Worker — v0.5.0 client records */
-const VERSION = "0.8.0";
+const VERSION = "0.8.1";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -25,6 +25,7 @@ export default {
         if (url.pathname === "/api/development/status") return developmentStatus(env, session);
         if (url.pathname === "/api/dashboard" && request.method === "GET") return dashboardSummary(env.DB, session);
         if (url.pathname === "/api/care-plans" && request.method === "GET") return listAllCarePlans(env.DB, session, url);
+        if (url.pathname === "/api/platform/dashboard" && request.method === "GET") return platformDashboard(env.DB, session);
         if (url.pathname === "/api/platform/organisations" && request.method === "GET") return listOrganisations(env.DB, session);
         if (url.pathname === "/api/platform/organisations" && request.method === "POST") return createOrganisation(request, env.DB, session);
         const orgMatch = url.pathname.match(/^\/api\/platform\/organisations\/([^/]+)$/);
@@ -536,6 +537,47 @@ function json(payload, status = 200, headers = {}) { return new Response(JSON.st
 
 function requirePlatform(session) {
   return session.is_platform_user || session.access_level === "platform_owner" || session.access_level === "platform_admin";
+}
+
+async function platformDashboard(db, session) {
+  if(!requirePlatform(session)) return forbidden();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const inThirty = new Date(today); inThirty.setDate(inThirty.getDate()+30);
+  const [orgs, branches, users, clients, staff, plans, risks, activity] = await Promise.all([
+    db.prepare(`SELECT o.id,o.name,o.slug,o.status,o.subscription_plan,o.created_at,
+      COUNT(DISTINCT b.id) AS branch_count,COUNT(DISTINCT u.id) AS user_count,
+      COUNT(DISTINCT c.id) AS client_count,COUNT(DISTINCT s.id) AS staff_count
+      FROM organisations o
+      LEFT JOIN branches b ON b.organisation_id=o.id
+      LEFT JOIN users u ON u.organisation_id=o.id
+      LEFT JOIN clients c ON c.organisation_id=o.id AND c.status<>'Archived'
+      LEFT JOIN staff s ON s.organisation_id=o.id AND s.status='Active'
+      GROUP BY o.id ORDER BY o.name COLLATE NOCASE`).all(),
+    db.prepare("SELECT COUNT(*) AS total FROM branches WHERE status='active'").first(),
+    db.prepare("SELECT COUNT(*) AS total FROM users WHERE status='active'").first(),
+    db.prepare("SELECT COUNT(*) AS total FROM clients WHERE status<>'Archived'").first(),
+    db.prepare("SELECT COUNT(*) AS total FROM staff WHERE status='Active'").first(),
+    db.prepare("SELECT cp.organisation_id,cp.review_date,cp.status,o.name AS organisation_name FROM care_plans cp JOIN organisations o ON o.id=cp.organisation_id WHERE cp.status='Active'").all(),
+    db.prepare("SELECT r.organisation_id,r.severity,r.status,r.review_date,o.name AS organisation_name FROM risk_assessments r JOIN organisations o ON o.id=r.organisation_id WHERE r.status='Active'").all(),
+    db.prepare(`SELECT a.action,a.entity_type,a.created_at,o.name AS organisation_name,u.display_name AS user_name
+      FROM audit_log a JOIN organisations o ON o.id=a.organisation_id
+      LEFT JOIN users u ON u.id=a.user_id ORDER BY a.created_at DESC LIMIT 12`).all()
+  ]);
+  const activePlans = plans.results || [];
+  const overduePlans = activePlans.filter(p => p.review_date && new Date(p.review_date+'T00:00:00') < today).length;
+  const duePlans = activePlans.filter(p => { if(!p.review_date) return false; const d=new Date(p.review_date+'T00:00:00'); return d>=today && d<=inThirty; }).length;
+  const activeRisks = risks.results || [];
+  return json({
+    summary:{
+      organisations:(orgs.results||[]).length,
+      activeOrganisations:(orgs.results||[]).filter(o=>o.status==='active').length,
+      suspendedOrganisations:(orgs.results||[]).filter(o=>o.status==='suspended').length,
+      branches:Number(branches?.total||0), users:Number(users?.total||0), clients:Number(clients?.total||0), staff:Number(staff?.total||0),
+      carePlansDue:duePlans, carePlansOverdue:overduePlans, highRisks:activeRisks.filter(r=>r.severity==='High').length
+    },
+    organisations:orgs.results||[],
+    activity:activity.results||[]
+  });
 }
 async function listOrganisations(db, session) {
   if (!requirePlatform(session)) return forbidden();
