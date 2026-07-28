@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.1.1 — Revenue Centre */
-const VERSION = "1.1.1";
+/** CoreCare Enterprise 1.1.2 — Customer Success Centre */
+const VERSION = "1.1.2";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.1.1 — Revenue Centre" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.1.2 — Customer Success Centre" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -27,6 +27,7 @@ export default {
         if (url.pathname === "/api/care-plans" && request.method === "GET") return listAllCarePlans(env.DB, session, url);
         if (url.pathname === "/api/platform/dashboard" && request.method === "GET") return platformDashboard(env.DB, session);
         if (url.pathname === "/api/platform/revenue" && request.method === "GET") return platformRevenue(env.DB, session);
+        if (url.pathname === "/api/platform/customer-success" && request.method === "GET") return platformCustomerSuccess(env.DB, session);
         if (url.pathname === "/api/platform/search" && request.method === "GET") return platformSearch(env.DB, session, url);
         if (url.pathname === "/api/platform/audit" && request.method === "GET") return platformAudit(env.DB, session, url);
         if (url.pathname === "/api/platform/notifications" && request.method === "GET") return platformNotifications(env.DB, session);
@@ -692,6 +693,59 @@ async function platformRevenue(db, session) {
   const renewals=rows.filter(o=>isBillable(o)&&o.renewal_date).map(o=>({...o,daysUntil:Math.ceil((new Date(`${o.renewal_date}T00:00:00Z`)-now)/86400000)})).filter(o=>o.daysUntil>=0).sort((a,b)=>a.daysUntil-b.daysUntil);
   const renewal30=renewals.filter(o=>o.daysUntil<=30), renewal90=renewals.filter(o=>o.daysUntil<=90);
   return json({generatedAt:new Date().toISOString(),metrics:{mrrPence,arrPence:mrrPence*12,newMrrPence,lostMrrPence,netMovementPence:newMrrPence-lostMrrPence,averageRevenuePence:billable.length?Math.round(mrrPence/billable.length):0,billableOrganisations:billable.length,renewal30Pence:renewal30.reduce((n,o)=>n+Number(o.monthly_price_pence||0),0),renewal90Pence:renewal90.reduce((n,o)=>n+Number(o.monthly_price_pence||0),0)},planBreakdown,trend,renewals:renewals.slice(0,25),organisations:rows.map(o=>({...o,billable:isBillable(o)}))});
+}
+
+
+async function platformCustomerSuccess(db, session) {
+  if(!requirePlatform(session)) return forbidden();
+  const [orgs,plans,risks,support,auditRows]=await Promise.all([
+    db.prepare(`SELECT o.id,o.name,o.status,o.subscription_status,o.subscription_plan,o.created_at,o.renewal_date,
+      COALESCE(sp.name,o.subscription_plan,'Unassigned') plan_name,COALESCE(sp.monthly_price_pence,0) monthly_price_pence,
+      COUNT(DISTINCT u.id) user_count,COUNT(DISTINCT CASE WHEN u.last_login_at>=datetime('now','-30 days') THEN u.id END) active_users_30d,
+      COUNT(DISTINCT b.id) branch_count,COUNT(DISTINCT c.id) client_count,MAX(a.created_at) last_activity_at
+      FROM organisations o LEFT JOIN subscription_plans sp ON sp.id=o.subscription_plan LEFT JOIN users u ON u.organisation_id=o.id
+      LEFT JOIN branches b ON b.organisation_id=o.id LEFT JOIN clients c ON c.organisation_id=o.id LEFT JOIN audit_log a ON a.organisation_id=o.id
+      GROUP BY o.id ORDER BY o.name COLLATE NOCASE`).all(),
+    db.prepare("SELECT organisation_id,review_date,status FROM care_plans WHERE status='Active'").all(),
+    db.prepare("SELECT organisation_id,severity,status FROM risk_assessments WHERE status='Active'").all(),
+    db.prepare("SELECT organisation_id,COUNT(*) total,MAX(started_at) last_support_at FROM support_sessions WHERE started_at>=datetime('now','-90 days') GROUP BY organisation_id").all(),
+    db.prepare("SELECT organisation_id,action,created_at FROM audit_log WHERE created_at>=datetime('now','-90 days') ORDER BY created_at DESC").all()
+  ]);
+  const now=new Date(), byPlans={},byRisks={},bySupport={},byAudit={};
+  for(const x of plans.results||[])(byPlans[x.organisation_id]??=[]).push(x);
+  for(const x of risks.results||[])(byRisks[x.organisation_id]??=[]).push(x);
+  for(const x of support.results||[])bySupport[x.organisation_id]=x;
+  for(const x of auditRows.results||[])(byAudit[x.organisation_id]??=[]).push(x);
+  const moduleName=a=>a.startsWith('client')?'Clients':a.startsWith('staff')?'Staff':a.startsWith('care_plan')?'Care Plans':a.startsWith('risk')?'Risks':a.startsWith('document')?'Documents':a.startsWith('security')||a.startsWith('auth')?'Security':a.startsWith('platform.support')?'Support':'Administration';
+  const organisations=(orgs.results||[]).map(o=>{
+    const activity=byAudit[o.id]||[], last=o.last_activity_at?new Date(o.last_activity_at+'Z'):null, daysInactive=last?Math.floor((now-last)/86400000):999;
+    const overdue=(byPlans[o.id]||[]).filter(x=>x.review_date&&new Date(x.review_date+'T00:00:00Z')<now).length;
+    const high=(byRisks[o.id]||[]).filter(x=>x.severity==='High').length, supportCount=Number(bySupport[o.id]?.total||0);
+    const activeUsers=Number(o.active_users_30d||0), users=Number(o.user_count||0), adoption=users?Math.round(activeUsers/users*100):0;
+    let score=100; const reasons=[];
+    if(o.status!=='active'){score-=40;reasons.push('Account is not active')}
+    if(o.subscription_status==='cancelled'){score-=35;reasons.push('Subscription is cancelled')}
+    if(daysInactive>30){score-=25;reasons.push(`No activity for ${daysInactive} days`)} else if(daysInactive>14){score-=12;reasons.push(`Low activity for ${daysInactive} days`)}
+    if(adoption<25){score-=20;reasons.push(`Only ${adoption}% of users active`)} else if(adoption<50){score-=10;reasons.push(`User adoption is ${adoption}%`)}
+    if(overdue){score-=Math.min(20,overdue*4);reasons.push(`${overdue} overdue care plan review${overdue===1?'':'s'}`)}
+    if(high){score-=Math.min(15,high*5);reasons.push(`${high} high risk${high===1?'':'s'} open`)}
+    if(supportCount>=5){score-=10;reasons.push(`${supportCount} support sessions in 90 days`)}
+    score=Math.max(0,Math.min(100,score));
+    const modules={};for(const a of activity){const m=moduleName(a.action||'');modules[m]=(modules[m]||0)+1}
+    const moduleUsage=Object.entries(modules).map(([name,count])=>({name,count})).sort((a,b)=>b.count-a.count);
+    const recommendations=[];
+    if(daysInactive>14)recommendations.push('Arrange an engagement check-in with the organisation owner.');
+    if(adoption<50)recommendations.push('Offer user adoption training and review inactive licences.');
+    if(overdue)recommendations.push('Recommend a care-plan review workshop.');
+    if(!modules.Risks)recommendations.push('Introduce the Risk Assessments module.');
+    if(!modules.Documents)recommendations.push('Demonstrate document management and compliance storage.');
+    if(supportCount>=5)recommendations.push('Review recurring support themes and create a success plan.');
+    if(!recommendations.length)recommendations.push('Maintain regular success contact and identify expansion opportunities.');
+    return {...o,health_score:score,health_band:score>=80?'healthy':score>=60?'attention':'risk',trend:daysInactive<=7?'up':daysInactive<=21?'steady':'down',days_inactive:daysInactive,adoption_score:adoption,overdue_plans:overdue,high_risks:high,support_90d:supportCount,reasons,recommendations,module_usage:moduleUsage};
+  }).sort((a,b)=>a.health_score-b.health_score);
+  const healthy=organisations.filter(o=>o.health_band==='healthy').length, attention=organisations.filter(o=>o.health_band==='attention').length, risk=organisations.filter(o=>o.health_band==='risk').length;
+  const avg=organisations.length?Math.round(organisations.reduce((n,o)=>n+o.health_score,0)/organisations.length):100;
+  return json({generatedAt:new Date().toISOString(),summary:{averageHealth:avg,healthy,attention,risk,averageAdoption:organisations.length?Math.round(organisations.reduce((n,o)=>n+o.adoption_score,0)/organisations.length):0,openRecommendations:organisations.reduce((n,o)=>n+o.recommendations.length,0)},organisations});
 }
 
 async function listOrganisations(db, session) {
