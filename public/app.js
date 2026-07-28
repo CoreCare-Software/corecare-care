@@ -250,14 +250,29 @@ function renderPlatformOrganisations(){
   const status=$('#platform-org-status')?.value||'all';
   const rows=(platformData?.organisations||[]).filter(o=>(status==='all'||o.status===status)&&`${o.name} ${o.subscription_plan}`.toLowerCase().includes(query));
   $('#platform-org-empty').hidden=rows.length>0;
-  $('#platform-org-table').innerHTML=rows.map(o=>`<tr><td><strong>${escapeHtml(o.name)}</strong><small class="table-subtext">${escapeHtml(o.slug||'')}</small></td><td>${escapeHtml(o.subscription_plan||'development')}</td><td>${o.branch_count||0}</td><td>${o.client_count||0}</td><td>${o.staff_count||0}</td><td>${o.user_count||0}</td><td><span class="badge ${o.status==='active'?'success':'danger'}">${escapeHtml(o.status)}</span></td><td><button class="row-action" data-platform-open-org="${escapeHtml(o.id)}">Open</button></td></tr>`).join('');
+  $('#platform-org-table').innerHTML=rows.map(o=>`<tr><td><strong>${escapeHtml(o.name)}</strong><small class="table-subtext">${escapeHtml(o.slug||'')}</small></td><td>${escapeHtml(o.subscription_plan||'development')}</td><td>${o.branch_count||0}</td><td>${o.client_count||0}</td><td>${o.staff_count||0}</td><td>${o.user_count||0}</td><td><span class="badge ${o.status==='active'?'success':'danger'}">${escapeHtml(o.status)}</span></td><td><div class="row-actions"><button class="row-action" data-platform-manage-org="${escapeHtml(o.id)}">Manage</button><button class="row-action" data-platform-open-org="${escapeHtml(o.id)}">Support</button></div></td></tr>`).join('');
   $$('[data-platform-open-org]').forEach(button=>button.addEventListener('click',()=>openPlatformOrganisation(button.dataset.platformOpenOrg)));
+  $$('[data-platform-manage-org]').forEach(button=>button.addEventListener('click',()=>managePlatformOrganisation(button.dataset.platformManageOrg)));
 }
-async function openPlatformOrganisation(organisationId){
+let selectedPlatformOrganisationId=null;
+async function openPlatformOrganisation(organisationId,accessMode='full'){
   const row=(platformData?.organisations||[]).find(o=>o.id===organisationId);
-  if(!confirm(`Enter Support Mode for ${row?.name||'this organisation'}? All access and changes will be recorded in the audit log.`)) return;
-  await api('/api/platform/switch-organisation',{method:'POST',body:JSON.stringify({organisationId})});
+  const reason=prompt(`Enter the reason for accessing ${row?.name||'this organisation'}:`,'Customer support request');
+  if(!reason) return;
+  await api('/api/platform/switch-organisation',{method:'POST',body:JSON.stringify({organisationId,reason,accessMode})});
   location.reload();
+}
+async function managePlatformOrganisation(organisationId){
+  selectedPlatformOrganisationId=organisationId;
+  const p=await api(`/api/platform/organisations/${encodeURIComponent(organisationId)}`),o=p.organisation;
+  $('#platform-org-profile-name').textContent=o.name;
+  const flags=Object.entries(o.featureFlags||{}).filter(([,v])=>v).map(([k])=>k.replaceAll('_',' '));
+  $('#platform-org-profile-content').innerHTML=`<section class="org-profile-summary"><div class="org-brand-swatch" style="--org-colour:${escapeHtml(o.primary_colour||'#1f6f5f')}">${o.logo_url?`<img src="${escapeHtml(o.logo_url)}" alt="">`:initialsFromName(o.name)}</div><div><span class="badge ${o.status==='active'?'success':'danger'}">${escapeHtml(o.status)}</span><h3>${escapeHtml(o.name)}</h3><p>${escapeHtml(o.contact_email||'No contact email')} · ${escapeHtml(o.contact_phone||'No phone')}</p></div></section>
+  <section class="org-profile-stats"><div><span>Clients</span><strong>${o.client_count||0}</strong></div><div><span>Staff</span><strong>${o.staff_count||0}</strong></div><div><span>Users</span><strong>${o.user_count||0}</strong></div><div><span>Branches</span><strong>${o.branch_count||0}</strong></div></section>
+  <section class="org-profile-detail"><h3>Subscription & licence</h3><p><b>${escapeHtml(o.subscription_plan||'development')}</b> · ${escapeHtml(o.subscription_status||'active')}</p><p>Users ${o.user_count||0}/${o.max_users||'∞'} · Clients ${o.client_count||0}/${o.max_clients||'∞'}</p><p>Renewal ${formatDate(o.renewal_date)||'Not set'}</p></section>
+  <section class="org-profile-detail"><h3>Enabled modules</h3><div class="feature-chip-list">${flags.map(x=>`<span>${escapeHtml(x)}</span>`).join('')||'<span>Core modules</span>'}</div></section>
+  <section class="org-profile-detail span-two"><h3>Support history</h3>${(p.supportHistory||[]).map(x=>`<div class="support-history-row"><div><strong>${escapeHtml(x.display_name||'Platform user')}</strong><small>${escapeHtml(x.reason)} · ${escapeHtml(x.access_mode)}</small></div><time>${formatDate(x.started_at?.slice(0,10))}</time></div>`).join('')||'<p>No support sessions recorded.</p>'}</section>`;
+  $('#platform-organisation-dialog').showModal();
 }
 async function loadAllCarePlans() {
   const payload = await api('/api/care-plans');
@@ -744,6 +759,7 @@ async function loadSettings() {
     renderUsers(); renderBranches(); populateBranchSelect();
     if(currentUser.isPlatformUser) await loadOrganisations();
     await loadAudit();
+  await loadOrganisationCustomisation();
   } catch (error) {
     $('#user-table-body').innerHTML = `<tr><td colspan="5">${escapeHtml(error.message)}</td></tr>`;
   }
@@ -794,22 +810,20 @@ userForm.addEventListener('submit', async event => {
   }
 });
 
-$('#organisation-form').addEventListener('submit', async event => {
-  event.preventDefault();
-  const name = $('#organisation-input').value.trim();
-  const message = $('#organisation-message');
-  message.hidden = true;
-  try {
-    const payload = await api('/api/organisation', { method: 'PUT', body: JSON.stringify({ name }) });
-    currentUser.organisationName = payload.organisation.name;
-    updateIdentity();
-    message.textContent = 'Organisation name saved.';
-    message.hidden = false;
-  } catch (error) {
-    message.textContent = error.message;
-    message.hidden = false;
-  }
-});
+function updateBrandingPreview(){
+  const primary=$('#organisation-colour')?.value||'#1f6f5f',secondary=$('#organisation-secondary-colour')?.value||'#0f172a';
+  const preview=$('#branding-preview');if(!preview)return;preview.style.setProperty('--preview-primary',primary);preview.style.setProperty('--preview-secondary',secondary);
+  $('#preview-name').textContent=$('#organisation-input')?.value||'Organisation';$('#preview-short').textContent=$('#organisation-short-name')?.value||'Care management';$('#preview-welcome').textContent=$('#organisation-welcome')?.value||'Welcome to your care operations workspace';$('#preview-clients').textContent=($('#term-client')?.value||'Client')+'s';$('#preview-staff').textContent=($('#term-carer')?.value||'Carer')+'s';
+  $('#preview-logo').textContent=initialsFromName($('#organisation-input')?.value||'CoreCare');
+}
+async function loadOrganisationCustomisation(){
+  const p=await api('/api/organisation/profile'),o=p.organisation||{};
+  const set=(id,v)=>{const e=$(id);if(e)e.value=v||''};set('#organisation-input',o.name);set('#organisation-short-name',o.short_name);set('#organisation-logo',o.logo_url);set('#organisation-colour',o.primary_colour||'#1f6f5f');set('#organisation-secondary-colour',o.secondary_colour||'#0f172a');set('#organisation-contact-email',o.contact_email);set('#organisation-contact-phone',o.contact_phone);set('#organisation-website',o.website);set('#organisation-welcome',o.dashboard_welcome);set('#organisation-timezone',o.timezone||'Europe/London');set('#organisation-week-start',o.week_start||'monday');set('#organisation-time-format',o.time_format||'24h');set('#organisation-document-footer',o.document_footer);set('#organisation-invoice-footer',o.invoice_footer);set('#term-client',o.terminology?.client||'Client');set('#term-carer',o.terminology?.carer||'Carer');set('#term-branch',o.terminology?.branch||'Branch');
+  $$('input[name="dashboardWidget"]').forEach(x=>x.checked=(o.dashboardWidgets||[]).includes(x.value));updateBrandingPreview();applyOrganisationBranding(o);
+}
+function applyPortalBranding(o){document.documentElement.style.setProperty('--organisation-primary',o.primary_colour||'#1f6f5f');document.documentElement.style.setProperty('--organisation-secondary',o.secondary_colour||'#0f172a');const brand=document.querySelector('.sidebar-brand strong');if(brand)brand.textContent=o.short_name||o.name||'CoreCare';}
+$('#organisation-form').addEventListener('input',updateBrandingPreview);
+$('#organisation-form').addEventListener('submit',async event=>{event.preventDefault();const f=new FormData(event.currentTarget),data=Object.fromEntries(f);data.terminology={client:data.termClient,carer:data.termCarer,branch:data.termBranch};data.dashboardWidgets=f.getAll('dashboardWidget');const message=$('#organisation-message');message.hidden=true;try{const payload=await api('/api/organisation/profile',{method:'PUT',body:JSON.stringify(data)});currentUser.organisationName=payload.organisation.name;applyPortalBranding(payload.organisation);updateIdentity();message.textContent='Portal customisation saved.';message.hidden=false;}catch(error){message.textContent=error.message;message.hidden=false;}});
 
 async function loadAudit() {
   const payload = await api('/api/audit?limit=30');
@@ -847,3 +861,7 @@ restoreSession();
 $('#exit-support-mode')?.addEventListener('click',async()=>{try{await api('/api/platform/exit-support',{method:'POST'});location.reload();}catch(error){alert(error.message);}});
 
 $('#platform-global-search')?.addEventListener('input',()=>{clearTimeout(platformSearchTimer);platformSearchTimer=setTimeout(runPlatformSearch,300);});
+
+$('#close-platform-org-profile')?.addEventListener('click',()=>$('#platform-organisation-dialog').close());
+$('#platform-org-support-full')?.addEventListener('click',()=>{if(selectedPlatformOrganisationId)openPlatformOrganisation(selectedPlatformOrganisationId,'full')});
+$('#platform-org-support-readonly')?.addEventListener('click',()=>{if(selectedPlatformOrganisationId)openPlatformOrganisation(selectedPlatformOrganisationId,'read_only')});

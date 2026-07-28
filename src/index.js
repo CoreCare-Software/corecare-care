@@ -1,5 +1,5 @@
 /** CoreCare Cloudflare Worker — v0.5.0 client records */
-const VERSION = "0.9.0";
+const VERSION = "0.10.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, sprint: "Sprint 9 — complete SaaS platform" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, sprint: "Sprint 10 — branding and portal redesign" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -38,6 +38,7 @@ export default {
         if (url.pathname === "/api/platform/organisations" && request.method === "GET") return listOrganisations(env.DB, session);
         if (url.pathname === "/api/platform/organisations" && request.method === "POST") return createOrganisation(request, env.DB, session);
         const orgMatch = url.pathname.match(/^\/api\/platform\/organisations\/([^/]+)$/);
+        if (orgMatch && request.method === "GET") return getPlatformOrganisation(env.DB, session, decodeURIComponent(orgMatch[1]));
         if (orgMatch && request.method === "PUT") return updateOrganisationAdmin(request, env.DB, session, decodeURIComponent(orgMatch[1]));
         if (url.pathname === "/api/platform/switch-organisation" && request.method === "POST") return switchOrganisation(request, env.DB, session);
         if (url.pathname === "/api/platform/exit-support" && request.method === "POST") return exitSupportMode(env.DB, session);
@@ -677,12 +678,18 @@ async function updateOrganisationAdmin(request,db,session,id){
 }
 function nullableNumber(value,fallback=null){if(value===undefined||value===null||value==='')return fallback===undefined?null:fallback;const n=Number(value);return Number.isFinite(n)?n:null;}
 async function switchOrganisation(request,db,session){
-  if(!requirePlatform(session)) return forbidden(); const input=await readJson(request),orgId=clean(input.organisationId),branchId=clean(input.branchId)||null;
+  if(!requirePlatform(session)) return forbidden(); const input=await readJson(request),orgId=clean(input.organisationId),branchId=clean(input.branchId)||null,reason=clean(input.reason),accessMode=clean(input.accessMode)==='read_only'?'read_only':'full';
+  if(!reason || reason.length<5) return json({error:{code:"SUPPORT_REASON_REQUIRED",message:"Enter a brief reason for entering Support Mode."}},400);
   const org=await db.prepare("SELECT id,name,status FROM organisations WHERE id=?").bind(orgId).first(); if(!org)return json({error:{code:"NOT_FOUND",message:"Organisation not found."}},404);
   if(org.status!=="active") return json({error:{code:"ORGANISATION_SUSPENDED",message:"This organisation is suspended."}},403);
   if(branchId){const branch=await db.prepare("SELECT id FROM branches WHERE id=? AND organisation_id=? AND status='active'").bind(branchId,orgId).first();if(!branch)return json({error:{code:"INVALID_BRANCH",message:"Branch does not belong to this organisation."}},400);}
   const origin=session.support_mode ? session.support_origin_organisation_id : session.organisation_id;
-  await db.batch([db.prepare("UPDATE sessions SET organisation_id=?,active_branch_id=?,switched_by_platform_user=1,support_mode=1,support_origin_organisation_id=?,support_started_at=COALESCE(support_started_at,CURRENT_TIMESTAMP),last_seen_at=CURRENT_TIMESTAMP WHERE id=?").bind(orgId,branchId,origin,session.session_id),auditStatement(db,orgId,session.user_id,"platform.support_mode_entered","organisation",orgId,{from:session.organisation_id,branchId})]);
+  const supportId=crypto.randomUUID();
+  await db.batch([
+    db.prepare("UPDATE sessions SET organisation_id=?,active_branch_id=?,switched_by_platform_user=1,support_mode=1,support_origin_organisation_id=?,support_started_at=CURRENT_TIMESTAMP,last_seen_at=CURRENT_TIMESTAMP WHERE id=?").bind(orgId,branchId,origin,session.session_id),
+    db.prepare("INSERT INTO support_sessions(id,organisation_id,platform_user_id,reason,access_mode,session_id) VALUES(?,?,?,?,?,?)").bind(supportId,orgId,session.user_id,reason,accessMode,session.session_id),
+    auditStatement(db,orgId,session.user_id,"platform.support_mode_entered","organisation",orgId,{from:session.organisation_id,branchId,reason,accessMode,supportId})
+  ]);
   return json({ok:true,organisation:org,supportMode:true});
 }
 async function exitSupportMode(db,session){
@@ -692,21 +699,41 @@ async function exitSupportMode(db,session){
   const org=origin?await db.prepare("SELECT id,name,status FROM organisations WHERE id=?").bind(origin).first():null;
   const fallback=org||await db.prepare("SELECT id,name,status FROM organisations WHERE status='active' ORDER BY created_at LIMIT 1").first();
   if(!fallback)return json({error:{code:"NO_ORGANISATION",message:"No active platform organisation is available."}},409);
-  await db.batch([db.prepare("UPDATE sessions SET organisation_id=?,active_branch_id=NULL,support_mode=0,support_origin_organisation_id=NULL,support_started_at=NULL,last_seen_at=CURRENT_TIMESTAMP WHERE id=?").bind(fallback.id,session.session_id),auditStatement(db,session.organisation_id,session.user_id,"platform.support_mode_exited","organisation",session.organisation_id,{returnedTo:fallback.id})]);
+  await db.batch([
+    db.prepare("UPDATE support_sessions SET ended_at=CURRENT_TIMESTAMP WHERE session_id=? AND ended_at IS NULL").bind(session.session_id),
+    db.prepare("UPDATE sessions SET organisation_id=?,active_branch_id=NULL,support_mode=0,support_origin_organisation_id=NULL,support_started_at=NULL,last_seen_at=CURRENT_TIMESTAMP WHERE id=?").bind(fallback.id,session.session_id),
+    auditStatement(db,session.organisation_id,session.user_id,"platform.support_mode_exited","organisation",session.organisation_id,{returnedTo:fallback.id})
+  ]);
   return json({ok:true,supportMode:false,organisation:fallback});
 }
-async function getOrganisationProfile(db,session){
-  const org=await db.prepare("SELECT id,name,slug,status,subscription_plan,subscription_status,trial_ends_at,logo_url,primary_colour,contact_email,contact_phone,feature_flags_json,max_users,max_clients FROM organisations WHERE id=?").bind(session.organisation_id).first();
+async function getPlatformOrganisation(db,session,id){
+  if(!requirePlatform(session)) return forbidden();
+  const org=await db.prepare(`SELECT o.*,
+    (SELECT COUNT(*) FROM branches b WHERE b.organisation_id=o.id) branch_count,
+    (SELECT COUNT(*) FROM users u WHERE u.organisation_id=o.id) user_count,
+    (SELECT COUNT(*) FROM clients c WHERE c.organisation_id=o.id AND c.status<>'Archived') client_count,
+    (SELECT COUNT(*) FROM staff st WHERE st.organisation_id=o.id AND st.status='Active') staff_count
+    FROM organisations o WHERE o.id=?`).bind(id).first();
   if(!org)return json({error:{code:"NOT_FOUND",message:"Organisation not found."}},404);
-  let featureFlags={}; try{featureFlags=JSON.parse(org.feature_flags_json||"{}")}catch{}
-  return json({organisation:{...org,featureFlags}});
+  const support=await db.prepare(`SELECT ss.*,u.display_name FROM support_sessions ss LEFT JOIN users u ON u.id=ss.platform_user_id WHERE ss.organisation_id=? ORDER BY ss.started_at DESC LIMIT 20`).bind(id).all();
+  return json({organisation:normaliseOrganisation(org),supportHistory:support.results||[]});
+}
+function parseJson(value,fallback){try{return JSON.parse(value||'')}catch{return fallback}}
+function normaliseOrganisation(org){return {...org,featureFlags:parseJson(org.feature_flags_json,{}),terminology:parseJson(org.terminology_json,{}),dashboardWidgets:parseJson(org.dashboard_widgets_json,["metrics","attention","activity","compliance"]),sidebarOrder:parseJson(org.sidebar_order_json,[])}}
+async function getOrganisationProfile(db,session){
+  const org=await db.prepare("SELECT * FROM organisations WHERE id=?").bind(session.organisation_id).first();
+  if(!org)return json({error:{code:"NOT_FOUND",message:"Organisation not found."}},404);
+  return json({organisation:normaliseOrganisation(org)});
 }
 async function updateOrganisationProfile(request,db,session){
   if(!hasRole(session,["owner","organisation_owner","organisation_admin"]))return forbidden();
-  const i=await readJson(request),name=clean(i.name),colour=clean(i.primaryColour)||"#1f6f5f";
+  const i=await readJson(request),name=clean(i.name),colour=clean(i.primaryColour)||"#1f6f5f",secondary=clean(i.secondaryColour)||"#0f172a";
   if(!name)return json({error:{code:"VALIDATION_ERROR",message:"Enter an organisation name."}},400);
-  if(!/^#[0-9a-fA-F]{6}$/.test(colour))return json({error:{code:"VALIDATION_ERROR",message:"Enter a valid six-digit brand colour."}},400);
-  await db.batch([db.prepare("UPDATE organisations SET name=?,logo_url=?,primary_colour=?,contact_email=?,contact_phone=?,updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(name,clean(i.logoUrl),colour,clean(i.contactEmail),clean(i.contactPhone),session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,"organisation.branding_updated","organisation",session.organisation_id,{name,colour})]);
+  const terminology=JSON.stringify(i.terminology||{}),widgets=JSON.stringify(i.dashboardWidgets||["metrics","attention","activity","compliance"]),sidebar=JSON.stringify(i.sidebarOrder||[]);
+  await db.batch([
+    db.prepare(`UPDATE organisations SET name=?,short_name=?,logo_url=?,primary_colour=?,secondary_colour=?,contact_email=?,contact_phone=?,website=?,email_sender_name=?,login_message=?,dashboard_welcome=?,document_header=?,document_footer=?,invoice_footer=?,timezone=?,currency=?,date_format=?,time_format=?,week_start=?,terminology_json=?,dashboard_widgets_json=?,sidebar_order_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(name,clean(i.shortName),clean(i.logoUrl),colour,secondary,clean(i.contactEmail),clean(i.contactPhone),clean(i.website),clean(i.emailSenderName),clean(i.loginMessage),clean(i.dashboardWelcome),clean(i.documentHeader),clean(i.documentFooter),clean(i.invoiceFooter),clean(i.timezone)||'Europe/London',clean(i.currency)||'GBP',clean(i.dateFormat)||'DD/MM/YYYY',clean(i.timeFormat)||'24h',clean(i.weekStart)||'monday',terminology,widgets,sidebar,session.organisation_id),
+    auditStatement(db,session.organisation_id,session.user_id,"organisation.customisation_updated","organisation",session.organisation_id,{name,colour})
+  ]);
   return getOrganisationProfile(db,session);
 }
 async function listBranches(db,session){const r=await db.prepare("SELECT * FROM branches WHERE organisation_id=? ORDER BY status,name COLLATE NOCASE").bind(session.organisation_id).all();return json({branches:r.results});}
