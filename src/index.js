@@ -1,5 +1,5 @@
 /** CoreCare Cloudflare Worker — v0.5.0 client records */
-const VERSION = "0.10.0";
+const VERSION = "0.11.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, sprint: "Sprint 10 — branding and portal redesign" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, sprint: "Sprint 11 — enterprise identity and security" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -44,6 +44,25 @@ export default {
         if (url.pathname === "/api/platform/exit-support" && request.method === "POST") return exitSupportMode(env.DB, session);
         if (url.pathname === "/api/organisation/profile" && request.method === "GET") return getOrganisationProfile(env.DB, session);
         if (url.pathname === "/api/organisation/profile" && request.method === "PUT") return updateOrganisationProfile(request, env.DB, session);
+        if (url.pathname === "/api/security/permissions" && request.method === "GET") return listPermissionCatalogue(env.DB, session);
+        if (url.pathname === "/api/security/roles") {
+          if (request.method === "GET") return listCustomRoles(env.DB, session);
+          if (request.method === "POST") return createCustomRole(request, env.DB, session);
+        }
+        const securityRoleMatch = url.pathname.match(/^\/api\/security\/roles\/([^/]+)$/);
+        if (securityRoleMatch) {
+          const roleId = decodeURIComponent(securityRoleMatch[1]);
+          if (request.method === "PUT") return updateCustomRole(request, env.DB, session, roleId);
+          if (request.method === "DELETE") return deleteCustomRole(env.DB, session, roleId);
+        }
+        if (url.pathname === "/api/security/overview" && request.method === "GET") return securityOverview(env.DB, session);
+        if (url.pathname === "/api/security/sessions" && request.method === "GET") return listActiveSessions(env.DB, session);
+        const revokeSessionMatch = url.pathname.match(/^\/api\/security\/sessions\/([^/]+)$/);
+        if (revokeSessionMatch && request.method === "DELETE") return revokeSession(env.DB, session, decodeURIComponent(revokeSessionMatch[1]));
+        if (url.pathname === "/api/security/policy") {
+          if (request.method === "GET") return getSecurityPolicy(env.DB, session);
+          if (request.method === "PUT") return updateSecurityPolicy(request, env.DB, session);
+        }
         if (url.pathname === "/api/branches") {
           if (request.method === "GET") return listBranches(env.DB, session);
           if (request.method === "POST") return createBranch(request, env.DB, session);
@@ -457,18 +476,19 @@ function toDocument(r){return {id:r.id,clientId:r.client_id,name:r.name,document
 
 async function listUsers(db, session) {
   if (!hasRole(session, ["owner", "manager", "auditor"])) return forbidden();
-  const result = await db.prepare("SELECT id,email,display_name,role,access_level,home_branch_id,status,must_change_password,last_login_at,created_at FROM users WHERE organisation_id=? ORDER BY display_name COLLATE NOCASE").bind(session.organisation_id).all();
+  const result = await db.prepare("SELECT u.id,u.email,u.display_name,u.role,u.access_level,u.home_branch_id,u.status,u.must_change_password,u.last_login_at,u.created_at,ucr.role_id AS custom_role_id,cr.name AS custom_role_name FROM users u LEFT JOIN user_custom_roles ucr ON ucr.user_id=u.id AND ucr.organisation_id=u.organisation_id LEFT JOIN custom_roles cr ON cr.id=ucr.role_id WHERE u.organisation_id=? ORDER BY u.display_name COLLATE NOCASE").bind(session.organisation_id).all();
   return json({ users: result.results.map(toUser) });
 }
 
 async function createUser(request, db, session) {
-  if (!hasRole(session, ["owner"])) return forbidden();
+  if (!await userHasPermission(db, session, "security.users.manage")) return forbidden();
   const input = await readJson(request);
   const email = clean(input.email).toLowerCase();
   const name = clean(input.displayName);
   const accessLevel = clean(input.accessLevel || input.role);
   const role = legacyRole(accessLevel);
   const branchId = clean(input.branchId) || null;
+  const customRoleId = clean(input.customRoleId) || null;
   const password = String(input.temporaryPassword || "");
   if (!email || !name || !allowedAccessLevels().includes(accessLevel) || password.length < 12) return json({ error: { code: "VALIDATION_ERROR", message: "Enter a name, valid email, role and temporary password of at least 12 characters." } }, 400);
   const secured = await hashPassword(password);
@@ -476,7 +496,8 @@ async function createUser(request, db, session) {
   try {
     await db.batch([
       db.prepare("INSERT INTO users (id,organisation_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password) VALUES (?,?,?,?,?,?,?,?,?,?, 'active',1)").bind(id, session.organisation_id, email, name, role, accessLevel, branchId, secured.hash, secured.salt, PASSWORD_ITERATIONS),
-      auditStatement(db, session.organisation_id, session.user_id, "user.created", "user", id, { email, role, accessLevel, branchId })
+      ...(customRoleId ? [db.prepare("INSERT INTO user_custom_roles(user_id,role_id,organisation_id,branch_id,assigned_by) SELECT ?,id,?,?,? FROM custom_roles WHERE id=? AND organisation_id=? AND is_active=1").bind(id,session.organisation_id,branchId,session.user_id,customRoleId,session.organisation_id)] : []),
+      auditStatement(db, session.organisation_id, session.user_id, "user.created", "user", id, { email, role, accessLevel, branchId, customRoleId })
     ]);
   } catch (error) {
     if (String(error).includes("UNIQUE")) return json({ error: { code: "EMAIL_EXISTS", message: "A user with that email already exists." } }, 409);
@@ -486,15 +507,21 @@ async function createUser(request, db, session) {
 }
 
 async function updateUser(request, db, session, id) {
-  if (!hasRole(session, ["owner"])) return forbidden();
+  if (!await userHasPermission(db, session, "security.users.manage")) return forbidden();
   if (id === session.user_id) return json({ error: { code: "SELF_EDIT_BLOCKED", message: "Use the password and profile controls for your own account." } }, 400);
   const input = await readJson(request);
-  const name = clean(input.displayName), role = clean(input.role), status = clean(input.status);
-  if (!name || !allowedAccessLevels().includes(accessLevel) || !["active", "disabled"].includes(status)) return json({ error: { code: "VALIDATION_ERROR", message: "Enter a name, valid role and status." } }, 400);
-  const result = await db.prepare("UPDATE users SET display_name=?,role=?,access_level=?,home_branch_id=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(name, role, accessLevel, branchId, status, id, session.organisation_id).run();
-  if (!result.meta.changes) return json({ error: { code: "USER_NOT_FOUND", message: "User account not found." } }, 404);
+  const name = clean(input.displayName);
+  const accessLevel = clean(input.accessLevel || input.role);
+  const role = legacyRole(accessLevel);
+  const branchId = clean(input.branchId) || null;
+  const status = clean(input.status);
+  const customRoleId = clean(input.customRoleId) || null;
+  if (!name || !allowedAccessLevels().includes(accessLevel) || !["active", "disabled"].includes(status)) return json({ error: { code: "VALIDATION_ERROR", message: "Enter a name, valid access level and status." } }, 400);
+  const statements = [db.prepare("UPDATE users SET display_name=?,role=?,access_level=?,home_branch_id=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(name, role, accessLevel, branchId, status, id, session.organisation_id), db.prepare("DELETE FROM user_custom_roles WHERE user_id=? AND organisation_id=?").bind(id,session.organisation_id)];
+  if(customRoleId) statements.push(db.prepare("INSERT INTO user_custom_roles(user_id,role_id,organisation_id,branch_id,assigned_by) SELECT ?,id,?,?,? FROM custom_roles WHERE id=? AND organisation_id=? AND is_active=1").bind(id,session.organisation_id,branchId,session.user_id,customRoleId,session.organisation_id));
+  statements.push(auditStatement(db, session.organisation_id, session.user_id, "user.updated", "user", id, { role, accessLevel, branchId, customRoleId, status }));
+  await db.batch(statements);
   if (status === "disabled") await db.prepare("DELETE FROM sessions WHERE user_id=?").bind(id).run();
-  await audit(db, session.organisation_id, session.user_id, "user.updated", "user", id, { role, accessLevel, branchId, status });
   return json({ ok: true });
 }
 
@@ -529,7 +556,7 @@ function unauthorised() { return json({ error: { code: "UNAUTHORISED", message: 
 function databaseRequired(message = "The D1 database binding named DB is not configured.") { return json({ error: { code: "DATABASE_NOT_CONFIGURED", message } }, 503); }
 function methodNotAllowed(allow) { return json({ error: { code: "METHOD_NOT_ALLOWED", message: "This method is not allowed." } }, 405, { allow: allow.join(", ") }); }
 function publicUser(row) { return { id: row.user_id || row.id, organisationId: row.organisation_id, organisationName: row.organisation_name, branchId: row.active_branch_id || row.home_branch_id || null, branchName: row.branch_name || null, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, isPlatformUser: Boolean(row.is_platform_user), supportMode: Boolean(row.support_mode), supportOriginOrganisationId: row.support_origin_organisation_id || null, supportStartedAt: row.support_started_at || null, mustChangePassword: Boolean(row.must_change_password) }; }
-function toUser(row) { return { id: row.id, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, branchId: row.home_branch_id || null, status: row.status, mustChangePassword: Boolean(row.must_change_password), lastLoginAt: row.last_login_at, createdAt: row.created_at }; }
+function toUser(row) { return { id: row.id, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, branchId: row.home_branch_id || null, customRoleId: row.custom_role_id || null, customRoleName: row.custom_role_name || null, status: row.status, mustChangePassword: Boolean(row.must_change_password), lastLoginAt: row.last_login_at, createdAt: row.created_at }; }
 function clean(value) { return String(value ?? "").trim(); }
 async function readJson(request) { try { return await request.json(); } catch { return {}; } }
 async function audit(db, organisationId, userId, action, entityType, entityId, detail) { await auditStatement(db, organisationId, userId, action, entityType, entityId, detail).run(); }
