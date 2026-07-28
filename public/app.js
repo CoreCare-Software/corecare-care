@@ -97,8 +97,8 @@ function updateIdentity() {
   $('#organisation-name').textContent = `${currentUser?.organisationName || 'Organisation'}${currentUser?.branchName ? ' · '+currentUser.branchName : ''}`;
   const platformUser = Boolean(currentUser?.isPlatformUser);
   const platformWorkspace = platformUser && !currentUser?.supportMode;
-  $('#platform-nav').hidden = !platformUser || currentUser?.supportMode;
-  $('#platform-nav-section').hidden = !platformUser || currentUser?.supportMode;
+  const platformNavigation = $('#platform-navigation');
+  if (platformNavigation) platformNavigation.hidden = !platformWorkspace;
   $$('.organisation-workspace-nav').forEach(item => item.hidden = platformWorkspace);
   $$('.organisation-workspace-action').forEach(item => item.hidden = platformWorkspace);
   const supportBanner=$('#support-mode-banner');
@@ -116,12 +116,35 @@ function updateIdentity() {
   document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
+const CORECARE_FALLBACK_VERSION = '1.2.0';
+
+async function loadApplicationVersion() {
+  let version = CORECARE_FALLBACK_VERSION;
+  try {
+    const payload = await api('/api/version');
+    version = payload.version || version;
+  } catch (error) {
+    console.warn('CoreCare version endpoint unavailable', error);
+  }
+  $$('[data-app-version]').forEach(node => node.textContent = version);
+  if ($('#dev-version')) $('#dev-version').textContent = `v${version}`;
+}
+
+function scrollPlatformSection(targetId) {
+  const target = document.getElementById(targetId);
+  if (!target) return;
+  if (target.tagName === 'DETAILS') target.open = true;
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  $$('[data-platform-target]').forEach(button => button.classList.toggle('active', button.dataset.platformTarget === targetId));
+}
+
 async function showApplication(user) {
   currentUser = user || currentUser;
   loginView.hidden = true;
   appView.hidden = false;
   setDate();
   updateIdentity();
+  await loadApplicationVersion();
   const platformWorkspace = currentUser?.isPlatformUser && !currentUser?.supportMode;
   if (platformWorkspace) {
     $$('.nav-item').forEach(item => item.classList.remove('active'));
@@ -326,7 +349,7 @@ function renderPlatformOrganisations(){
   const rows=(platformData?.organisations||[]).filter(o=>(status==='all'||o.status===status)&&`${o.name} ${o.subscription_plan}`.toLowerCase().includes(query));
   $('#platform-org-empty').hidden=rows.length>0;
   const money=p=>new Intl.NumberFormat('en-GB',{style:'currency',currency:'GBP',maximumFractionDigits:0}).format(Number(p||0)/100);
-  $('#platform-org-table').innerHTML=rows.map(o=>`<tr><td><strong>${escapeHtml(o.name)}</strong><small class="table-subtext">${escapeHtml(o.slug||'')}</small></td><td>${escapeHtml(o.plan_name||o.subscription_plan||'Development')}</td><td>${money(o.monthly_price_pence)}</td><td><span class="health-score ${o.health_score<60?'danger':o.health_score<80?'warning':'success'}">${o.health_score}%</span></td><td>${o.user_count||0}</td><td>${o.client_count||0}</td><td>${o.last_activity_at?new Intl.DateTimeFormat('en-GB',{dateStyle:'medium'}).format(new Date(`${o.last_activity_at}Z`)):'No activity'}</td><td><div class="row-actions"><button class="row-action" data-platform-manage-org="${escapeHtml(o.id)}">360°</button><button class="row-action" data-platform-open-org="${escapeHtml(o.id)}">Support</button></div></td></tr>`).join('');
+  $('#platform-org-table').innerHTML=rows.map(o=>`<tr><td><strong>${escapeHtml(o.name)}</strong><div class="organisation-meta"><small class="table-subtext">${escapeHtml(o.slug||'')}</small><span class="status-chip ${o.status==='active'?'active':'suspended'}">${escapeHtml(o.status||'active')}</span></div></td><td>${escapeHtml(o.plan_name||o.subscription_plan||'Development')}</td><td>${money(o.monthly_price_pence)}</td><td><span class="health-score ${o.health_score<60?'danger':o.health_score<80?'warning':'success'}">${o.health_score}%</span></td><td>${o.user_count||0}</td><td>${o.client_count||0}</td><td>${o.last_activity_at?new Intl.DateTimeFormat('en-GB',{dateStyle:'medium'}).format(new Date(`${o.last_activity_at}Z`)):'No activity'}</td><td><div class="row-actions"><button class="row-action" data-platform-manage-org="${escapeHtml(o.id)}">360°</button><button class="row-action" data-platform-open-org="${escapeHtml(o.id)}">Support</button></div></td></tr>`).join('');
   $$('[data-platform-open-org]').forEach(button=>button.addEventListener('click',()=>openPlatformOrganisation(button.dataset.platformOpenOrg)));
   $$('[data-platform-manage-org]').forEach(button=>button.addEventListener('click',()=>managePlatformOrganisation(button.dataset.platformManageOrg)));
 }
@@ -763,7 +786,7 @@ $$('.nav-item').forEach(button => button.addEventListener('click', () => {
   button.classList.add('active');
   sidebar.classList.remove('open');
   menuButton.setAttribute('aria-expanded', 'false');
-  showPage(button.dataset.page);
+  if (button.dataset.page) showPage(button.dataset.page);
 }));
 
 $$('[data-page-link]').forEach(button => button.addEventListener('click', () => $(`[data-page="${button.dataset.pageLink}"]`).click()));
@@ -986,6 +1009,16 @@ branchForm?.addEventListener('submit',async e=>{e.preventDefault();try{await api
 $('#add-organisation')?.addEventListener('click',()=>{organisationAdminForm.reset();$('#organisation-admin-error').hidden=true;organisationDialog.showModal();});
 $('#close-organisation-dialog')?.addEventListener('click',()=>organisationDialog.close());$('#cancel-organisation')?.addEventListener('click',()=>organisationDialog.close());
 organisationAdminForm?.addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/platform/organisations',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(organisationAdminForm)))});organisationDialog.close();await loadOrganisations();}catch(x){$('#organisation-admin-error').textContent=x.message;$('#organisation-admin-error').hidden=false;}});
+
+$$('[data-platform-target]').forEach(button => button.addEventListener('click', event => {
+  if (button.dataset.page === 'platform') {
+    showPage('platform');
+    setTimeout(() => scrollPlatformSection(button.dataset.platformTarget), 50);
+  } else {
+    event.preventDefault();
+    scrollPlatformSection(button.dataset.platformTarget);
+  }
+}));
 
 $('#platform-org-search')?.addEventListener('input',renderPlatformOrganisations);
 $('#platform-org-status')?.addEventListener('change',renderPlatformOrganisations);
