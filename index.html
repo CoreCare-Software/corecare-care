@@ -97,7 +97,7 @@
               <p class="eyebrow">CoreCare Enterprise 1.1</p>
               <h2 id="executive-greeting">Executive Command Centre</h2>
               <p id="executive-briefing">Preparing your live platform briefing…</p>
-              <div class="executive-actions"><button id="platform-add-organisation" class="primary-button compact">+ New organisation</button><button id="executive-refresh" class="secondary-button compact">Refresh command centre</button></div>
+              <div class="executive-actions"><button id="platform-add-organisation" class="primary-button compact">+ New organisation</button><button id="open-revenue-centre" class="secondary-button compact">Revenue centre</button><button id="executive-refresh" class="secondary-button compact">Refresh command centre</button></div>
             </div>
             <div class="executive-health-card"><span>Platform status</span><strong id="executive-health-score">Checking</strong><small id="executive-health-copy">Reviewing live services</small><div class="health-pulse"></div></div>
           </div>
@@ -125,6 +125,25 @@
 
             <article class="panel executive-span-two"><div class="panel-heading"><div><p class="eyebrow">Live platform feed</p><h2>Latest activity</h2></div></div><div id="platform-activity" class="timeline executive-timeline"><div><p>Loading activity…</p></div></div></article>
             <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Global search</p><h2>Find anything</h2></div></div><div class="padded"><label class="search-field"><span>Organisations, users, clients or staff</span><input id="platform-global-search" type="search" placeholder="Enter at least 2 characters"></label><div id="platform-search-results" class="platform-result-list"><p class="muted">No search performed.</p></div></div></article>
+          </section>
+
+          <section id="revenue-centre" class="revenue-centre panel">
+            <div class="panel-heading revenue-heading"><div><p class="eyebrow">CoreCare Enterprise 1.1.1</p><h2>Revenue Centre</h2><p>Live subscription run-rate, plan mix, renewal exposure and customer value.</p></div><div class="revenue-actions"><button id="revenue-refresh" class="secondary-button compact">Refresh</button><button id="revenue-export" class="primary-button compact">Export CSV</button></div></div>
+            <div class="revenue-kpis">
+              <div><span>MRR</span><strong id="revenue-mrr">£0</strong><small>Current billable run-rate</small></div>
+              <div><span>ARR</span><strong id="revenue-arr">£0</strong><small>MRR × 12</small></div>
+              <div><span>New MRR</span><strong id="revenue-new-mrr">£0</strong><small>Organisations added this month</small></div>
+              <div><span>MRR at risk/lost</span><strong id="revenue-lost-mrr">£0</strong><small>Suspended or cancelled accounts</small></div>
+              <div><span>Average account</span><strong id="revenue-arpo">£0</strong><small>Per billable organisation</small></div>
+              <div><span>90-day renewals</span><strong id="revenue-renewal-value">£0</strong><small>Monthly value approaching renewal</small></div>
+            </div>
+            <div class="revenue-grid">
+              <article class="revenue-card span-two"><div class="subheading"><div><h3>12-month portfolio run-rate</h3><p>Reconstructed from organisation start dates and current plan prices.</p></div></div><div id="revenue-trend" class="revenue-chart"></div></article>
+              <article class="revenue-card"><div class="subheading"><div><h3>Revenue by plan</h3><p>Current active subscription mix.</p></div></div><div id="revenue-plan-mix" class="plan-mix"></div></article>
+              <article class="revenue-card span-two"><div class="subheading"><div><h3>Renewal forecast</h3><p>Upcoming customer decisions and monthly revenue exposure.</p></div></div><div class="table-wrap"><table class="client-table"><thead><tr><th>Organisation</th><th>Plan</th><th>Renewal</th><th>Days</th><th>MRR</th></tr></thead><tbody id="revenue-renewals"></tbody></table></div></article>
+              <article class="revenue-card"><div class="subheading"><div><h3>Commercial position</h3><p>Immediate subscription indicators.</p></div></div><div id="revenue-commercial-summary" class="health-list"></div></article>
+            </div>
+            <p class="revenue-data-note">Historical figures are an estimated portfolio run-rate until recurring billing events are connected. Current MRR and ARR use live subscription-plan values.</p>
           </section>
 
           <details class="executive-admin-drawer"><summary>Platform administration and audit</summary><section class="platform-tools-grid">

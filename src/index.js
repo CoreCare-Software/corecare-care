@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.1.0 — Executive Platform Command Centre */
-const VERSION = "1.1.0";
+/** CoreCare Enterprise 1.1.1 — Revenue Centre */
+const VERSION = "1.1.1";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.1.0 — Executive Platform Command Centre" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.1.1 — Revenue Centre" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -26,6 +26,7 @@ export default {
         if (url.pathname === "/api/dashboard" && request.method === "GET") return dashboardSummary(env.DB, session);
         if (url.pathname === "/api/care-plans" && request.method === "GET") return listAllCarePlans(env.DB, session, url);
         if (url.pathname === "/api/platform/dashboard" && request.method === "GET") return platformDashboard(env.DB, session);
+        if (url.pathname === "/api/platform/revenue" && request.method === "GET") return platformRevenue(env.DB, session);
         if (url.pathname === "/api/platform/search" && request.method === "GET") return platformSearch(env.DB, session, url);
         if (url.pathname === "/api/platform/audit" && request.method === "GET") return platformAudit(env.DB, session, url);
         if (url.pathname === "/api/platform/notifications" && request.method === "GET") return platformNotifications(env.DB, session);
@@ -674,6 +675,25 @@ async function platformDashboard(db, session) {
   ];
   return json({summary:{organisations:enriched.length,activeOrganisations:enriched.filter(o=>o.status==='active').length,suspendedOrganisations:enriched.filter(o=>o.status==='suspended').length,branches:Number(branches?.total||0),users:Number(users?.total||0),activeUsers30d:Number(activeUsers?.total||0),clients:Number(clients?.total||0),staff:Number(staff?.total||0),carePlansOverdue:overduePlans,highRisks},financials:{mrrPence,arrPence:mrrPence*12,averageRevenuePence:billable.length?Math.round(mrrPence/billable.length):0},customerSuccess:{averageHealth:avgHealth,needsAttention:atRisk.length,healthy:enriched.filter(o=>o.health_score>=80).length},operations:{overall:errorCount===0?'Healthy':errorCount<5?'Monitoring':'Attention',database:'Healthy',activeSessions:Number(sessions?.total||0),errors24h:errorCount},briefing:{headline:atRisk.length?`${atRisk.length} customer organisation${atRisk.length===1?' requires':'s require'} your attention today. Otherwise, the platform is operating normally.`:'Your customer portfolio and CoreCare platform are operating normally.',items:briefingItems},organisations:enriched,atRiskOrganisations:atRisk,renewals,activity:activity.results||[]});
 }
+
+async function platformRevenue(db, session) {
+  if(!requirePlatform(session)) return forbidden();
+  const result=await db.prepare(`SELECT o.id,o.name,o.status,o.subscription_status,o.subscription_plan,o.created_at,o.renewal_date,
+    COALESCE(sp.name,o.subscription_plan,'Unassigned') AS plan_name,COALESCE(sp.monthly_price_pence,0) AS monthly_price_pence
+    FROM organisations o LEFT JOIN subscription_plans sp ON sp.id=o.subscription_plan ORDER BY o.created_at,o.name`).all();
+  const rows=result.results||[], now=new Date(), monthStart=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),1));
+  const isBillable=o=>o.status==='active'&&o.subscription_status!=='cancelled';
+  const billable=rows.filter(isBillable), mrrPence=billable.reduce((n,o)=>n+Number(o.monthly_price_pence||0),0);
+  const newMrrPence=billable.filter(o=>new Date(`${o.created_at}Z`)>=monthStart).reduce((n,o)=>n+Number(o.monthly_price_pence||0),0);
+  const lostMrrPence=rows.filter(o=>o.subscription_status==='cancelled'||o.status==='suspended').reduce((n,o)=>n+Number(o.monthly_price_pence||0),0);
+  const planMap={}; for(const o of billable){const key=o.plan_name||'Unassigned'; if(!planMap[key])planMap[key]={name:key,organisations:0,mrrPence:0};planMap[key].organisations++;planMap[key].mrrPence+=Number(o.monthly_price_pence||0)}
+  const planBreakdown=Object.values(planMap).sort((a,b)=>b.mrrPence-a.mrrPence);
+  const trend=[]; for(let offset=11;offset>=0;offset--){const d=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()-offset,1));const end=new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,1));const activeAtEnd=rows.filter(o=>new Date(`${o.created_at}Z`)<end&&o.subscription_status!=='cancelled'&&o.status!=='suspended');trend.push({month:d.toISOString().slice(0,7),label:new Intl.DateTimeFormat('en-GB',{month:'short',year:'2-digit',timeZone:'UTC'}).format(d),mrrPence:activeAtEnd.reduce((n,o)=>n+Number(o.monthly_price_pence||0),0),organisations:activeAtEnd.length})}
+  const renewals=rows.filter(o=>isBillable(o)&&o.renewal_date).map(o=>({...o,daysUntil:Math.ceil((new Date(`${o.renewal_date}T00:00:00Z`)-now)/86400000)})).filter(o=>o.daysUntil>=0).sort((a,b)=>a.daysUntil-b.daysUntil);
+  const renewal30=renewals.filter(o=>o.daysUntil<=30), renewal90=renewals.filter(o=>o.daysUntil<=90);
+  return json({generatedAt:new Date().toISOString(),metrics:{mrrPence,arrPence:mrrPence*12,newMrrPence,lostMrrPence,netMovementPence:newMrrPence-lostMrrPence,averageRevenuePence:billable.length?Math.round(mrrPence/billable.length):0,billableOrganisations:billable.length,renewal30Pence:renewal30.reduce((n,o)=>n+Number(o.monthly_price_pence||0),0),renewal90Pence:renewal90.reduce((n,o)=>n+Number(o.monthly_price_pence||0),0)},planBreakdown,trend,renewals:renewals.slice(0,25),organisations:rows.map(o=>({...o,billable:isBillable(o)}))});
+}
+
 async function listOrganisations(db, session) {
   if (!requirePlatform(session)) return forbidden();
   const result = await db.prepare(`SELECT o.*,COUNT(DISTINCT b.id) branch_count,COUNT(DISTINCT u.id) user_count,COUNT(DISTINCT c.id) client_count FROM organisations o LEFT JOIN branches b ON b.organisation_id=o.id LEFT JOIN users u ON u.organisation_id=o.id LEFT JOIN clients c ON c.organisation_id=o.id GROUP BY o.id ORDER BY o.name COLLATE NOCASE`).all();
