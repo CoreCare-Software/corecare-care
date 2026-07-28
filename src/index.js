@@ -1,5 +1,5 @@
 /** CoreCare Cloudflare Worker — v0.5.0 client records */
-const VERSION = "0.7.0";
+const VERSION = "0.7.2";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -371,6 +371,30 @@ async function listCarePlans(db, session, clientId){
   if(!await ensureClient(db,session,clientId)) return json({error:{code:"CLIENT_NOT_FOUND",message:"Client not found."}},404);
   const r=await db.prepare("SELECT * FROM care_plans WHERE organisation_id=? AND client_id=? ORDER BY CASE status WHEN 'Active' THEN 0 WHEN 'Draft' THEN 1 ELSE 2 END, review_date").bind(session.organisation_id,clientId).all();
   return json({carePlans:r.results.map(toCarePlan)});
+}
+
+async function listAllCarePlans(db, session, url){
+  const status=clean(url.searchParams.get("status"));
+  const params=[session.organisation_id];
+  let where="cp.organisation_id=?";
+  if(status && ["Draft","Active","Archived"].includes(status)){
+    where+=" AND cp.status=?";
+    params.push(status);
+  }
+  const result=await db.prepare(`
+    SELECT cp.*, c.first_name, c.last_name, c.preferred_name
+    FROM care_plans cp
+    JOIN clients c ON c.id=cp.client_id AND c.organisation_id=cp.organisation_id
+    WHERE ${where}
+    ORDER BY CASE cp.status WHEN 'Active' THEN 0 WHEN 'Draft' THEN 1 ELSE 2 END,
+             cp.review_date,
+             c.last_name COLLATE NOCASE,
+             c.first_name COLLATE NOCASE
+  `).bind(...params).all();
+  return json({carePlans:result.results.map(row=>({
+    ...toCarePlan(row),
+    clientName:[row.preferred_name||row.first_name,row.last_name].filter(Boolean).join(" ")
+  }))});
 }
 async function createCarePlan(request,db,session,clientId){
   if(!hasRole(session,["owner","manager","carer"])) return forbidden();
