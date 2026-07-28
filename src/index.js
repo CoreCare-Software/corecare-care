@@ -2,7 +2,7 @@
 const VERSION = "0.4.2";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
-const PASSWORD_ITERATIONS = 120000;
+const PASSWORD_ITERATIONS = 100000;
 const LOGIN_WINDOW_MINUTES = 15;
 const MAX_LOGIN_ATTEMPTS = 5;
 
