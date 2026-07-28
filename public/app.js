@@ -160,7 +160,9 @@ async function restoreSession() {
 
 function activatePage(id) {
   pages.forEach(page => page.classList.remove('active-page'));
-  $(id).classList.add('active-page');
+  const page = $(id);
+  if (!page) throw new Error(`CoreCare page is unavailable: ${id}`);
+  page.classList.add('active-page');
 }
 
 function showPage(page) {
@@ -233,16 +235,27 @@ async function loadDevelopmentStatus() {
 
 
 async function loadPlatformWorkspace(){
-  await Promise.all([
-    loadPlatformDashboard(),
-    loadRevenueCentre(),
-    loadCustomerSuccess(),
-    loadPlatformNotifications(),
-    loadPlatformHealth(),
-    loadPlatformPlans(),
-    loadPlatformAudit(),
-    loadPlatformUsers()
-  ]);
+  const modules = [
+    ['Executive dashboard', '#executive-greeting', loadPlatformDashboard],
+    ['Revenue Centre', '#revenue-centre', loadRevenueCentre],
+    ['Customer Success Centre', '#customer-success-centre', loadCustomerSuccess],
+    ['Notifications', '#platform-notifications', loadPlatformNotifications],
+    ['Platform health', '#platform-health', loadPlatformHealth],
+    ['Plans', '#platform-plans', loadPlatformPlans],
+    ['Audit', '#platform-audit-table', loadPlatformAudit],
+    ['Platform users', '#platform-users', loadPlatformUsers]
+  ];
+  const results = await Promise.allSettled(
+    modules.filter(([, selector]) => Boolean($(selector))).map(async ([name,, loader]) => {
+      try { await loader(); }
+      catch (error) { error.message = `${name}: ${error.message}`; throw error; }
+    })
+  );
+  const failures = results.filter(result => result.status === 'rejected');
+  if (failures.length) {
+    console.error('CoreCare platform module failures', failures.map(x => x.reason));
+    showToastError(new Error(failures.map(x => x.reason?.message || 'Module failed').join(' · ')));
+  }
 }
 
 async function loadPlatformDashboard(){
@@ -272,6 +285,7 @@ async function loadPlatformDashboard(){
 let revenueData=null;
 const formatRevenueMoney=pence=>new Intl.NumberFormat('en-GB',{style:'currency',currency:'GBP',maximumFractionDigits:0}).format(Number(pence||0)/100);
 async function loadRevenueCentre(){
+  if (!$('#revenue-centre')) return;
   const p=await api('/api/platform/revenue'); revenueData=p; const m=p.metrics||{};
   $('#revenue-mrr').textContent=formatRevenueMoney(m.mrrPence); $('#revenue-arr').textContent=formatRevenueMoney(m.arrPence); $('#revenue-new-mrr').textContent=formatRevenueMoney(m.newMrrPence); $('#revenue-lost-mrr').textContent=formatRevenueMoney(m.lostMrrPence); $('#revenue-arpo').textContent=formatRevenueMoney(m.averageRevenuePence); $('#revenue-renewal-value').textContent=formatRevenueMoney(m.renewal90Pence);
   const trend=p.trend||[], max=Math.max(1,...trend.map(x=>Number(x.mrrPence||0)));
@@ -285,6 +299,7 @@ function exportRevenueCsv(){if(!revenueData)return;const lines=[['Organisation',
 
 
 async function loadCustomerSuccess(){
+  if (!$('#customer-success-centre')) return;
   const p=await api('/api/platform/customer-success');customerSuccessData=p;const s=p.summary||{};
   $('#success-average').textContent=`${s.averageHealth||0}%`;$('#success-healthy').textContent=s.healthy||0;$('#success-attention').textContent=s.attention||0;$('#success-risk').textContent=s.risk||0;$('#success-adoption').textContent=`${s.averageAdoption||0}%`;
   renderCustomerSuccess();
@@ -324,15 +339,17 @@ async function openPlatformOrganisation(organisationId,accessMode='full'){
   location.reload();
 }
 async function managePlatformOrganisation(organisationId){
+  const dialog=$('#platform-organisation-dialog'), profileName=$('#platform-org-profile-name'), profileContent=$('#platform-org-profile-content');
+  if(!dialog||!profileName||!profileContent) throw new Error('Organisation 360 is unavailable in this deployment. Refresh the browser after deploying the latest public assets.');
   selectedPlatformOrganisationId=organisationId;
   const p=await api(`/api/platform/organisations/${encodeURIComponent(organisationId)}`),o=p.organisation;
-  $('#platform-org-profile-name').textContent=o.name;
+  profileName.textContent=o.name;
   const flags=Object.entries(o.featureFlags||{}).filter(([,v])=>v).map(([k])=>k.replaceAll('_',' '));
   const healthTone=o.health_score<60?'danger':o.health_score<80?'warning':'success';
   const usagePct=o.max_users?Math.min(100,Math.round((Number(o.user_count||0)/Number(o.max_users))*100)):0;
   const clientPct=o.max_clients?Math.min(100,Math.round((Number(o.client_count||0)/Number(o.max_clients))*100)):0;
   const activity=(p.activity||[]).map(x=>`<div class="org360-event"><span class="timeline-dot"></span><div><strong>${escapeHtml((x.action||'activity').replaceAll('.',' '))}</strong><small>${escapeHtml(x.user_name||'System')} · ${escapeHtml(x.entity_type||'record')}</small></div><time>${x.created_at?new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(new Date(`${x.created_at}Z`)):''}</time></div>`).join('')||'<p class="muted">No recent activity.</p>';
-  $('#platform-org-profile-content').innerHTML=`
+  profileContent.innerHTML=`
   <section class="org360-hero span-two"><div class="org-brand-swatch" style="--org-colour:${escapeHtml(o.primary_colour||'#1f6f5f')}">${o.logo_url?`<img src="${escapeHtml(o.logo_url)}" alt="">`:initialsFromName(o.name)}</div><div class="org360-title"><div><span class="badge ${o.status==='active'?'success':'danger'}">${escapeHtml(o.status)}</span><span class="health-score ${healthTone}">${o.health_score}% health</span></div><h3>${escapeHtml(o.name)}</h3><p>${escapeHtml(o.contact_email||'No contact email')} · ${escapeHtml(o.contact_phone||'No phone')} ${o.website?'· '+escapeHtml(o.website):''}</p></div><div class="org360-commercial"><small>Monthly recurring revenue</small><strong>${money(o.monthly_price_pence||0)}</strong><span>${escapeHtml(o.plan_name||o.subscription_plan||'Development')} plan</span></div></section>
   <nav class="org360-tabs span-two" aria-label="Organisation 360 sections">${[['overview','Overview'],['people','People & branches'],['commercial','Commercial'],['security','Security'],['support','Support'],['activity','Activity']].map(([id,label],i)=>`<button type="button" class="${i===0?'active':''}" data-org360-tab="${id}">${label}</button>`).join('')}</nav>
   <div class="org360-panel span-two" data-org360-panel="overview">
@@ -346,7 +363,7 @@ async function managePlatformOrganisation(organisationId){
   <div class="org360-panel span-two" data-org360-panel="support" hidden><div class="org360-grid"><section class="org-profile-detail"><h3>Support history</h3>${(p.supportHistory||[]).map(x=>`<div class="support-history-row"><div><strong>${escapeHtml(x.display_name||'Platform user')}</strong><small>${escapeHtml(x.reason)} · ${escapeHtml(x.access_mode)}</small></div><time>${formatDate(x.started_at?.slice(0,10))}</time></div>`).join('')||'<p>No support sessions recorded.</p>'}</section><section class="org-profile-detail"><h3>Customer success notes</h3>${(p.successNotes||[]).map(x=>`<div class="support-history-row"><div><strong>${escapeHtml(x.note_type||'Note')}</strong><small>${escapeHtml(x.note||x.content||'')} · ${escapeHtml(x.author_name||'Platform')}</small></div><time>${formatDate(x.created_at?.slice(0,10))}</time></div>`).join('')||'<p>No success notes recorded.</p>'}</section></div></div>
   <div class="org360-panel span-two" data-org360-panel="activity" hidden><section class="org-profile-detail"><h3>Recent organisation activity</h3><div class="org360-activity">${activity}</div></section></div>`;
   $$('[data-org360-tab]').forEach(button=>button.addEventListener('click',()=>{$$('[data-org360-tab]').forEach(x=>x.classList.toggle('active',x===button));$$('[data-org360-panel]').forEach(x=>x.hidden=x.dataset.org360Panel!==button.dataset.org360Tab);}));
-  $('#platform-organisation-dialog').showModal();
+  if(typeof dialog.showModal==='function') dialog.showModal(); else dialog.setAttribute('open','');
 }
 async function loadAllCarePlans() {
   const payload = await api('/api/care-plans');
@@ -686,7 +703,23 @@ async function archiveSelectedClient() {
 }
 
 function showToastError(error) {
-  window.alert(error.message || 'CoreCare could not complete the request.');
+  const message = error?.message || 'CoreCare could not complete the request.';
+  console.error(error);
+  let toast = $('#corecare-error-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'corecare-error-toast';
+    toast.className = 'corecare-error-toast';
+    toast.setAttribute('role', 'alert');
+    toast.innerHTML = '<strong>CoreCare could not complete part of the request</strong><span></span><button type="button" aria-label="Dismiss">×</button>';
+    document.body.appendChild(toast);
+    toast.querySelector('button')?.addEventListener('click', () => toast.remove());
+  }
+  const copy = toast.querySelector('span');
+  if (copy) copy.textContent = message;
+  toast.classList.add('visible');
+  clearTimeout(showToastError.timer);
+  showToastError.timer = setTimeout(() => toast?.classList.remove('visible'), 9000);
 }
 
 loginForm.addEventListener('submit', async event => {
