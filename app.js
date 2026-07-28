@@ -45,6 +45,8 @@ let clients = [];
 let currentUser = null;
 let users = [];
 let selectedClientId = null;
+let branches = [];
+let organisations = [];
 
 async function api(url, options = {}) {
   const response = await fetch(url, {
@@ -79,16 +81,16 @@ function initialsFromName(name) {
 }
 
 function roleLabel(role) {
-  return ({ owner: 'Organisation owner', manager: 'Manager', carer: 'Carer', auditor: 'Read-only auditor' })[role] || 'CoreCare user';
+  return ({ platform_owner:'Platform owner',platform_admin:'Platform admin',organisation_owner:'Organisation owner',organisation_admin:'Organisation admin',branch_manager:'Branch manager',senior_carer:'Senior carer',carer:'Carer',office_staff:'Office staff',auditor:'Read-only auditor',family:'Family member',owner:'Organisation owner',manager:'Manager' })[role] || 'CoreCare user';
 }
 
 function updateIdentity() {
   const name = currentUser?.displayName || 'CoreCare user';
   pageTitle.textContent = `Good afternoon, ${name.split(' ')[0]}`;
   $('#user-name').textContent = name;
-  $('#user-role').textContent = roleLabel(currentUser?.role);
+  $('#user-role').textContent = roleLabel(currentUser?.accessLevel || currentUser?.role);
   $('#user-avatar').textContent = initialsFromName(name);
-  $('#organisation-name').textContent = currentUser?.organisationName || 'Organisation';
+  $('#organisation-name').textContent = `${currentUser?.organisationName || 'Organisation'}${currentUser?.branchName ? ' · '+currentUser.branchName : ''}`;
 }
 
 async function showApplication(user) {
@@ -654,11 +656,16 @@ passwordForm.addEventListener('submit', async event => {
 async function loadSettings() {
   if (!currentUser) return;
   $('#organisation-input').value = currentUser.organisationName || '';
-  $('#add-user').hidden = currentUser.role !== 'owner';
+  const canAdmin = ['platform_owner','platform_admin','organisation_owner','organisation_admin'].includes(currentUser.accessLevel) || (['platform_owner','organisation_owner','organisation_admin'].includes(currentUser.accessLevel) || currentUser.role === 'owner');
+  $('#add-user').hidden = !canAdmin;
+  $('#add-branch').hidden = !canAdmin;
+  $('#platform-admin-panel').hidden = !currentUser.isPlatformUser;
   try {
-    const payload = await api('/api/users');
-    users = payload.users || [];
-    renderUsers();
+    const [userPayload, branchPayload] = await Promise.all([api('/api/users'), api('/api/branches')]);
+    users = userPayload.users || [];
+    branches = branchPayload.branches || [];
+    renderUsers(); renderBranches(); populateBranchSelect();
+    if(currentUser.isPlatformUser) await loadOrganisations();
     await loadAudit();
   } catch (error) {
     $('#user-table-body').innerHTML = `<tr><td colspan="5">${escapeHtml(error.message)}</td></tr>`;
@@ -667,7 +674,7 @@ async function loadSettings() {
 
 function renderUsers() {
   const own = currentUser?.id;
-  $('#user-table-body').innerHTML = users.map(user => `<tr><td><div class="client-person"><span class="person-avatar">${initialsFromName(user.displayName)}</span><div><strong>${escapeHtml(user.displayName)}</strong><span>${escapeHtml(user.email)}${user.mustChangePassword ? ' · password change required' : ''}</span></div></div></td><td>${escapeHtml(roleLabel(user.role))}</td><td><span class="badge ${user.status === 'active' ? 'success' : 'neutral'}">${escapeHtml(user.status)}</span></td><td>${user.lastLoginAt ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(user.lastLoginAt)) : 'Never'}</td><td>${currentUser.role === 'owner' && user.id !== own ? `<button class="row-action" data-edit-user="${escapeHtml(user.id)}">Edit</button>` : ''}</td></tr>`).join('');
+  $('#user-table-body').innerHTML = users.map(user => `<tr><td><div class="client-person"><span class="person-avatar">${initialsFromName(user.displayName)}</span><div><strong>${escapeHtml(user.displayName)}</strong><span>${escapeHtml(user.email)}${user.mustChangePassword ? ' · password change required' : ''}</span></div></div></td><td>${escapeHtml(roleLabel(user.accessLevel || user.role))}</td><td><span class="badge ${user.status === 'active' ? 'success' : 'neutral'}">${escapeHtml(user.status)}</span></td><td>${user.lastLoginAt ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(user.lastLoginAt)) : 'Never'}</td><td>${(['platform_owner','organisation_owner','organisation_admin'].includes(currentUser.accessLevel) || currentUser.role === 'owner') && user.id !== own ? `<button class="row-action" data-edit-user="${escapeHtml(user.id)}">Edit</button>` : ''}</td></tr>`).join('');
   $$('[data-edit-user]').forEach(button => button.addEventListener('click', () => openUserDialog(button.dataset.editUser)));
 }
 
@@ -684,7 +691,8 @@ function openUserDialog(id = '') {
   if (user) {
     userForm.elements.displayName.value = user.displayName;
     userForm.elements.email.value = user.email;
-    userForm.elements.role.value = user.role;
+    userForm.elements.accessLevel.value = user.accessLevel || user.role;
+    userForm.elements.branchId.value = user.branchId || "";
     userForm.elements.status.value = user.status;
   }
   userDialog.showModal();
@@ -732,4 +740,25 @@ async function loadAudit() {
 }
 
 $('#refresh-audit').addEventListener('click', loadAudit);
+
+function populateBranchSelect(){
+  const select=$('#user-branch-select'); if(!select)return;
+  const current=select.value;
+  select.innerHTML='<option value="">Organisation-wide</option>'+branches.filter(b=>b.status==='active').map(b=>`<option value="${escapeHtml(b.id)}">${escapeHtml(b.name)}</option>`).join('');
+  select.value=current;
+}
+function renderBranches(){
+  const list=$('#branch-list'); if(!list)return;
+  list.innerHTML=branches.map(b=>`<article class="record-card"><div class="record-card-heading"><div><p class="eyebrow">${escapeHtml(b.code||'Branch')}</p><h3>${escapeHtml(b.name)}</h3></div><span class="badge ${b.status==='active'?'success':'neutral'}">${escapeHtml(b.status)}</span></div><p>${escapeHtml(b.address||'No address recorded')}</p><small>${escapeHtml(b.phone||'')} ${escapeHtml(b.email||'')}</small></article>`).join('')||'<div class="empty-state"><strong>No branches found</strong></div>';
+}
+async function loadOrganisations(){const p=await api('/api/platform/organisations');organisations=p.organisations||[];renderOrganisations();}
+function renderOrganisations(){const list=$('#organisation-admin-list');if(!list)return;list.innerHTML=organisations.map(o=>`<article class="record-card"><div class="record-card-heading"><div><p class="eyebrow">${escapeHtml(o.subscription_plan||'development')}</p><h3>${escapeHtml(o.name)}</h3></div><span class="badge ${o.status==='active'?'success':'danger'}">${escapeHtml(o.status)}</span></div><p>${o.branch_count||0} branches · ${o.user_count||0} users · ${o.client_count||0} clients</p><button class="secondary-button" data-switch-org="${escapeHtml(o.id)}">Open organisation</button></article>`).join('');$$('[data-switch-org]').forEach(b=>b.addEventListener('click',async()=>{if(!confirm('Switch your support view to this organisation?'))return;await api('/api/platform/switch-organisation',{method:'POST',body:JSON.stringify({organisationId:b.dataset.switchOrg})});location.reload();}));}
+const branchDialog=$('#branch-dialog'),branchForm=$('#branch-form'),organisationDialog=$('#organisation-dialog'),organisationAdminForm=$('#organisation-admin-form');
+$('#add-branch')?.addEventListener('click',()=>{branchForm.reset();$('#branch-form-error').hidden=true;branchDialog.showModal();});
+$('#close-branch-dialog')?.addEventListener('click',()=>branchDialog.close());$('#cancel-branch')?.addEventListener('click',()=>branchDialog.close());
+branchForm?.addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/branches',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(branchForm)))});branchDialog.close();const p=await api('/api/branches');branches=p.branches||[];renderBranches();populateBranchSelect();}catch(x){$('#branch-form-error').textContent=x.message;$('#branch-form-error').hidden=false;}});
+$('#add-organisation')?.addEventListener('click',()=>{organisationAdminForm.reset();$('#organisation-admin-error').hidden=true;organisationDialog.showModal();});
+$('#close-organisation-dialog')?.addEventListener('click',()=>organisationDialog.close());$('#cancel-organisation')?.addEventListener('click',()=>organisationDialog.close());
+organisationAdminForm?.addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/platform/organisations',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(organisationAdminForm)))});organisationDialog.close();await loadOrganisations();}catch(x){$('#organisation-admin-error').textContent=x.message;$('#organisation-admin-error').hidden=false;}});
+
 restoreSession();
