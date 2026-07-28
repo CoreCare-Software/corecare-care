@@ -1,8 +1,8 @@
 {
   "name": "corecare",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
-  "description": "CoreCare client records and account administration",
+  "description": "CoreCare staff workspace, live dashboard and client records",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",

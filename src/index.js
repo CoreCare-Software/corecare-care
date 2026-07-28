@@ -1,5 +1,5 @@
 /** CoreCare Cloudflare Worker — v0.5.0 client records */
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, sprint: "Sprint 5 — client records" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, sprint: "Sprint 6 — staff and live dashboard" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -23,6 +23,18 @@ export default {
 
         if (url.pathname === "/api/auth/change-password" && request.method === "POST") return changePassword(request, env.DB, session);
         if (url.pathname === "/api/development/status") return developmentStatus(env, session);
+        if (url.pathname === "/api/dashboard" && request.method === "GET") return dashboardSummary(env.DB, session);
+        if (url.pathname === "/api/staff") {
+          if (request.method === "GET") return listStaff(env.DB, session, url);
+          if (request.method === "POST") return createStaff(request, env.DB, session);
+          return methodNotAllowed(["GET", "POST"]);
+        }
+        const staffMatch = url.pathname.match(/^\/api\/staff\/([^/]+)$/);
+        if (staffMatch) {
+          const id = decodeURIComponent(staffMatch[1]);
+          if (request.method === "PUT") return updateStaff(request, env.DB, session, id);
+          return methodNotAllowed(["PUT"]);
+        }
         if (url.pathname === "/api/clients") {
           if (request.method === "GET") return listClients(env.DB, session, url);
           if (request.method === "POST") return createClient(request, env.DB, session);
@@ -252,6 +264,54 @@ function toClient(row) {
     createdAt: row.created_at, updatedAt: row.updated_at
   };
 }
+
+
+async function dashboardSummary(db, session) {
+  const [clients, staff, auditRows] = await Promise.all([
+    db.prepare("SELECT status,risk,next_review FROM clients WHERE organisation_id=?").bind(session.organisation_id).all(),
+    db.prepare("SELECT status,dbs_expiry,training_expiry FROM staff WHERE organisation_id=?").bind(session.organisation_id).all(),
+    db.prepare(`SELECT a.action,a.entity_type,a.created_at,u.display_name AS user_name FROM audit_log a LEFT JOIN users u ON u.id=a.user_id WHERE a.organisation_id=? ORDER BY a.created_at DESC LIMIT 6`).bind(session.organisation_id).all()
+  ]);
+  const today = new Date().toISOString().slice(0,10);
+  const activeClients = clients.results.filter(x => x.status === "Active").length;
+  const reviewsDue = clients.results.filter(x => x.status === "Active" && x.next_review && x.next_review < today).length;
+  const highRisk = clients.results.filter(x => x.status === "Active" && x.risk === "High").length;
+  const activeStaff = staff.results.filter(x => x.status === "Active").length;
+  const complianceDue = staff.results.filter(x => x.status === "Active" && ((x.dbs_expiry && x.dbs_expiry < today) || (x.training_expiry && x.training_expiry < today))).length;
+  return json({ metrics: { activeClients, reviewsDue, highRisk, activeStaff, totalStaff: staff.results.length, complianceDue }, activity: auditRows.results });
+}
+
+const STAFF_COLUMNS = `id,first_name,last_name,preferred_name,job_title,employment_type,phone,email,start_date,status,dbs_expiry,training_expiry,notes,created_at,updated_at`;
+async function listStaff(db, session, url) {
+  const includeInactive = url.searchParams.get("includeInactive") === "true";
+  const result = await db.prepare(`SELECT ${STAFF_COLUMNS} FROM staff WHERE organisation_id=? ${includeInactive ? "" : "AND status='Active'"} ORDER BY last_name COLLATE NOCASE,first_name COLLATE NOCASE`).bind(session.organisation_id).all();
+  return json({ staff: result.results.map(toStaff) });
+}
+async function createStaff(request, db, session) {
+  if (!hasRole(session,["owner","manager"])) return forbidden();
+  const input = await readJson(request); const v = validateStaff(input); if (v.error) return json({error:{code:"VALIDATION_ERROR",message:v.error}},400);
+  const id=crypto.randomUUID();
+  await db.batch([
+    db.prepare(`INSERT INTO staff (id,organisation_id,first_name,last_name,preferred_name,job_title,employment_type,phone,email,start_date,status,dbs_expiry,training_expiry,notes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,...v.values),
+    auditStatement(db,session.organisation_id,session.user_id,"staff.created","staff",id,{name:`${v.values[0]} ${v.values[1]}`})
+  ]);
+  const row=await db.prepare(`SELECT ${STAFF_COLUMNS} FROM staff WHERE id=?`).bind(id).first(); return json({staff:toStaff(row)},201);
+}
+async function updateStaff(request, db, session, id) {
+  if (!hasRole(session,["owner","manager"])) return forbidden();
+  const input=await readJson(request); const v=validateStaff(input); if(v.error) return json({error:{code:"VALIDATION_ERROR",message:v.error}},400);
+  const result=await db.prepare(`UPDATE staff SET first_name=?,last_name=?,preferred_name=?,job_title=?,employment_type=?,phone=?,email=?,start_date=?,status=?,dbs_expiry=?,training_expiry=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(...v.values,id,session.organisation_id).run();
+  if(!result.meta.changes) return json({error:{code:"STAFF_NOT_FOUND",message:"Staff record not found."}},404);
+  await audit(db,session.organisation_id,session.user_id,"staff.updated","staff",id,{status:v.values[8]});
+  const row=await db.prepare(`SELECT ${STAFF_COLUMNS} FROM staff WHERE id=?`).bind(id).first(); return json({staff:toStaff(row)});
+}
+function validateStaff(input){
+  const values=[clean(input.firstName),clean(input.lastName),clean(input.preferredName),clean(input.jobTitle)||"Carer",clean(input.employmentType)||"Employee",clean(input.phone),clean(input.email),clean(input.startDate),clean(input.status)||"Active",clean(input.dbsExpiry),clean(input.trainingExpiry),clean(input.notes)];
+  if(!values[0]||!values[1]) return {error:"Enter the staff member's first and last name."};
+  if(!["Active","Inactive"].includes(values[8])) return {error:"Choose a valid staff status."};
+  return {values};
+}
+function toStaff(row){return {id:row.id,firstName:row.first_name,lastName:row.last_name,preferredName:row.preferred_name||"",jobTitle:row.job_title,employmentType:row.employment_type,phone:row.phone||"",email:row.email||"",startDate:row.start_date||"",status:row.status,dbsExpiry:row.dbs_expiry||"",trainingExpiry:row.training_expiry||"",notes:row.notes||"",createdAt:row.created_at,updatedAt:row.updated_at};}
 
 async function listUsers(db, session) {
   if (!hasRole(session, ["owner", "manager", "auditor"])) return forbidden();

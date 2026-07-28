@@ -20,9 +20,12 @@ const passwordDialog = $('#password-dialog');
 const passwordForm = $('#password-form');
 const userDialog = $('#user-dialog');
 const userForm = $('#user-form');
+const staffDialog = $('#staff-dialog');
+const staffForm = $('#staff-form');
+const quickAddDialog = $('#quick-add-dialog');
+let staff = [];
 
 const labels = {
-  staff: ['Staff', 'Staff records, employment information, availability and compliance will live here.'],
   family: ['Family portal', 'Secure family access, updates and messaging will be introduced in a later milestone.'],
   care: ['Care plans', 'Person-centred care plans, risks, goals, outcomes and reviews will be managed here.'],
   medication: ['Medication', 'Medication profiles, electronic MAR and administration records will be built here.'],
@@ -90,8 +93,9 @@ async function showApplication(user) {
   appView.hidden = false;
   setDate();
   updateIdentity();
-  await loadClients();
+  await Promise.all([loadClients(), loadStaff(), loadDashboard()]);
   renderClients();
+  renderStaff();
   await loadDevelopmentStatus();
   $('#main-content').focus();
   if (currentUser?.mustChangePassword) setTimeout(() => openPasswordDialog(true), 100);
@@ -128,6 +132,7 @@ function showPage(page) {
     activatePage('#dashboard-page');
     setDate();
     updateIdentity();
+    loadDashboard().catch(showToastError);
     return;
   }
   if (page === 'clients') {
@@ -135,6 +140,13 @@ function showPage(page) {
     pageKicker.textContent = 'People';
     pageTitle.textContent = 'Clients';
     loadClients().then(renderClients).catch(showToastError);
+    return;
+  }
+  if (page === 'staff') {
+    activatePage('#staff-page');
+    pageKicker.textContent = 'Workforce';
+    pageTitle.textContent = 'Staff';
+    loadStaff().then(renderStaff).catch(showToastError);
     return;
   }
   if (page === 'settings') {
@@ -169,6 +181,59 @@ async function loadDevelopmentStatus() {
 async function loadClients() {
   const payload = await api('/api/clients?includeArchived=true');
   clients = Array.isArray(payload.clients) ? payload.clients : [];
+}
+
+
+async function loadDashboard() {
+  const payload = await api('/api/dashboard');
+  const m = payload.metrics || {};
+  $('#dash-active-clients').textContent = m.activeClients ?? 0;
+  $('#dash-reviews-due').textContent = m.reviewsDue ?? 0;
+  $('#dash-high-risk').textContent = `${m.highRisk ?? 0} high risk`;
+  $('#dash-active-staff').textContent = m.activeStaff ?? 0;
+  $('#dash-total-staff').textContent = m.totalStaff ?? 0;
+  $('#dash-compliance-due').textContent = m.complianceDue ?? 0;
+  const activity = payload.activity || [];
+  $('#dashboard-activity').innerHTML = activity.length ? activity.map(event => {
+    const when = new Date(event.created_at);
+    const label = String(event.action || '').replaceAll('.', ' ');
+    return `<div><span>${new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit'}).format(when)}</span><i class="timeline-dot"></i><p><strong>${escapeHtml(label)}</strong>${event.user_name ? ` by ${escapeHtml(event.user_name)}` : ''}.</p></div>`;
+  }).join('') : '<div><p>No recorded activity yet.</p></div>';
+}
+
+async function loadStaff() {
+  const payload = await api('/api/staff?includeInactive=true');
+  staff = Array.isArray(payload.staff) ? payload.staff : [];
+}
+function isPast(value){ return Boolean(value) && new Date(`${value}T23:59:59`) < new Date(); }
+function staffName(item){ return `${item.firstName || ''} ${item.lastName || ''}`.trim(); }
+function renderStaff() {
+  const term = ($('#staff-search')?.value || '').trim().toLowerCase();
+  const status = $('#staff-status-filter')?.value || 'all';
+  const filtered = staff.filter(item => {
+    const haystack = `${item.firstName} ${item.lastName} ${item.preferredName} ${item.jobTitle} ${item.phone} ${item.email}`.toLowerCase();
+    return (!term || haystack.includes(term)) && (status === 'all' || item.status === status);
+  });
+  $('#staff-table-body').innerHTML = filtered.map(item => `<tr><td><div class="client-person"><span class="person-avatar">${initialsFromName(staffName(item))}</span><div><strong>${escapeHtml(staffName(item))}</strong><span>${escapeHtml(item.preferredName ? `Known as ${item.preferredName}` : item.employmentType)}</span></div></div></td><td>${escapeHtml(item.jobTitle)}</td><td>${escapeHtml(item.phone || item.email || 'Not recorded')}</td><td class="${isPast(item.dbsExpiry) ? 'date-overdue' : ''}">${formatDate(item.dbsExpiry)}${isPast(item.dbsExpiry) ? ' · overdue' : ''}</td><td class="${isPast(item.trainingExpiry) ? 'date-overdue' : ''}">${formatDate(item.trainingExpiry)}${isPast(item.trainingExpiry) ? ' · overdue' : ''}</td><td><span class="badge ${item.status === 'Active' ? 'success' : 'neutral'}">${escapeHtml(item.status)}</span></td><td><button class="row-action" data-edit-staff="${escapeHtml(item.id)}">Edit</button></td></tr>`).join('');
+  $('#staff-empty').hidden = filtered.length > 0;
+  $('#staff-active-count').textContent = staff.filter(x => x.status === 'Active').length;
+  $('#staff-dbs-count').textContent = staff.filter(x => x.status === 'Active' && isPast(x.dbsExpiry)).length;
+  $('#staff-training-count').textContent = staff.filter(x => x.status === 'Active' && isPast(x.trainingExpiry)).length;
+  $$('[data-edit-staff]').forEach(button => button.addEventListener('click', () => openStaffDialog(button.dataset.editStaff)));
+}
+function openStaffDialog(id = '') {
+  staffForm.reset(); $('#staff-form-error').hidden = true; staffForm.elements.id.value = id;
+  $('#staff-dialog-title').textContent = id ? 'Edit staff' : 'Add staff';
+  const item = staff.find(x => x.id === id);
+  if (item) Object.entries(item).forEach(([key,value]) => { const field=staffForm.elements.namedItem(key); if(field) field.value=value ?? ''; });
+  staffDialog.showModal();
+}
+async function saveStaff(event) {
+  event.preventDefault(); const data=Object.fromEntries(new FormData(staffForm)); const error=$('#staff-form-error'); error.hidden=true;
+  const submit=staffForm.querySelector('[type="submit"]'); submit.disabled=true; submit.textContent='Saving…';
+  try { const id=data.id; await api(id ? `/api/staff/${encodeURIComponent(id)}` : '/api/staff',{method:id?'PUT':'POST',body:JSON.stringify(data)}); await loadStaff(); renderStaff(); await loadDashboard(); staffDialog.close(); }
+  catch(exception){ error.textContent=exception.message; error.hidden=false; }
+  finally{ submit.disabled=false; submit.textContent='Save staff member'; }
 }
 
 function formatDate(value) {
@@ -382,12 +447,22 @@ $$('.nav-item').forEach(button => button.addEventListener('click', () => {
   showPage(button.dataset.page);
 }));
 
+$$('[data-page-link]').forEach(button => button.addEventListener('click', () => $(`[data-page="${button.dataset.pageLink}"]`).click()));
 $('[data-return-dashboard]').addEventListener('click', () => $('[data-page="dashboard"]').click());
 $('#add-client').addEventListener('click', () => openClientDialog());
-$('#quick-add').addEventListener('click', () => {
-  $('[data-page="clients"]').click();
-  openClientDialog();
-});
+$('#add-staff').addEventListener('click', () => openStaffDialog());
+$('#close-staff-dialog').addEventListener('click', () => staffDialog.close());
+$('#cancel-staff').addEventListener('click', () => staffDialog.close());
+$('#staff-search').addEventListener('input', renderStaff);
+$('#staff-status-filter').addEventListener('change', renderStaff);
+staffForm.addEventListener('submit', saveStaff);
+$('#quick-add').addEventListener('click', () => quickAddDialog.showModal());
+$('#close-quick-add').addEventListener('click', () => quickAddDialog.close());
+$$('[data-quick]').forEach(button => button.addEventListener('click', () => {
+  quickAddDialog.close();
+  if (button.dataset.quick === 'client') { $('[data-page="clients"]').click(); openClientDialog(); }
+  if (button.dataset.quick === 'staff') { $('[data-page="staff"]').click(); openStaffDialog(); }
+}));
 $('#close-client-dialog').addEventListener('click', () => clientDialog.close());
 $('#cancel-client').addEventListener('click', () => clientDialog.close());
 clientSearch.addEventListener('input', renderClients);
