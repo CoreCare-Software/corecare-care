@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.2.2 — Persistent Platform Views */
-const VERSION = "1.2.2";
+/** CoreCare Enterprise 1.2.3 — Platform Operations Centre */
+const VERSION = "1.2.3";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.2.2 — Persistent Platform Views" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.2.3 — Platform Operations Centre" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -621,12 +621,53 @@ async function platformNotifications(db,session){
 }
 async function platformSystemHealth(db,session){
   if(!requirePlatform(session)) return forbidden();
-  const [sessions,errors,auditCount]=await Promise.all([
+  const [sessions,recentUsers,errors,auditCount,supportActive,support24h,errorRows,supportRows,jobs,incidents,hourlyAudit,hourlyErrors]=await Promise.all([
     db.prepare("SELECT COUNT(*) total FROM sessions WHERE expires_at>CURRENT_TIMESTAMP").first(),
+    db.prepare("SELECT COUNT(DISTINCT user_id) total FROM sessions WHERE last_seen_at>=datetime('now','-30 minutes') AND expires_at>CURRENT_TIMESTAMP").first(),
     db.prepare("SELECT COUNT(*) total FROM api_error_log WHERE created_at>=datetime('now','-24 hours')").first(),
-    db.prepare("SELECT COUNT(*) total FROM audit_log WHERE created_at>=datetime('now','-24 hours')").first()
+    db.prepare("SELECT COUNT(*) total FROM audit_log WHERE created_at>=datetime('now','-24 hours')").first(),
+    db.prepare("SELECT COUNT(*) total FROM support_sessions WHERE ended_at IS NULL").first(),
+    db.prepare("SELECT COUNT(*) total FROM support_sessions WHERE started_at>=datetime('now','-24 hours')").first(),
+    db.prepare(`SELECT e.id,e.route,e.method,e.error_message,e.created_at,o.name organisation_name,u.display_name user_name
+      FROM api_error_log e LEFT JOIN organisations o ON o.id=e.organisation_id LEFT JOIN users u ON u.id=e.user_id
+      ORDER BY e.created_at DESC LIMIT 12`).all(),
+    db.prepare(`SELECT s.id,s.reason,s.access_mode,s.started_at,s.ended_at,o.name organisation_name,u.display_name platform_user_name
+      FROM support_sessions s JOIN organisations o ON o.id=s.organisation_id LEFT JOIN users u ON u.id=s.platform_user_id
+      ORDER BY s.started_at DESC LIMIT 12`).all(),
+    db.prepare("SELECT * FROM platform_jobs ORDER BY CASE status WHEN 'failed' THEN 0 WHEN 'warning' THEN 1 WHEN 'healthy' THEN 2 ELSE 3 END,name").all(),
+    db.prepare("SELECT * FROM platform_incidents WHERE status<>'resolved' ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,started_at DESC LIMIT 20").all(),
+    db.prepare("SELECT strftime('%Y-%m-%d %H:00',created_at) hour,COUNT(*) total FROM audit_log WHERE created_at>=datetime('now','-24 hours') GROUP BY hour ORDER BY hour").all(),
+    db.prepare("SELECT strftime('%Y-%m-%d %H:00',created_at) hour,COUNT(*) total FROM api_error_log WHERE created_at>=datetime('now','-24 hours') GROUP BY hour ORDER BY hour").all()
   ]);
-  return json({database:'healthy',activeSessions:Number(sessions?.total||0),errors24h:Number(errors?.total||0),auditEvents24h:Number(auditCount?.total||0),workerVersion:VERSION,checkedAt:new Date().toISOString()});
+  const errorCount=Number(errors?.total||0),activeSessions=Number(sessions?.total||0),activeSupport=Number(supportActive?.total||0);
+  const jobRows=jobs.results||[],failedJobs=jobRows.filter(x=>x.status==='failed').length,warningJobs=jobRows.filter(x=>x.status==='warning').length;
+  const computedAlerts=[];
+  if(errorCount>=10) computedAlerts.push({severity:'critical',title:`${errorCount} API errors in the last 24 hours`,description:'Review recent errors and affected routes immediately.',source:'API monitoring'});
+  else if(errorCount>0) computedAlerts.push({severity:'warning',title:`${errorCount} API error${errorCount===1?'':'s'} in the last 24 hours`,description:'Review the recent error log for recurring patterns.',source:'API monitoring'});
+  if(failedJobs) computedAlerts.push({severity:'critical',title:`${failedJobs} scheduled job${failedJobs===1?' has':'s have'} failed`,description:'Review scheduled automation and the latest job result.',source:'Job monitoring'});
+  else if(warningJobs) computedAlerts.push({severity:'warning',title:`${warningJobs} scheduled job${warningJobs===1?' requires':'s require'} attention`,description:'A job completed with a warning state.',source:'Job monitoring'});
+  if(activeSupport>3) computedAlerts.push({severity:'warning',title:`${activeSupport} support sessions are currently active`,description:'Confirm all support access remains necessary and authorised.',source:'Support governance'});
+  const incidentRows=(incidents.results||[]).map(x=>({severity:x.severity,title:x.title,description:x.description,source:x.source,startedAt:x.started_at,id:x.id}));
+  const alerts=[...incidentRows,...computedAlerts];
+  const overall=alerts.some(x=>x.severity==='critical')?'Attention':alerts.some(x=>x.severity==='warning')?'Monitoring':'Healthy';
+  const byHour={}; for(let i=23;i>=0;i--){const d=new Date(Date.now()-i*3600000);d.setMinutes(0,0,0);const key=d.toISOString().slice(0,13).replace('T',' ')+':00';byHour[key]={hour:key,label:new Intl.DateTimeFormat('en-GB',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'UTC'}).format(d),audit:0,errors:0};}
+  for(const row of hourlyAudit.results||[]) if(byHour[row.hour]) byHour[row.hour].audit=Number(row.total||0);
+  for(const row of hourlyErrors.results||[]) if(byHour[row.hour]) byHour[row.hour].errors=Number(row.total||0);
+  return json({
+    overall,database:'healthy',authentication:'healthy',auditService:'healthy',workerVersion:VERSION,checkedAt:new Date().toISOString(),
+    activeSessions,recentUsers:Number(recentUsers?.total||0),errors24h:errorCount,auditEvents24h:Number(auditCount?.total||0),
+    supportSessions24h:Number(support24h?.total||0),activeSupportSessions:activeSupport,
+    jobSummary:{total:jobRows.length,healthy:jobRows.filter(x=>x.status==='healthy').length,failed:failedJobs,warning:warningJobs},
+    services:[
+      {name:'Cloudflare Worker',status:'healthy',detail:`Version ${VERSION}`},
+      {name:'D1 database',status:'healthy',detail:'Queries responding normally'},
+      {name:'Authentication',status:'healthy',detail:`${activeSessions} active sessions`},
+      {name:'Audit service',status:'healthy',detail:`${Number(auditCount?.total||0)} events in 24 hours`},
+      {name:'API monitoring',status:errorCount===0?'healthy':errorCount<10?'warning':'critical',detail:`${errorCount} errors in 24 hours`},
+      {name:'Support governance',status:activeSupport>3?'warning':'healthy',detail:`${activeSupport} active support sessions`}
+    ],
+    alerts,jobs:jobRows,recentErrors:errorRows.results||[],supportActivity:supportRows.results||[],activity:Object.values(byHour)
+  });
 }
 async function listSubscriptionPlans(db,session){if(!requirePlatform(session))return forbidden();const r=await db.prepare("SELECT * FROM subscription_plans ORDER BY monthly_price_pence,name").all();return json({plans:r.results||[]});}
 async function saveSubscriptionPlan(request,db,session){
