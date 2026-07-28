@@ -116,7 +116,7 @@ function updateIdentity() {
   document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
-const CORECARE_FALLBACK_VERSION = '1.2.0';
+const CORECARE_FALLBACK_VERSION = '1.2.1';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -130,12 +130,69 @@ async function loadApplicationVersion() {
   if ($('#dev-version')) $('#dev-version').textContent = `v${version}`;
 }
 
-function scrollPlatformSection(targetId) {
-  const target = document.getElementById(targetId);
-  if (!target) return;
-  if (target.tagName === 'DETAILS') target.open = true;
-  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+const platformViewMeta = {
+  'platform-page': { title: 'Platform administration', kicker: 'Platform owner' },
+  'revenue-centre': { title: 'Revenue centre', kicker: 'Commercial' },
+  'customer-success-centre': { title: 'Customer success', kicker: 'Commercial' },
+  'organisation-portfolio': { title: 'Organisations', kicker: 'Customers' },
+  'platform-global-search-panel': { title: 'Global search', kicker: 'Customers' },
+  'platform-operations-panel': { title: 'Platform operations', kicker: 'Governance' },
+  'platform-admin-drawer': { title: 'Security & audit', kicker: 'Governance' }
+};
+
+const platformMovableViews = new Map();
+
+function initialisePlatformViews() {
+  ['organisation-portfolio','platform-global-search-panel','platform-operations-panel'].forEach(id => {
+    const node = document.getElementById(id);
+    if (!node || platformMovableViews.has(id)) return;
+    platformMovableViews.set(id, { node, parent: node.parentNode, next: node.nextSibling });
+  });
+}
+
+function restorePlatformSummaryPanels() {
+  for (const { node, parent, next } of platformMovableViews.values()) {
+    if (next && next.parentNode === parent) parent.insertBefore(node, next);
+    else parent.appendChild(node);
+  }
+}
+
+function showPlatformView(targetId = 'platform-page', updateHistory = true) {
+  initialisePlatformViews();
+  const platformPage = document.getElementById('platform-page');
+  if (!platformPage) return;
+
+  restorePlatformSummaryPanels();
+  platformPage.querySelectorAll(':scope > .platform-dedicated-view').forEach(view => view.remove());
+
+  const commandChildren = Array.from(platformPage.children).filter(node =>
+    node.classList.contains('executive-hero') || node.classList.contains('executive-kpis') || node.classList.contains('executive-grid')
+  );
+  const standalone = ['revenue-centre','customer-success-centre','platform-admin-drawer']
+    .map(id => document.getElementById(id)).filter(Boolean);
+
+  commandChildren.forEach(node => node.hidden = targetId !== 'platform-page');
+  standalone.forEach(node => node.hidden = true);
+
+  if (targetId !== 'platform-page') {
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    const shell = document.createElement('section');
+    shell.className = 'platform-dedicated-view';
+    shell.dataset.platformView = targetId;
+    platformPage.prepend(shell);
+    shell.appendChild(target);
+    target.hidden = false;
+    if (target.tagName === 'DETAILS') target.open = true;
+  }
+
+  const meta = platformViewMeta[targetId] || platformViewMeta['platform-page'];
+  if (pageTitle) pageTitle.textContent = meta.title;
+  if ($('#page-kicker')) $('#page-kicker').textContent = meta.kicker;
   $$('[data-platform-target]').forEach(button => button.classList.toggle('active', button.dataset.platformTarget === targetId));
+  platformPage.dataset.activePlatformView = targetId;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (updateHistory) history.pushState({ platformView: targetId }, '', targetId === 'platform-page' ? '#platform' : `#${targetId}`);
 }
 
 async function showApplication(user) {
@@ -150,6 +207,7 @@ async function showApplication(user) {
     $$('.nav-item').forEach(item => item.classList.remove('active'));
     $('#platform-nav')?.classList.add('active');
     showPage('platform');
+    showPlatformView(location.hash && location.hash !== '#platform' ? location.hash.slice(1) : 'platform-page', false);
   } else {
     await Promise.all([loadClients(), loadStaff(), loadDashboard()]);
     renderClients();
@@ -1011,14 +1069,16 @@ $('#close-organisation-dialog')?.addEventListener('click',()=>organisationDialog
 organisationAdminForm?.addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/platform/organisations',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(organisationAdminForm)))});organisationDialog.close();await loadOrganisations();}catch(x){$('#organisation-admin-error').textContent=x.message;$('#organisation-admin-error').hidden=false;}});
 
 $$('[data-platform-target]').forEach(button => button.addEventListener('click', event => {
-  if (button.dataset.page === 'platform') {
-    showPage('platform');
-    setTimeout(() => scrollPlatformSection(button.dataset.platformTarget), 50);
-  } else {
-    event.preventDefault();
-    scrollPlatformSection(button.dataset.platformTarget);
-  }
+  event.preventDefault();
+  showPage('platform');
+  showPlatformView(button.dataset.platformTarget || 'platform-page');
 }));
+window.addEventListener('popstate', event => {
+  if (currentUser?.isPlatformUser && !currentUser?.supportMode) {
+    showPage('platform');
+    showPlatformView(event.state?.platformView || (location.hash && location.hash !== '#platform' ? location.hash.slice(1) : 'platform-page'), false);
+  }
+});
 
 $('#platform-org-search')?.addEventListener('input',renderPlatformOrganisations);
 $('#platform-org-status')?.addEventListener('change',renderPlatformOrganisations);
@@ -1045,7 +1105,7 @@ $('#toggle-emergency-mode')?.addEventListener('click',async()=>{const reason=$('
 const originalFillSecurityPolicy=fillSecurityPolicy;fillSecurityPolicy=function(p){originalFillSecurityPolicy(p);updateEmergencyUI(p);populateEffectiveAccessUsers();loadLoginHistory();};
 
 $('#executive-refresh')?.addEventListener('click',()=>loadPlatformWorkspace());
-$('#open-revenue-centre')?.addEventListener('click',()=>$('#revenue-centre')?.scrollIntoView({behavior:'smooth',block:'start'}));
+$('#open-revenue-centre')?.addEventListener('click',()=>showPlatformView('revenue-centre'));
 $('#revenue-refresh')?.addEventListener('click',loadRevenueCentre);
 $('#revenue-export')?.addEventListener('click',exportRevenueCsv);
 

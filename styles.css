@@ -109,3 +109,14 @@ body{background:linear-gradient(180deg,#f6faf9 0,#eef5f3 100%)}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:none;box-shadow:var(--focus)}
 @media(max-width:1100px){.platform-workspace .sidebar{width:220px}.platform-workspace .workspace{margin-left:220px}.platform-workspace main{padding:22px}.executive-hero{padding:24px}}
 @media(max-width:760px){.platform-workspace .workspace{margin-left:0}.platform-workspace main{padding:16px}.executive-hero{min-height:auto;padding:22px}.executive-health-card{max-width:none;justify-self:stretch}.platform-workspace .topbar{padding:0 16px}}
+
+
+/* CoreCare Enterprise 1.2.1 — true platform page navigation */
+.platform-dedicated-view{display:block;width:100%;min-height:calc(100vh - 150px);animation:platformViewIn .18s ease}
+.platform-dedicated-view>.panel,.platform-dedicated-view>.revenue-centre,.platform-dedicated-view>.customer-success-centre,.platform-dedicated-view>details{width:100%;margin:0}
+.platform-dedicated-view>#organisation-portfolio,.platform-dedicated-view>#platform-global-search-panel,.platform-dedicated-view>#platform-operations-panel{min-height:420px}
+.platform-dedicated-view>.executive-admin-drawer{display:block;border:0;background:transparent;box-shadow:none}
+.platform-dedicated-view>.executive-admin-drawer>summary{display:none}
+.platform-dedicated-view>.executive-admin-drawer>.platform-tools-grid{margin-top:0}
+#platform-page[data-active-platform-view]:not([data-active-platform-view="platform-page"]){display:block}
+@keyframes platformViewIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
