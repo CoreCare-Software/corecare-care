@@ -72,20 +72,20 @@
         <button class="nav-item" data-page="reports"><span>▥</span>Reports</button>
         <button class="nav-item" data-page="settings"><span>⚙</span>Settings</button>
       </nav>
-      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>Development</strong><small>CoreCare <span id="dev-version">v0.4.2</span></small></div></div>
+      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>Development</strong><small>CoreCare <span id="dev-version">v0.5.0</span></small></div></div>
     </aside>
 
     <div class="workspace">
       <header class="topbar">
         <button id="menu-button" class="icon-button" aria-label="Open navigation" aria-expanded="false">☰</button>
         <div class="page-heading"><p id="page-kicker" class="eyebrow"></p><h1 id="page-title">Good afternoon, Chris</h1></div>
-        <div class="top-actions"><button class="quick-action">+ Quick add</button><button class="notification-button" aria-label="Notifications">●<span>3</span></button></div>
+        <div class="top-actions"><button id="quick-add" class="quick-action">+ Quick add</button><button class="notification-button" aria-label="Notifications">●<span>3</span></button></div>
         <div class="user-menu"><div id="user-avatar" class="avatar">CC</div><div><strong id="user-name">CoreCare user</strong><span id="user-role">Authenticated user</span></div><button id="sign-out" class="text-button">Sign out</button></div>
       </header>
 
       <main id="main-content" tabindex="-1">
         <section id="dashboard-page" class="page active-page">
-          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release adds user administration, forced password changes, account controls and audit history. Continue using fictional information during development.</span></div><span class="badge">Sprint 4C</span></div>
+          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release introduces full cloud-based client profiles, search, status management and auditable record changes. Continue using fictional information during development.</span></div><span class="badge">Sprint 5</span></div>
           <section class="dev-status panel" aria-label="Development status">
             <div class="panel-heading"><div><p class="eyebrow">Development mode</p><h2>Platform status</h2></div><span id="organisation-name" class="badge neutral">Organisation</span></div>
             <div class="dev-status-grid">
@@ -138,35 +138,41 @@
 
         <section id="clients-page" class="page">
           <div class="module-toolbar">
-            <div>
-              <p class="eyebrow">People</p>
-              <h2>Clients</h2>
-              <p>Manage client profiles, key contacts, care status and review dates.</p>
-            </div>
+            <div><p class="eyebrow">People</p><h2>Clients</h2><p>Manage client profiles, contacts, care status and review dates.</p></div>
             <button id="add-client" class="primary-button compact">+ Add client</button>
           </div>
-
           <section class="client-stats" aria-label="Client statistics">
             <article><span>Active clients</span><strong id="client-active-count">0</strong></article>
             <article><span>Reviews due</span><strong id="client-review-count">0</strong></article>
             <article><span>High-risk alerts</span><strong id="client-risk-count">0</strong></article>
           </section>
-
           <section class="panel client-panel">
             <div class="client-controls">
-              <label class="search-field"><span>Search</span><input id="client-search" type="search" placeholder="Search by name, town or NHS number"></label>
-              <label><span>Status</span><select id="client-status-filter"><option value="all">All clients</option><option value="Active">Active</option><option value="Paused">Paused</option><option value="Archived">Archived</option></select></label>
+              <label class="search-field"><span>Search</span><input id="client-search" type="search" placeholder="Search name, town, postcode or NHS number"></label>
+              <label><span>Status</span><select id="client-status-filter"><option value="all">All current clients</option><option value="Active">Active</option><option value="Paused">Paused</option><option value="Archived">Archived</option></select></label>
             </div>
-            <div class="table-wrap">
-              <table class="client-table">
-                <thead><tr><th>Client</th><th>Location</th><th>Care package</th><th>Next review</th><th>Status</th><th></th></tr></thead>
-                <tbody id="client-table-body"></tbody>
-              </table>
-            </div>
+            <div class="table-wrap"><table class="client-table"><thead><tr><th>Client</th><th>Location</th><th>Care package</th><th>Next review</th><th>Status</th><th></th></tr></thead><tbody id="client-table-body"></tbody></table></div>
             <div id="client-empty" class="empty-state" hidden><strong>No clients found</strong><span>Change the search or add a new client.</span></div>
           </section>
         </section>
 
+        <section id="client-profile-page" class="page">
+          <div class="profile-toolbar">
+            <button id="back-to-clients" class="secondary-button">← Back to clients</button>
+            <div class="profile-actions"><button id="edit-profile-client" class="secondary-button">Edit record</button><button id="archive-profile-client" class="danger-button">Archive client</button></div>
+          </div>
+          <section class="profile-hero panel">
+            <div id="profile-avatar" class="profile-avatar">CC</div>
+            <div class="profile-title"><p class="eyebrow">Client record</p><h2 id="profile-name">Client</h2><p id="profile-subtitle"></p><div id="profile-badges" class="profile-badges"></div></div>
+            <div class="profile-summary"><div><span>Next review</span><strong id="profile-review">—</strong></div><div><span>Risk level</span><strong id="profile-risk">—</strong></div></div>
+          </section>
+          <section class="profile-grid">
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Personal</p><h2>Personal details</h2></div></div><dl id="profile-personal" class="detail-list"></dl></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Contact</p><h2>Address and contact</h2></div></div><dl id="profile-contact" class="detail-list"></dl></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Key people</p><h2>Contacts and GP</h2></div></div><dl id="profile-people" class="detail-list"></dl></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Care overview</p><h2>Needs and important information</h2></div></div><div id="profile-care" class="care-notes"></div></article>
+          </section>
+        </section>
 
         <section id="settings-page" class="page">
           <div class="module-toolbar"><div><p class="eyebrow">Administration</p><h2>Organisation settings</h2><p>Manage the organisation, user accounts, roles and audit history.</p></div><button id="add-user" class="primary-button compact">+ Add user</button></div>
@@ -185,26 +191,36 @@
     </div>
   </div>
 
-  <dialog id="client-dialog" class="client-dialog">
+  <dialog id="client-dialog" class="client-dialog wide-dialog">
     <form id="client-form" method="dialog">
       <div class="dialog-heading"><div><p class="eyebrow">Client record</p><h2 id="client-dialog-title">Add client</h2></div><button id="close-client-dialog" class="icon-button always" type="button" aria-label="Close">×</button></div>
       <input id="client-id" name="id" type="hidden">
-      <div class="form-grid">
-        <label><span>First name</span><input name="firstName" required></label>
-        <label><span>Last name</span><input name="lastName" required></label>
-        <label><span>Date of birth</span><input name="dateOfBirth" type="date" required></label>
-        <label><span>NHS number</span><input name="nhsNumber" placeholder="000 000 0000"></label>
-        <label><span>Town</span><input name="town" required></label>
-        <label><span>Care package</span><input name="carePackage" placeholder="e.g. Personal care"></label>
-        <label><span>Next review</span><input name="nextReview" type="date" required></label>
-        <label><span>Status</span><select name="status"><option>Active</option><option>Paused</option><option>Archived</option></select></label>
+      <div class="form-section"><h3>Personal details</h3><div class="form-grid">
+        <label><span>First name *</span><input name="firstName" required></label><label><span>Last name *</span><input name="lastName" required></label>
+        <label><span>Preferred name</span><input name="preferredName"></label><label><span>Date of birth *</span><input name="dateOfBirth" type="date" required></label>
+        <label><span>NHS number</span><input name="nhsNumber" placeholder="000 000 0000"></label><label><span>Phone</span><input name="phone" type="tel"></label>
+        <label class="wide"><span>Email</span><input name="email" type="email"></label>
+      </div></div>
+      <div class="form-section"><h3>Address and care status</h3><div class="form-grid">
+        <label class="wide"><span>Address line 1</span><input name="addressLine1"></label><label class="wide"><span>Address line 2</span><input name="addressLine2"></label>
+        <label><span>Town *</span><input name="town" required></label><label><span>Postcode</span><input name="postcode"></label>
+        <label class="wide"><span>Care package</span><input name="carePackage" placeholder="e.g. Personal care · 4 visits daily"></label>
+        <label><span>Next review *</span><input name="nextReview" type="date" required></label><label><span>Status</span><select name="status"><option>Active</option><option>Paused</option><option>Archived</option></select></label>
         <label class="wide"><span>Risk level</span><select name="risk"><option>Standard</option><option>Medium</option><option>High</option></select></label>
-      </div>
+      </div></div>
+      <div class="form-section"><h3>Key people</h3><div class="form-grid">
+        <label><span>GP name</span><input name="gpName"></label><label><span>GP practice</span><input name="gpPractice"></label><label class="wide"><span>GP phone</span><input name="gpPhone" type="tel"></label>
+        <label><span>Next of kin</span><input name="nextOfKinName"></label><label><span>Relationship</span><input name="nextOfKinRelationship"></label><label class="wide"><span>Next of kin phone</span><input name="nextOfKinPhone" type="tel"></label>
+        <label><span>Emergency contact</span><input name="emergencyContactName"></label><label><span>Emergency contact phone</span><input name="emergencyContactPhone" type="tel"></label>
+      </div></div>
+      <div class="form-section"><h3>Care information</h3><div class="form-grid">
+        <label class="wide"><span>Allergies</span><textarea name="allergies" rows="2"></textarea></label><label class="wide"><span>Communication needs</span><textarea name="communicationNeeds" rows="2"></textarea></label>
+        <label class="wide"><span>Capacity notes</span><textarea name="capacityNotes" rows="2"></textarea></label><label class="wide"><span>Important notes</span><textarea name="importantNotes" rows="3"></textarea></label>
+      </div></div>
       <p id="client-form-error" class="form-error" hidden></p>
       <div class="dialog-actions"><button id="cancel-client" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save client</button></div>
     </form>
   </dialog>
-
 
   <dialog id="password-dialog" class="client-dialog"><form id="password-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Account security</p><h2>Change password</h2></div></div><div class="form-grid"><label class="wide"><span>Current password</span><input name="currentPassword" type="password" autocomplete="current-password" required></label><label><span>New password</span><input name="newPassword" type="password" autocomplete="new-password" required></label><label><span>Confirm password</span><input name="confirmPassword" type="password" autocomplete="new-password" required></label></div><p class="password-help">At least 12 characters, including upper-case, lower-case and a number.</p><p id="password-error" class="form-error" hidden></p><div class="dialog-actions"><button id="cancel-password" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Update password</button></div></form></dialog>
   <dialog id="user-dialog" class="client-dialog"><form id="user-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">User account</p><h2 id="user-dialog-title">Add user</h2></div><button id="close-user-dialog" class="icon-button always" type="button">×</button></div><input name="id" type="hidden"><div class="form-grid"><label><span>Display name</span><input name="displayName" required></label><label><span>Email address</span><input name="email" type="email" required></label><label><span>Role</span><select name="role"><option value="owner">Owner</option><option value="manager">Manager</option><option value="carer">Carer</option><option value="auditor">Read-only auditor</option></select></label><label><span>Status</span><select name="status"><option value="active">Active</option><option value="disabled">Disabled</option></select></label><label id="temporary-password-label" class="wide"><span>Temporary password</span><input name="temporaryPassword" type="password"><small>At least 12 characters. The user must change it after signing in.</small></label></div><p id="user-form-error" class="form-error" hidden></p><div class="dialog-actions"><button id="cancel-user" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save user</button></div></form></dialog>
