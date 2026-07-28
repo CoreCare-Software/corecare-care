@@ -1,15 +1,25 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "forget-me-not",
-  "main": "src/index.js",
-  "compatibility_date": "2026-07-28",
-  "assets": {
-    "directory": "./public",
-    "binding": "ASSETS",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
-  },
-  "observability": {
-    "enabled": true
-  }
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "forget-me-not",
+	"main": "src/index.js",
+	"compatibility_date": "2026-07-28",
+	"assets": {
+		"directory": "./public",
+		"binding": "ASSETS",
+		"not_found_handling": "single-page-application",
+		"run_worker_first": [
+			"/api/*"
+		]
+	},
+	"observability": {
+		"enabled": true
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "corecare",
+			"database_id": "9d9bfe9a-ee79-48e7-817a-cadff90ccfcf",
+			"remote": true
+		}
+	]
 }
