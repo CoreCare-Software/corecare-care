@@ -815,14 +815,35 @@ async function exitSupportMode(db,session){
 async function getPlatformOrganisation(db,session,id){
   if(!requirePlatform(session)) return forbidden();
   const org=await db.prepare(`SELECT o.*,
+    sp.name AS plan_name,sp.monthly_price_pence,sp.max_users,sp.max_clients,sp.max_storage_mb,
     (SELECT COUNT(*) FROM branches b WHERE b.organisation_id=o.id) branch_count,
     (SELECT COUNT(*) FROM users u WHERE u.organisation_id=o.id) user_count,
+    (SELECT COUNT(*) FROM users u WHERE u.organisation_id=o.id AND u.status='active') active_user_count,
     (SELECT COUNT(*) FROM clients c WHERE c.organisation_id=o.id AND c.status<>'Archived') client_count,
-    (SELECT COUNT(*) FROM staff st WHERE st.organisation_id=o.id AND st.status='Active') staff_count
-    FROM organisations o WHERE o.id=?`).bind(id).first();
+    (SELECT COUNT(*) FROM staff st WHERE st.organisation_id=o.id AND st.status='Active') staff_count,
+    (SELECT MAX(al.created_at) FROM audit_log al WHERE al.organisation_id=o.id) last_activity_at,
+    (SELECT COUNT(*) FROM care_plans cp WHERE cp.organisation_id=o.id AND cp.status='Active') active_care_plans,
+    (SELECT COUNT(*) FROM care_plans cp WHERE cp.organisation_id=o.id AND cp.status='Active' AND cp.review_date<date('now')) overdue_care_plans,
+    (SELECT COUNT(*) FROM risk_assessments ra WHERE ra.organisation_id=o.id AND lower(COALESCE(ra.risk_level,'')) IN ('high','critical') AND lower(COALESCE(ra.status,'active')) NOT IN ('closed','archived')) high_risks,
+    (SELECT COUNT(*) FROM client_documents cd WHERE cd.organisation_id=o.id) document_count
+    FROM organisations o LEFT JOIN subscription_plans sp ON sp.id=o.subscription_plan WHERE o.id=?`).bind(id).first();
   if(!org)return json({error:{code:"NOT_FOUND",message:"Organisation not found."}},404);
-  const support=await db.prepare(`SELECT ss.*,u.display_name FROM support_sessions ss LEFT JOIN users u ON u.id=ss.platform_user_id WHERE ss.organisation_id=? ORDER BY ss.started_at DESC LIMIT 20`).bind(id).all();
-  return json({organisation:normaliseOrganisation(org),supportHistory:support.results||[]});
+  const [support,branches,users,auditRows,notes,security,logins,revenue]=await Promise.all([
+    db.prepare(`SELECT ss.*,u.display_name FROM support_sessions ss LEFT JOIN users u ON u.id=ss.platform_user_id WHERE ss.organisation_id=? ORDER BY ss.started_at DESC LIMIT 20`).bind(id).all(),
+    db.prepare(`SELECT b.*,(SELECT COUNT(*) FROM users u WHERE u.organisation_id=b.organisation_id AND u.home_branch_id=b.id) user_count,(SELECT COUNT(*) FROM clients c WHERE c.organisation_id=b.organisation_id AND c.branch_id=b.id AND c.status<>'Archived') client_count FROM branches b WHERE b.organisation_id=? ORDER BY b.status,b.name`).bind(id).all(),
+    db.prepare(`SELECT u.id,u.display_name,u.email,u.access_level,u.status,u.last_login_at,b.name branch_name FROM users u LEFT JOIN branches b ON b.id=u.home_branch_id WHERE u.organisation_id=? ORDER BY CASE WHEN u.status='active' THEN 0 ELSE 1 END,u.display_name LIMIT 100`).bind(id).all(),
+    db.prepare(`SELECT al.*,u.display_name user_name FROM audit_log al LEFT JOIN users u ON u.id=al.user_id WHERE al.organisation_id=? ORDER BY al.created_at DESC LIMIT 40`).bind(id).all(),
+    db.prepare(`SELECT csn.*,u.display_name author_name FROM customer_success_notes csn LEFT JOIN users u ON u.id=csn.created_by WHERE csn.organisation_id=? ORDER BY csn.created_at DESC LIMIT 20`).bind(id).all(),
+    db.prepare(`SELECT * FROM organisation_security_policies WHERE organisation_id=?`).bind(id).first(),
+    db.prepare(`SELECT lh.*,u.display_name FROM login_history lh LEFT JOIN users u ON u.id=lh.user_id WHERE lh.organisation_id=? ORDER BY lh.created_at DESC LIMIT 20`).bind(id).all(),
+    db.prepare(`SELECT * FROM revenue_events WHERE organisation_id=? ORDER BY occurred_at DESC LIMIT 20`).bind(id).all()
+  ]);
+  const activeUsers30=Number((await db.prepare(`SELECT COUNT(DISTINCT user_id) total FROM audit_log WHERE organisation_id=? AND created_at>=datetime('now','-30 days')`).bind(id).first())?.total||0);
+  const health=calculateOrganisationHealth({...org,active_users_30d:activeUsers30});
+  return json({
+    organisation:{...normaliseOrganisation(org),health_score:health.score,health_band:health.band,health_reasons:health.reasons,active_users_30d:activeUsers30},
+    supportHistory:support.results||[],branches:branches.results||[],users:users.results||[],activity:auditRows.results||[],successNotes:notes.results||[],securityPolicy:security||null,loginHistory:logins.results||[],revenueEvents:revenue.results||[]
+  });
 }
 function parseJson(value,fallback){try{return JSON.parse(value||'')}catch{return fallback}}
 function normaliseOrganisation(org){return {...org,featureFlags:parseJson(org.feature_flags_json,{}),terminology:parseJson(org.terminology_json,{}),dashboardWidgets:parseJson(org.dashboard_widgets_json,["metrics","attention","activity","compliance"]),sidebarOrder:parseJson(org.sidebar_order_json,[])}}
