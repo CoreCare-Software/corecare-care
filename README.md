@@ -1,36 +1,52 @@
 # Project Forget Me Not
 
-Sprint 1 is the first browser-based demonstration of the Forget Me Not care management platform.
+Sprint 1 is the permanent Cloudflare foundation for the Forget Me Not care-management platform.
 
-## What this version includes
+## What is included
 
-- Demonstration sign-in screen
-- Responsive operational dashboard
-- Permanent application navigation
-- Fictional clients, staff, visits and compliance figures
-- Placeholder screens for the planned modules
-- Cloudflare Pages security headers
-- No dependencies or build tools
+- Cloudflare Worker entry point
+- Workers Static Assets configuration
+- Responsive demonstration login and dashboard
+- `/api/health` health endpoint
+- `/api/version` version endpoint
+- Git-connected automatic deployment support
+
+## Cloudflare build settings
+
+When importing this GitHub repository into Cloudflare Workers Builds, use:
+
+- **Project name:** `forget-me-not`
+- **Production branch:** `main`
+- **Build command:** leave blank
+- **Deploy command:** `npx wrangler deploy`
+
+Cloudflare installs the Wrangler version listed in `package.json` before running the deploy command.
 
 ## Demonstration login
 
 - Email: `admin@demo.fmn`
 - Password: `ChangeMe!2026`
 
-This is a visual demonstration only. The login runs in the browser and is not suitable for real users or real care data.
+This login is only a browser demonstration. It is not production authentication and no real personal or care data must be entered.
 
-## Cloudflare Pages settings
+## Test after deployment
 
-When connecting this GitHub repository to Cloudflare Pages, use:
+Open the application URL supplied by Cloudflare, then also open:
 
-- Production branch: `main`
-- Framework preset: `None`
-- Build command: `exit 0`
-- Build output directory: `.`
-- Root directory: leave blank
+- `/api/health`
+- `/api/version`
 
-No environment variables are required.
+Both API addresses should display JSON.
 
-## Important
+## Repository structure
 
-Do not enter real client, staff, medication or health information into this Sprint 1 demonstration.
+```text
+public/          Browser application assets
+src/index.js     Cloudflare Worker and API routes
+package.json     Project metadata and Wrangler dependency
+wrangler.jsonc   Cloudflare deployment configuration
+```
+
+## Next sprint
+
+Sprint 2 will add the first real server-side data foundation, including D1 setup, migrations, organisations, users and authenticated sessions.
