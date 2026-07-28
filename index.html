@@ -56,23 +56,23 @@
       <nav aria-label="Primary navigation">
         <p id="platform-nav-section" class="nav-section" hidden>Platform</p>
         <button id="platform-nav" class="nav-item" data-page="platform" hidden><span>◆</span>Platform administration</button>
-        <p class="nav-section">Overview</p>
-        <button class="nav-item active" data-page="dashboard"><span>⌂</span>Organisation dashboard</button>
-        <p class="nav-section">People</p>
-        <button class="nav-item" data-page="clients"><span>◉</span>Clients</button>
-        <button class="nav-item" data-page="staff"><span>◎</span>Staff</button>
-        <button class="nav-item" data-page="family"><span>◇</span>Family portal</button>
-        <p class="nav-section">Care delivery</p>
-        <button class="nav-item" data-page="care"><span>▤</span>Care plans</button>
-        <button class="nav-item" data-page="medication"><span>✚</span>Medication</button>
-        <button class="nav-item" data-page="visits"><span>◷</span>Visits</button>
-        <p class="nav-section">Operations</p>
-        <button class="nav-item" data-page="rota"><span>▦</span>Rota</button>
-        <button class="nav-item" data-page="tasks"><span>✓</span>Tasks</button>
-        <button class="nav-item" data-page="incidents"><span>!</span>Incidents</button>
-        <button class="nav-item" data-page="finance"><span>£</span>Finance</button>
-        <button class="nav-item" data-page="reports"><span>▥</span>Reports</button>
-        <button class="nav-item" data-page="settings"><span>⚙</span>Settings</button>
+        <p class="nav-section organisation-workspace-nav">Overview</p>
+        <button class="nav-item active organisation-workspace-nav" data-page="dashboard"><span>⌂</span>Organisation dashboard</button>
+        <p class="nav-section organisation-workspace-nav">People</p>
+        <button class="nav-item organisation-workspace-nav" data-page="clients"><span>◉</span>Clients</button>
+        <button class="nav-item organisation-workspace-nav" data-page="staff"><span>◎</span>Staff</button>
+        <button class="nav-item organisation-workspace-nav" data-page="family"><span>◇</span>Family portal</button>
+        <p class="nav-section organisation-workspace-nav">Care delivery</p>
+        <button class="nav-item organisation-workspace-nav" data-page="care"><span>▤</span>Care plans</button>
+        <button class="nav-item organisation-workspace-nav" data-page="medication"><span>✚</span>Medication</button>
+        <button class="nav-item organisation-workspace-nav" data-page="visits"><span>◷</span>Visits</button>
+        <p class="nav-section organisation-workspace-nav">Operations</p>
+        <button class="nav-item organisation-workspace-nav" data-page="rota"><span>▦</span>Rota</button>
+        <button class="nav-item organisation-workspace-nav" data-page="tasks"><span>✓</span>Tasks</button>
+        <button class="nav-item organisation-workspace-nav" data-page="incidents"><span>!</span>Incidents</button>
+        <button class="nav-item organisation-workspace-nav" data-page="finance"><span>£</span>Finance</button>
+        <button class="nav-item organisation-workspace-nav" data-page="reports"><span>▥</span>Reports</button>
+        <button class="nav-item organisation-workspace-nav" data-page="settings"><span>⚙</span>Settings</button>
       </nav>
       <div class="sidebar-footer"><span class="status-dot"></span><div><strong>Development</strong><small>CoreCare <span id="dev-version">v0.5.0</span></small></div></div>
     </aside>
@@ -81,7 +81,7 @@
       <header class="topbar">
         <button id="menu-button" class="icon-button" aria-label="Open navigation" aria-expanded="false">☰</button>
         <div class="page-heading"><p id="page-kicker" class="eyebrow"></p><h1 id="page-title">Good afternoon, Chris</h1></div>
-        <div class="top-actions"><button id="quick-add" class="quick-action">+ Quick add</button><button class="notification-button" aria-label="Notifications">●<span>3</span></button></div>
+        <div class="top-actions"><button id="quick-add" class="quick-action organisation-workspace-action">+ Quick add</button><button class="notification-button" aria-label="Notifications">●<span>3</span></button></div>
         <div class="user-menu"><div id="user-avatar" class="avatar">CC</div><div><strong id="user-name">CoreCare user</strong><span id="user-role">Authenticated user</span></div><button id="sign-out" class="text-button">Sign out</button></div>
       </header>
 
@@ -90,7 +90,7 @@
         <section id="platform-page" class="page">
           <div class="platform-hero">
             <div><p class="eyebrow">CoreCare platform owner</p><h2>Platform administration</h2><p>View every organisation, monitor platform-wide activity and enter an organisation securely when support is needed.</p></div>
-            <div class="platform-context"><span>Current organisation view</span><strong id="platform-current-org">Organisation</strong><button id="return-platform" class="secondary-button">Stay in platform view</button></div>
+            <div class="platform-context"><span>Current workspace</span><strong>CoreCare Platform</strong><small>Organisation care records are hidden until you enter Support Mode.</small></div>
           </div>
           <section class="metrics platform-metrics" aria-label="Platform totals">
             <article class="metric-card"><div class="metric-icon">◆</div><div><span>Organisations</span><strong id="platform-org-count">0</strong><small><span id="platform-active-orgs">0</span> active</small></div><em><span id="platform-suspended-orgs">0</span> suspended</em></article>
@@ -110,7 +110,7 @@
         </section>
 
         <section id="dashboard-page" class="page active-page">
-          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release adds a complete care-plan overview alongside client care plans, risks, review tracking and document records. Continue using fictional information during development.</span></div><span class="badge">Sprint 8.2</span></div>
+          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release adds a complete care-plan overview alongside client care plans, risks, review tracking and document records. Continue using fictional information during development.</span></div><span class="badge">Sprint 8.3</span></div>
           <section class="dev-status panel" aria-label="Development status">
             <div class="panel-heading"><div><p class="eyebrow">Development mode</p><h2>Platform status</h2></div><span id="organisation-name" class="badge neutral">Organisation</span></div>
             <div class="dev-status-grid">

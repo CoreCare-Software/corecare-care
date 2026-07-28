@@ -93,11 +93,14 @@ function updateIdentity() {
   $('#user-avatar').textContent = initialsFromName(name);
   $('#organisation-name').textContent = `${currentUser?.organisationName || 'Organisation'}${currentUser?.branchName ? ' · '+currentUser.branchName : ''}`;
   const platformUser = Boolean(currentUser?.isPlatformUser);
-  $('#platform-nav').hidden = !platformUser;
-  $('#platform-nav-section').hidden = !platformUser;
-  if ($('#platform-current-org')) $('#platform-current-org').textContent = currentUser?.organisationName || 'Organisation';
+  const platformWorkspace = platformUser && !currentUser?.supportMode;
+  $('#platform-nav').hidden = !platformUser || currentUser?.supportMode;
+  $('#platform-nav-section').hidden = !platformUser || currentUser?.supportMode;
+  $$('.organisation-workspace-nav').forEach(item => item.hidden = platformWorkspace);
+  $$('.organisation-workspace-action').forEach(item => item.hidden = platformWorkspace);
   const supportBanner=$('#support-mode-banner');
   if(supportBanner){supportBanner.hidden=!(platformUser&&currentUser?.supportMode);$('#support-mode-org').textContent=currentUser?.organisationName||'organisation';}
+  document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
 async function showApplication(user) {
@@ -106,10 +109,18 @@ async function showApplication(user) {
   appView.hidden = false;
   setDate();
   updateIdentity();
-  await Promise.all([loadClients(), loadStaff(), loadDashboard()]);
-  renderClients();
-  renderStaff();
-  await loadDevelopmentStatus();
+  const platformWorkspace = currentUser?.isPlatformUser && !currentUser?.supportMode;
+  if (platformWorkspace) {
+    $$('.nav-item').forEach(item => item.classList.remove('active'));
+    $('#platform-nav')?.classList.add('active');
+    showPage('platform');
+  } else {
+    await Promise.all([loadClients(), loadStaff(), loadDashboard()]);
+    renderClients();
+    renderStaff();
+    await loadDevelopmentStatus();
+    showPage('dashboard');
+  }
   $('#main-content').focus();
   if (currentUser?.mustChangePassword) setTimeout(() => openPasswordDialog(true), 100);
 }
@@ -819,7 +830,6 @@ organisationAdminForm?.addEventListener('submit',async e=>{e.preventDefault();tr
 
 $('#platform-org-search')?.addEventListener('input',renderPlatformOrganisations);
 $('#platform-org-status')?.addEventListener('change',renderPlatformOrganisations);
-$('#return-platform')?.addEventListener('click',()=>showPage('platform'));
 $('#platform-add-organisation')?.addEventListener('click',()=>$('#add-organisation')?.click());
 
 restoreSession();
