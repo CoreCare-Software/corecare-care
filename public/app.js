@@ -23,6 +23,7 @@ const userForm = $('#user-form');
 const staffDialog = $('#staff-dialog');
 const staffForm = $('#staff-form');
 const quickAddDialog = $('#quick-add-dialog');
+const careClientPickerDialog = $('#care-client-picker-dialog');
 let staff = [];
 let carePlans = [];
 let allCarePlans = [];
@@ -235,6 +236,44 @@ function renderAllCarePlans() {
     await openClientProfile(button.dataset.openCareClient);
     showClientTab('care-plans');
   }));
+}
+
+function renderCareClientPicker() {
+  const term = ($('#care-client-picker-search')?.value || '').trim().toLowerCase();
+  const activeClients = clients.filter(client => client.status === 'Active');
+  const visible = activeClients.filter(client => {
+    const haystack = `${client.firstName} ${client.lastName} ${client.preferredName || ''} ${client.nhsNumber || ''} ${client.dateOfBirth || ''} ${formatDate(client.dateOfBirth)}`.toLowerCase();
+    return !term || haystack.includes(term);
+  });
+  const list = $('#care-client-picker-list');
+  const empty = $('#care-client-picker-empty');
+  empty.hidden = visible.length > 0;
+  list.innerHTML = visible.map(client => `<button type="button" class="client-picker-row" data-select-care-client="${escapeHtml(client.id)}">
+    <span class="person-avatar">${initialsFromName(`${client.firstName} ${client.lastName}`)}</span>
+    <span class="client-picker-details"><strong>${escapeHtml(clientDisplayName(client))}</strong><small>DOB ${formatDate(client.dateOfBirth)} · NHS ${escapeHtml(client.nhsNumber || 'Not recorded')}</small></span>
+    <span class="client-picker-action">Select</span>
+  </button>`).join('');
+  $$('[data-select-care-client]').forEach(button => button.addEventListener('click', async () => {
+    button.disabled = true;
+    button.querySelector('.client-picker-action').textContent = 'Opening…';
+    try {
+      careClientPickerDialog.close();
+      await openClientProfile(button.dataset.selectCareClient);
+      showClientTab('care-plans');
+      openCarePlanDialog();
+    } catch (error) {
+      showToastError(error);
+    } finally {
+      button.disabled = false;
+    }
+  }));
+}
+
+function openCareClientPicker() {
+  $('#care-client-picker-search').value = '';
+  renderCareClientPicker();
+  careClientPickerDialog.showModal();
+  setTimeout(() => $('#care-client-picker-search').focus(), 50);
 }
 
 async function loadClients() {
@@ -559,10 +598,10 @@ clientStatusFilter.addEventListener('change', renderClients);
 clientForm.addEventListener('submit', saveClient);
 $('#care-search').addEventListener('input', renderAllCarePlans);
 $('#care-status-filter').addEventListener('change', renderAllCarePlans);
-$('#care-open-clients').addEventListener('click', () => {
-  $('[data-page="clients"]').click();
-  showToastError(new Error('Open a client record, then choose the Care plans tab to create a plan.'));
-});
+$('#care-open-clients').addEventListener('click', openCareClientPicker);
+$('#close-care-client-picker').addEventListener('click', () => careClientPickerDialog.close());
+$('#cancel-care-client-picker').addEventListener('click', () => careClientPickerDialog.close());
+$('#care-client-picker-search').addEventListener('input', renderCareClientPicker);
 $('#back-to-clients').addEventListener('click', () => $('[data-page="clients"]').click());
 $('#edit-profile-client').addEventListener('click', () => openClientDialog(selectedClientId));
 $('#archive-profile-client').addEventListener('click', archiveSelectedClient);

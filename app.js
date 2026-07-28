@@ -23,14 +23,15 @@ const userForm = $('#user-form');
 const staffDialog = $('#staff-dialog');
 const staffForm = $('#staff-form');
 const quickAddDialog = $('#quick-add-dialog');
+const careClientPickerDialog = $('#care-client-picker-dialog');
 let staff = [];
 let carePlans = [];
+let allCarePlans = [];
 let clientRisks = [];
 let clientDocuments = [];
 
 const labels = {
   family: ['Family portal', 'Secure family access, updates and messaging will be introduced in a later milestone.'],
-  care: ['Care plans', 'Person-centred care plans, risks, goals, outcomes and reviews will be managed here.'],
   medication: ['Medication', 'Medication profiles, electronic MAR and administration records will be built here.'],
   visits: ['Visits', 'Live visits, daily notes, outcomes and evidence of care will be managed here.'],
   rota: ['Rota', 'Scheduling, recurring calls, assignments, travel and availability will be managed here.'],
@@ -152,6 +153,13 @@ function showPage(page) {
     loadStaff().then(renderStaff).catch(showToastError);
     return;
   }
+  if (page === 'care') {
+    activatePage('#care-page');
+    pageKicker.textContent = 'Care delivery';
+    pageTitle.textContent = 'Care plans';
+    loadAllCarePlans().catch(showToastError);
+    return;
+  }
   if (page === 'settings') {
     activatePage('#settings-page');
     pageKicker.textContent = 'Administration';
@@ -179,6 +187,93 @@ async function loadDevelopmentStatus() {
   } catch {
     $('#dev-db').textContent = 'Unavailable';
   }
+}
+
+
+async function loadAllCarePlans() {
+  const payload = await api('/api/care-plans');
+  allCarePlans = payload.carePlans || [];
+  renderAllCarePlans();
+}
+
+function carePlanDueState(date) {
+  if (!date) return 'none';
+  const today = new Date(); today.setHours(0,0,0,0);
+  const review = new Date(`${date}T00:00:00`);
+  const inThirty = new Date(today); inThirty.setDate(inThirty.getDate()+30);
+  if (review < today) return 'overdue';
+  if (review <= inThirty) return 'due';
+  return 'current';
+}
+
+function renderAllCarePlans() {
+  const query = ($('#care-search')?.value || '').trim().toLowerCase();
+  const status = $('#care-status-filter')?.value || 'all';
+  const visible = allCarePlans.filter(plan => (status === 'all' || plan.status === status) && `${plan.clientName} ${plan.title} ${plan.authorName}`.toLowerCase().includes(query));
+  const active = allCarePlans.filter(plan => plan.status === 'Active');
+  $('#care-active-count').textContent = active.length;
+  $('#care-due-count').textContent = active.filter(plan => carePlanDueState(plan.reviewDate) === 'due').length;
+  $('#care-overdue-count').textContent = active.filter(plan => carePlanDueState(plan.reviewDate) === 'overdue').length;
+  const list = $('#care-overview-list');
+  const empty = $('#care-overview-empty');
+  empty.hidden = visible.length > 0;
+  list.innerHTML = visible.map(plan => {
+    const due = carePlanDueState(plan.reviewDate);
+    const dueLabel = due === 'overdue' ? 'Overdue' : due === 'due' ? 'Due soon' : 'Current';
+    return `<article class="care-overview-row">
+      <button class="care-client-link" data-open-care-client="${escapeHtml(plan.clientId)}">
+        <span class="person-avatar">${escapeHtml(initialsFromName(plan.clientName))}</span>
+        <span><strong>${escapeHtml(plan.clientName)}</strong><small>${escapeHtml(plan.title)}</small></span>
+      </button>
+      <span><small>Status</small><strong>${escapeHtml(plan.status)}</strong></span>
+      <span><small>Version</small><strong>${escapeHtml(plan.version)}</strong></span>
+      <span><small>Review</small><strong class="${due === 'overdue' ? 'date-overdue' : ''}">${formatDate(plan.reviewDate)}</strong></span>
+      <span class="badge ${due === 'overdue' ? 'danger' : due === 'due' ? 'active' : 'success'}">${dueLabel}</span>
+      <button class="row-action" data-open-care-client="${escapeHtml(plan.clientId)}">Open</button>
+    </article>`;
+  }).join('');
+  $$('[data-open-care-client]').forEach(button => button.addEventListener('click', async () => {
+    await openClientProfile(button.dataset.openCareClient);
+    showClientTab('care-plans');
+  }));
+}
+
+function renderCareClientPicker() {
+  const term = ($('#care-client-picker-search')?.value || '').trim().toLowerCase();
+  const activeClients = clients.filter(client => client.status === 'Active');
+  const visible = activeClients.filter(client => {
+    const haystack = `${client.firstName} ${client.lastName} ${client.preferredName || ''} ${client.nhsNumber || ''} ${client.dateOfBirth || ''} ${formatDate(client.dateOfBirth)}`.toLowerCase();
+    return !term || haystack.includes(term);
+  });
+  const list = $('#care-client-picker-list');
+  const empty = $('#care-client-picker-empty');
+  empty.hidden = visible.length > 0;
+  list.innerHTML = visible.map(client => `<button type="button" class="client-picker-row" data-select-care-client="${escapeHtml(client.id)}">
+    <span class="person-avatar">${initialsFromName(`${client.firstName} ${client.lastName}`)}</span>
+    <span class="client-picker-details"><strong>${escapeHtml(clientDisplayName(client))}</strong><small>DOB ${formatDate(client.dateOfBirth)} · NHS ${escapeHtml(client.nhsNumber || 'Not recorded')}</small></span>
+    <span class="client-picker-action">Select</span>
+  </button>`).join('');
+  $$('[data-select-care-client]').forEach(button => button.addEventListener('click', async () => {
+    button.disabled = true;
+    button.querySelector('.client-picker-action').textContent = 'Opening…';
+    try {
+      careClientPickerDialog.close();
+      await openClientProfile(button.dataset.selectCareClient);
+      showClientTab('care-plans');
+      openCarePlanDialog();
+    } catch (error) {
+      showToastError(error);
+    } finally {
+      button.disabled = false;
+    }
+  }));
+}
+
+function openCareClientPicker() {
+  $('#care-client-picker-search').value = '';
+  renderCareClientPicker();
+  careClientPickerDialog.showModal();
+  setTimeout(() => $('#care-client-picker-search').focus(), 50);
 }
 
 async function loadClients() {
@@ -501,6 +596,12 @@ $('#cancel-client').addEventListener('click', () => clientDialog.close());
 clientSearch.addEventListener('input', renderClients);
 clientStatusFilter.addEventListener('change', renderClients);
 clientForm.addEventListener('submit', saveClient);
+$('#care-search').addEventListener('input', renderAllCarePlans);
+$('#care-status-filter').addEventListener('change', renderAllCarePlans);
+$('#care-open-clients').addEventListener('click', openCareClientPicker);
+$('#close-care-client-picker').addEventListener('click', () => careClientPickerDialog.close());
+$('#cancel-care-client-picker').addEventListener('click', () => careClientPickerDialog.close());
+$('#care-client-picker-search').addEventListener('input', renderCareClientPicker);
 $('#back-to-clients').addEventListener('click', () => $('[data-page="clients"]').click());
 $('#edit-profile-client').addEventListener('click', () => openClientDialog(selectedClientId));
 $('#archive-profile-client').addEventListener('click', archiveSelectedClient);

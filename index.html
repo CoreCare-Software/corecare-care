@@ -85,7 +85,7 @@
 
       <main id="main-content" tabindex="-1">
         <section id="dashboard-page" class="page active-page">
-          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release adds care plans, risk assessments, review tracking and client document records. Continue using fictional information during development.</span></div><span class="badge">Sprint 7</span></div>
+          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release adds a complete care-plan overview alongside client care plans, risks, review tracking and document records. Continue using fictional information during development.</span></div><span class="badge">Sprint 7.1</span></div>
           <section class="dev-status panel" aria-label="Development status">
             <div class="panel-heading"><div><p class="eyebrow">Development mode</p><h2>Platform status</h2></div><span id="organisation-name" class="badge neutral">Organisation</span></div>
             <div class="dev-status-grid">
@@ -159,6 +159,27 @@
           <div class="module-toolbar"><div><p class="eyebrow">Workforce</p><h2>Staff</h2><p>Manage employment, contact and compliance information.</p></div><button id="add-staff" class="primary-button compact">+ Add staff</button></div>
           <section class="client-stats"><article><span>Active staff</span><strong id="staff-active-count">0</strong></article><article><span>DBS overdue</span><strong id="staff-dbs-count">0</strong></article><article><span>Training overdue</span><strong id="staff-training-count">0</strong></article></section>
           <section class="panel client-panel"><div class="client-controls"><label class="search-field"><span>Search</span><input id="staff-search" type="search" placeholder="Search name, role, phone or email"></label><label><span>Status</span><select id="staff-status-filter"><option value="all">All staff</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label></div><div class="table-wrap"><table class="client-table"><thead><tr><th>Staff member</th><th>Role</th><th>Contact</th><th>DBS expiry</th><th>Training expiry</th><th>Status</th><th></th></tr></thead><tbody id="staff-table-body"></tbody></table></div><div id="staff-empty" class="empty-state" hidden><strong>No staff found</strong><span>Change the search or add a staff member.</span></div></section>
+        </section>
+
+
+        <section id="care-page" class="page">
+          <div class="module-toolbar">
+            <div><p class="eyebrow">Care delivery</p><h2>Care plans</h2><p>Review every client care plan, monitor review dates and open the full client workspace.</p></div>
+            <button id="care-open-clients" class="primary-button compact">+ Create care plan</button>
+          </div>
+          <section class="client-stats" aria-label="Care-plan statistics">
+            <article><span>Active plans</span><strong id="care-active-count">0</strong></article>
+            <article><span>Due within 30 days</span><strong id="care-due-count">0</strong></article>
+            <article><span>Overdue reviews</span><strong id="care-overdue-count">0</strong></article>
+          </section>
+          <section class="panel client-panel">
+            <div class="client-controls">
+              <label class="search-field"><span>Search</span><input id="care-search" type="search" placeholder="Search client, care plan or author"></label>
+              <label><span>Status</span><select id="care-status-filter"><option value="all">All plans</option><option value="Active">Active</option><option value="Draft">Draft</option><option value="Archived">Archived</option></select></label>
+            </div>
+            <div id="care-overview-list" class="care-overview-list"></div>
+            <div id="care-overview-empty" class="empty-state" hidden><strong>No care plans found</strong><span>Create a care plan from a client's record.</span></div>
+          </section>
         </section>
 
         <section id="client-profile-page" class="page">
@@ -240,6 +261,16 @@
   <dialog id="risk-dialog" class="client-dialog"><form id="risk-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Risk assessment</p><h2 id="risk-dialog-title">Add risk</h2></div><button id="close-risk-dialog" class="icon-button always" type="button">×</button></div><input name="id" type="hidden"><div class="form-grid"><label><span>Category</span><select name="category"><option>Falls</option><option>Medication</option><option>Fire</option><option>Manual Handling</option><option>Nutrition</option><option>Pressure Care</option><option>Behaviour</option><option>General Risk</option></select></label><label><span>Title *</span><input name="title" required></label><label><span>Severity</span><select name="severity"><option>Low</option><option selected>Medium</option><option>High</option></select></label><label><span>Likelihood</span><select name="likelihood"><option>Unlikely</option><option selected>Possible</option><option>Likely</option></select></label><label><span>Status</span><select name="status"><option>Active</option><option>Controlled</option><option>Archived</option></select></label><label><span>Review date *</span><input name="reviewDate" type="date" required></label><label class="wide"><span>Controls in place</span><textarea name="controls" rows="4"></textarea></label><label class="wide"><span>Further actions</span><textarea name="actions" rows="3"></textarea></label></div><p id="risk-error" class="form-error" hidden></p><div class="dialog-actions"><button id="cancel-risk" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save risk</button></div></form></dialog>
 
   <dialog id="document-dialog" class="client-dialog"><form id="document-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Client document</p><h2>Add document record</h2></div><button id="close-document-dialog" class="icon-button always" type="button">×</button></div><div class="form-grid"><label class="wide"><span>Document name *</span><input name="name" required></label><label><span>Type</span><select name="documentType"><option>Consent form</option><option>DNACPR</option><option>Assessment</option><option>MAR sheet</option><option>Hospital letter</option><option>Other</option></select></label><label><span>Status</span><select name="status"><option>Current</option><option>Superseded</option><option>Archived</option></select></label><label><span>Document date</span><input name="documentDate" type="date"></label><label><span>Review date</span><input name="reviewDate" type="date"></label><label class="wide"><span>Secure reference link</span><input name="referenceUrl" type="url" placeholder="https://..."></label><label class="wide"><span>Notes</span><textarea name="notes" rows="3"></textarea></label></div><p id="document-error" class="form-error" hidden></p><div class="dialog-actions"><button id="cancel-document" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save document</button></div></form></dialog>
+
+  <dialog id="care-client-picker-dialog" class="client-dialog wide-dialog">
+    <div class="client-picker-sheet">
+      <div class="dialog-heading"><div><p class="eyebrow">Create care plan</p><h2>Select a client</h2><p>Choose the person this care plan belongs to.</p></div><button id="close-care-client-picker" class="icon-button always" type="button" aria-label="Close">×</button></div>
+      <label class="search-field client-picker-search"><span>Search clients</span><input id="care-client-picker-search" type="search" placeholder="Search name, NHS number or date of birth" autocomplete="off"></label>
+      <div id="care-client-picker-list" class="client-picker-list"></div>
+      <div id="care-client-picker-empty" class="empty-state" hidden><strong>No active clients found</strong><span>Try another search or add a client first.</span></div>
+      <div class="dialog-actions"><button id="cancel-care-client-picker" class="secondary-button" type="button">Cancel</button></div>
+    </div>
+  </dialog>
 
   <dialog id="password-dialog" class="client-dialog"><form id="password-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Account security</p><h2>Change password</h2></div></div><div class="form-grid"><label class="wide"><span>Current password</span><input name="currentPassword" type="password" autocomplete="current-password" required></label><label><span>New password</span><input name="newPassword" type="password" autocomplete="new-password" required></label><label><span>Confirm password</span><input name="confirmPassword" type="password" autocomplete="new-password" required></label></div><p class="password-help">At least 12 characters, including upper-case, lower-case and a number.</p><p id="password-error" class="form-error" hidden></p><div class="dialog-actions"><button id="cancel-password" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Update password</button></div></form></dialog>
   <dialog id="user-dialog" class="client-dialog"><form id="user-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">User account</p><h2 id="user-dialog-title">Add user</h2></div><button id="close-user-dialog" class="icon-button always" type="button">×</button></div><input name="id" type="hidden"><div class="form-grid"><label><span>Display name</span><input name="displayName" required></label><label><span>Email address</span><input name="email" type="email" required></label><label><span>Role</span><select name="role"><option value="owner">Owner</option><option value="manager">Manager</option><option value="carer">Carer</option><option value="auditor">Read-only auditor</option></select></label><label><span>Status</span><select name="status"><option value="active">Active</option><option value="disabled">Disabled</option></select></label><label id="temporary-password-label" class="wide"><span>Temporary password</span><input name="temporaryPassword" type="password"><small>At least 12 characters. The user must change it after signing in.</small></label></div><p id="user-form-error" class="form-error" hidden></p><div class="dialog-actions"><button id="cancel-user" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save user</button></div></form></dialog>
