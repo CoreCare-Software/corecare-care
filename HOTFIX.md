@@ -1,5 +1,5 @@
-# CoreCare Sprint 4C hotfix
+# CoreCare Sprint 4C display hotfix
 
-Fixes Cloudflare Workers PBKDF2 failure by using the supported maximum of 100,000 iterations.
+Ensures elements using the HTML `hidden` attribute are never displayed. This prevents the login screen from remaining visible after a successful sign-in.
 
 No database migration is required.
