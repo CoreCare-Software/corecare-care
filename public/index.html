@@ -22,14 +22,13 @@
       </div>
       <form id="login-form" novalidate>
         <label for="email">Email address</label>
-        <input id="email" name="email" type="email" value="admin@demo.corecare" autocomplete="username" required>
+        <input id="email" name="email" type="email"  autocomplete="username" required>
         <div class="password-label"><label for="password">Password</label><button id="toggle-password" type="button">Show</button></div>
-        <input id="password" name="password" type="password" value="ChangeMe!2026" autocomplete="current-password" required>
+        <input id="password" name="password" type="password"  autocomplete="current-password" required>
         <div class="form-options"><label class="checkbox"><input type="checkbox" checked> Remember me</label><button class="link-button" type="button">Forgot password?</button></div>
         <p id="login-error" class="form-error" role="alert" hidden></p>
         <button class="primary-button" type="submit">Sign in to CoreCare</button>
       </form>
-      <div class="demo-note"><strong>Demonstration login</strong><span>admin@demo.corecare</span><span>ChangeMe!2026</span></div>
       <p class="legal-copy">Development version. Do not enter real personal or care information.</p>
     </section>
     <aside class="login-art" aria-label="CoreCare platform highlights">
@@ -73,7 +72,7 @@
         <button class="nav-item" data-page="reports"><span>▥</span>Reports</button>
         <button class="nav-item" data-page="settings"><span>⚙</span>Settings</button>
       </nav>
-      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>Development</strong><small>CoreCare <span id="dev-version">v0.4.1</span></small></div></div>
+      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>Development</strong><small>CoreCare <span id="dev-version">v0.4.2</span></small></div></div>
     </aside>
 
     <div class="workspace">
@@ -86,7 +85,7 @@
 
       <main id="main-content" tabindex="-1">
         <section id="dashboard-page" class="page active-page">
-          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release introduces real database-backed login sessions and organisation isolation. Continue using fictional information during development.</span></div><span class="badge">Sprint 4B</span></div>
+          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release adds user administration, forced password changes, account controls and audit history. Continue using fictional information during development.</span></div><span class="badge">Sprint 4C</span></div>
           <section class="dev-status panel" aria-label="Development status">
             <div class="panel-heading"><div><p class="eyebrow">Development mode</p><h2>Platform status</h2></div><span id="organisation-name" class="badge neutral">Organisation</span></div>
             <div class="dev-status-grid">
@@ -168,6 +167,17 @@
           </section>
         </section>
 
+
+        <section id="settings-page" class="page">
+          <div class="module-toolbar"><div><p class="eyebrow">Administration</p><h2>Organisation settings</h2><p>Manage the organisation, user accounts, roles and audit history.</p></div><button id="add-user" class="primary-button compact">+ Add user</button></div>
+          <section class="settings-grid">
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Organisation</p><h2>Company details</h2></div></div><form id="organisation-form" class="inline-form"><label><span>Organisation name</span><input id="organisation-input" name="name" required></label><button class="primary-button compact" type="submit">Save name</button><p id="organisation-message" class="form-message" hidden></p></form></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Security</p><h2>Your password</h2></div></div><button id="open-password" class="secondary-button">Change my password</button></article>
+          </section>
+          <section class="panel client-panel admin-panel"><div class="panel-heading padded"><div><p class="eyebrow">Access control</p><h2>User accounts</h2></div></div><div class="table-wrap"><table class="client-table"><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Last login</th><th></th></tr></thead><tbody id="user-table-body"></tbody></table></div><div id="user-empty" class="empty-state" hidden><strong>No users found</strong></div></section>
+          <section class="panel audit-panel"><div class="panel-heading"><div><p class="eyebrow">Accountability</p><h2>Recent audit history</h2></div><button id="refresh-audit" class="secondary-button">Refresh</button></div><div id="audit-list" class="audit-list"></div></section>
+        </section>
+
         <section id="placeholder-page" class="page placeholder-page">
           <div class="placeholder-icon">CC</div><p class="eyebrow">CoreCare module</p><h2 id="placeholder-title">Module</h2><p id="placeholder-copy"></p><div class="module-status"><span></span>Planned for a future build</div><button class="primary-button compact" data-return-dashboard>Return to dashboard</button>
         </section>
@@ -194,6 +204,10 @@
       <div class="dialog-actions"><button id="cancel-client" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save client</button></div>
     </form>
   </dialog>
+
+
+  <dialog id="password-dialog" class="client-dialog"><form id="password-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Account security</p><h2>Change password</h2></div></div><div class="form-grid"><label class="wide"><span>Current password</span><input name="currentPassword" type="password" autocomplete="current-password" required></label><label><span>New password</span><input name="newPassword" type="password" autocomplete="new-password" required></label><label><span>Confirm password</span><input name="confirmPassword" type="password" autocomplete="new-password" required></label></div><p class="password-help">At least 12 characters, including upper-case, lower-case and a number.</p><p id="password-error" class="form-error" hidden></p><div class="dialog-actions"><button id="cancel-password" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Update password</button></div></form></dialog>
+  <dialog id="user-dialog" class="client-dialog"><form id="user-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">User account</p><h2 id="user-dialog-title">Add user</h2></div><button id="close-user-dialog" class="icon-button always" type="button">×</button></div><input name="id" type="hidden"><div class="form-grid"><label><span>Display name</span><input name="displayName" required></label><label><span>Email address</span><input name="email" type="email" required></label><label><span>Role</span><select name="role"><option value="owner">Owner</option><option value="manager">Manager</option><option value="carer">Carer</option><option value="auditor">Read-only auditor</option></select></label><label><span>Status</span><select name="status"><option value="active">Active</option><option value="disabled">Disabled</option></select></label><label id="temporary-password-label" class="wide"><span>Temporary password</span><input name="temporaryPassword" type="password"><small>At least 12 characters. The user must change it after signing in.</small></label></div><p id="user-form-error" class="form-error" hidden></p><div class="dialog-actions"><button id="cancel-user" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save user</button></div></form></dialog>
 
   <script src="app.js"></script>
 </body>
