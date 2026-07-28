@@ -1,8 +1,8 @@
 {
   "name": "corecare",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "CoreCare cloud care management platform",
+  "description": "CoreCare cloud care management platform \u2014 working client management milestone",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",

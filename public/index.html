@@ -73,7 +73,7 @@
         <button class="nav-item" data-page="reports"><span>▥</span>Reports</button>
         <button class="nav-item" data-page="settings"><span>⚙</span>Settings</button>
       </nav>
-      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>Development</strong><small>CoreCare v0.2.0</small></div></div>
+      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>Development</strong><small>CoreCare v0.3.0</small></div></div>
     </aside>
 
     <div class="workspace">
@@ -86,7 +86,7 @@
 
       <main id="main-content" tabindex="-1">
         <section id="dashboard-page" class="page active-page">
-          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release uses fictional information while we build the permanent data system.</span></div><span class="badge">Sprint 2</span></div>
+          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release adds the first working client-management module. Use fictional information only.</span></div><span class="badge">Sprint 3</span></div>
           <section class="metrics" aria-label="Key figures">
             <article class="metric-card"><div class="metric-icon">◉</div><div><span>Active clients</span><strong>20</strong><small>2 reviews due</small></div><em>+2 this month</em></article>
             <article class="metric-card"><div class="metric-icon">◎</div><div><span>Staff available</span><strong>13</strong><small>of 15 team members</small></div><em>87% available</em></article>
@@ -125,12 +125,65 @@
           </section>
         </section>
 
+
+        <section id="clients-page" class="page">
+          <div class="module-toolbar">
+            <div>
+              <p class="eyebrow">People</p>
+              <h2>Clients</h2>
+              <p>Manage client profiles, key contacts, care status and review dates.</p>
+            </div>
+            <button id="add-client" class="primary-button compact">+ Add client</button>
+          </div>
+
+          <section class="client-stats" aria-label="Client statistics">
+            <article><span>Active clients</span><strong id="client-active-count">0</strong></article>
+            <article><span>Reviews due</span><strong id="client-review-count">0</strong></article>
+            <article><span>High-risk alerts</span><strong id="client-risk-count">0</strong></article>
+          </section>
+
+          <section class="panel client-panel">
+            <div class="client-controls">
+              <label class="search-field"><span>Search</span><input id="client-search" type="search" placeholder="Search by name, town or NHS number"></label>
+              <label><span>Status</span><select id="client-status-filter"><option value="all">All clients</option><option value="Active">Active</option><option value="Paused">Paused</option><option value="Archived">Archived</option></select></label>
+            </div>
+            <div class="table-wrap">
+              <table class="client-table">
+                <thead><tr><th>Client</th><th>Location</th><th>Care package</th><th>Next review</th><th>Status</th><th></th></tr></thead>
+                <tbody id="client-table-body"></tbody>
+              </table>
+            </div>
+            <div id="client-empty" class="empty-state" hidden><strong>No clients found</strong><span>Change the search or add a new client.</span></div>
+          </section>
+        </section>
+
         <section id="placeholder-page" class="page placeholder-page">
           <div class="placeholder-icon">CC</div><p class="eyebrow">CoreCare module</p><h2 id="placeholder-title">Module</h2><p id="placeholder-copy"></p><div class="module-status"><span></span>Planned for a future build</div><button class="primary-button compact" data-return-dashboard>Return to dashboard</button>
         </section>
       </main>
     </div>
   </div>
+
+  <dialog id="client-dialog" class="client-dialog">
+    <form id="client-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">Client record</p><h2 id="client-dialog-title">Add client</h2></div><button id="close-client-dialog" class="icon-button always" type="button" aria-label="Close">×</button></div>
+      <input id="client-id" name="id" type="hidden">
+      <div class="form-grid">
+        <label><span>First name</span><input name="firstName" required></label>
+        <label><span>Last name</span><input name="lastName" required></label>
+        <label><span>Date of birth</span><input name="dateOfBirth" type="date" required></label>
+        <label><span>NHS number</span><input name="nhsNumber" placeholder="000 000 0000"></label>
+        <label><span>Town</span><input name="town" required></label>
+        <label><span>Care package</span><input name="carePackage" placeholder="e.g. Personal care"></label>
+        <label><span>Next review</span><input name="nextReview" type="date" required></label>
+        <label><span>Status</span><select name="status"><option>Active</option><option>Paused</option><option>Archived</option></select></label>
+        <label class="wide"><span>Risk level</span><select name="risk"><option>Standard</option><option>Medium</option><option>High</option></select></label>
+      </div>
+      <p id="client-form-error" class="form-error" hidden></p>
+      <div class="dialog-actions"><button id="cancel-client" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save client</button></div>
+    </form>
+  </dialog>
+
   <script src="app.js"></script>
 </body>
 </html>

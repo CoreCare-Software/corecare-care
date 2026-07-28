@@ -1,28 +1,25 @@
 # CoreCare
 
-CoreCare is a cloud care-management platform being built for UK care providers.
+CoreCare is a cloud-based care management platform deployed with Cloudflare Workers and Static Assets.
 
-## Current release
+## Version 0.3.0 — Sprint 3
 
-**Version:** 0.2.0  
-**Sprint:** Brand and application shell
+This build adds the first functional product module:
 
-This release includes:
+- searchable client register
+- status filtering
+- add and edit client records
+- client review and risk indicators
+- browser-local persistence for safe demonstration testing
+- responsive desktop and mobile layout
+- health, version and capability API endpoints
 
-- Official CoreCare branding
-- Responsive login screen
-- Dashboard and permanent navigation shell
-- Placeholder routes for planned modules
-- Cloudflare Worker API health and version endpoints
-- GitHub-to-Cloudflare automatic deployment
+## Demonstration safety
 
-## Demonstration login
+This build stores client entries in the current browser only. Use fictional information. The next engineering milestone will replace browser storage with authenticated Cloudflare D1 database records.
 
-- Email: `admin@demo.corecare`
-- Password: `ChangeMe!2026`
+## Commands
 
-This is a development demonstration only. Do not enter real personal, health or care information.
-
-## Cloudflare
-
-The deployed Worker is still named `forget-me-not` so the existing Cloudflare deployment remains connected. The public product name is now CoreCare. We can rename the Cloudflare Worker and URL separately later without interrupting development.
+- `npm run dev`
+- `npm run check`
+- `npm run deploy`
