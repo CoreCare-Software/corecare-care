@@ -85,6 +85,7 @@
         <div class="user-menu"><div id="user-avatar" class="avatar">CC</div><div><strong id="user-name">CoreCare user</strong><span id="user-role">Authenticated user</span></div><button id="sign-out" class="text-button">Sign out</button></div>
       </header>
 
+      <div id="support-mode-banner" class="support-mode-banner" hidden><div><strong>Support Mode</strong><span>You are securely viewing <b id="support-mode-org">an organisation</b> as a Platform Owner. All actions are audited.</span></div><button id="exit-support-mode" class="secondary-button compact">Return to platform</button></div>
       <main id="main-content" tabindex="-1">
         <section id="platform-page" class="page">
           <div class="platform-hero">
@@ -109,7 +110,7 @@
         </section>
 
         <section id="dashboard-page" class="page active-page">
-          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release adds a complete care-plan overview alongside client care plans, risks, review tracking and document records. Continue using fictional information during development.</span></div><span class="badge">Sprint 8.1</span></div>
+          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release adds a complete care-plan overview alongside client care plans, risks, review tracking and document records. Continue using fictional information during development.</span></div><span class="badge">Sprint 8.2</span></div>
           <section class="dev-status panel" aria-label="Development status">
             <div class="panel-heading"><div><p class="eyebrow">Development mode</p><h2>Platform status</h2></div><span id="organisation-name" class="badge neutral">Organisation</span></div>
             <div class="dev-status-grid">
@@ -231,7 +232,7 @@
         <section id="settings-page" class="page">
           <div class="module-toolbar"><div><p class="eyebrow">Administration</p><h2>Organisation settings</h2><p>Manage organisations, branches, user access, family links and audit history.</p></div><button id="add-user" class="primary-button compact">+ Add user</button></div>
           <section class="settings-grid">
-            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Organisation</p><h2>Company details</h2></div></div><form id="organisation-form" class="inline-form"><label><span>Organisation name</span><input id="organisation-input" name="name" required></label><button class="primary-button compact" type="submit">Save name</button><p id="organisation-message" class="form-message" hidden></p></form></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Organisation</p><h2>Company details & branding</h2></div></div><form id="organisation-form" class="form-grid compact-form"><label class="wide"><span>Organisation name</span><input id="organisation-input" name="name" required></label><label class="wide"><span>Logo URL</span><input id="organisation-logo" name="logoUrl" type="url" placeholder="https://..."></label><label><span>Brand colour</span><input id="organisation-colour" name="primaryColour" type="color" value="#1f6f5f"></label><label><span>Contact email</span><input id="organisation-contact-email" name="contactEmail" type="email"></label><label><span>Contact phone</span><input id="organisation-contact-phone" name="contactPhone"></label><div class="wide"><button class="primary-button compact" type="submit">Save organisation</button></div><p id="organisation-message" class="form-message wide" hidden></p></form></article>
             <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Security</p><h2>Your password</h2></div></div><button id="open-password" class="secondary-button">Change my password</button></article>
           </section>
 

@@ -96,6 +96,8 @@ function updateIdentity() {
   $('#platform-nav').hidden = !platformUser;
   $('#platform-nav-section').hidden = !platformUser;
   if ($('#platform-current-org')) $('#platform-current-org').textContent = currentUser?.organisationName || 'Organisation';
+  const supportBanner=$('#support-mode-banner');
+  if(supportBanner){supportBanner.hidden=!(platformUser&&currentUser?.supportMode);$('#support-mode-org').textContent=currentUser?.organisationName||'organisation';}
 }
 
 async function showApplication(user) {
@@ -232,7 +234,7 @@ function renderPlatformOrganisations(){
 }
 async function openPlatformOrganisation(organisationId){
   const row=(platformData?.organisations||[]).find(o=>o.id===organisationId);
-  if(!confirm(`Open ${row?.name||'this organisation'}? You will only see that organisation's records until you return to Platform administration.`)) return;
+  if(!confirm(`Enter Support Mode for ${row?.name||'this organisation'}? All access and changes will be recorded in the audit log.`)) return;
   await api('/api/platform/switch-organisation',{method:'POST',body:JSON.stringify({organisationId})});
   location.reload();
 }
@@ -697,9 +699,19 @@ passwordForm.addEventListener('submit', async event => {
   }
 });
 
+function applyOrganisationBranding(org){
+  if(!org)return;
+  if(org.primary_colour)document.documentElement.style.setProperty('--brand',org.primary_colour);
+  const name=org.name||currentUser?.organisationName;
+  if(name)document.title=`${name} · CoreCare`;
+}
+async function loadOrganisationProfile(){
+  const payload=await api('/api/organisation/profile'); const o=payload.organisation||{};
+  $('#organisation-input').value=o.name||''; $('#organisation-logo').value=o.logo_url||''; $('#organisation-colour').value=o.primary_colour||'#1f6f5f'; $('#organisation-contact-email').value=o.contact_email||''; $('#organisation-contact-phone').value=o.contact_phone||''; applyOrganisationBranding(o);
+}
 async function loadSettings() {
   if (!currentUser) return;
-  $('#organisation-input').value = currentUser.organisationName || '';
+  await loadOrganisationProfile();
   const canAdmin = ['platform_owner','platform_admin','organisation_owner','organisation_admin'].includes(currentUser.accessLevel) || (['platform_owner','organisation_owner','organisation_admin'].includes(currentUser.accessLevel) || currentUser.role === 'owner');
   $('#add-user').hidden = !canAdmin;
   $('#add-branch').hidden = !canAdmin;
@@ -811,3 +823,5 @@ $('#return-platform')?.addEventListener('click',()=>showPage('platform'));
 $('#platform-add-organisation')?.addEventListener('click',()=>$('#add-organisation')?.click());
 
 restoreSession();
+
+$('#exit-support-mode')?.addEventListener('click',async()=>{try{await api('/api/platform/exit-support',{method:'POST'});location.reload();}catch(error){alert(error.message);}});

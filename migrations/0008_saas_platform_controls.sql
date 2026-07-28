@@ -1,0 +1,13 @@
+ALTER TABLE organisations ADD COLUMN logo_url TEXT;
+ALTER TABLE organisations ADD COLUMN primary_colour TEXT DEFAULT '#1f6f5f';
+ALTER TABLE organisations ADD COLUMN contact_email TEXT;
+ALTER TABLE organisations ADD COLUMN contact_phone TEXT;
+ALTER TABLE organisations ADD COLUMN feature_flags_json TEXT DEFAULT '{}';
+ALTER TABLE organisations ADD COLUMN max_users INTEGER;
+ALTER TABLE organisations ADD COLUMN max_clients INTEGER;
+ALTER TABLE organisations ADD COLUMN subscription_status TEXT DEFAULT 'trial';
+ALTER TABLE organisations ADD COLUMN trial_ends_at TEXT;
+ALTER TABLE sessions ADD COLUMN support_mode INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN support_origin_organisation_id TEXT;
+ALTER TABLE sessions ADD COLUMN support_started_at TEXT;
+CREATE INDEX IF NOT EXISTS idx_sessions_support_mode ON sessions(support_mode);
