@@ -101,7 +101,17 @@ function updateIdentity() {
   $$('.organisation-workspace-nav').forEach(item => item.hidden = platformWorkspace);
   $$('.organisation-workspace-action').forEach(item => item.hidden = platformWorkspace);
   const supportBanner=$('#support-mode-banner');
-  if(supportBanner){supportBanner.hidden=!(platformUser&&currentUser?.supportMode);$('#support-mode-org').textContent=currentUser?.organisationName||'organisation';}
+  if(supportBanner){
+    const inSupport=platformUser&&currentUser?.supportMode;
+    supportBanner.hidden=!inSupport;
+    if(inSupport){
+      $('#support-mode-org').textContent=currentUser?.organisationName||'organisation';
+      $('#support-mode-user').textContent=currentUser?.displayName||'Platform user';
+      $('#support-mode-access').textContent=currentUser?.supportAccessMode==='read_only'?'Read-only support':'Full support';
+      $('#support-mode-reason').textContent=currentUser?.supportReason||'Support request';
+      $('#support-mode-started').textContent=currentUser?.supportStartedAt?new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(new Date(`${currentUser.supportStartedAt}Z`)):'Now';
+    }
+  }
   document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
@@ -753,14 +763,14 @@ async function loadSettings() {
   const canAdmin = ['platform_owner','platform_admin','organisation_owner','organisation_admin'].includes(currentUser.accessLevel) || (['platform_owner','organisation_owner','organisation_admin'].includes(currentUser.accessLevel) || currentUser.role === 'owner');
   $('#add-user').hidden = !canAdmin;
   $('#add-branch').hidden = !canAdmin;
-  $('#platform-admin-panel').hidden = !currentUser.isPlatformUser;
+  $('#platform-admin-panel').hidden = !currentUser.isPlatformUser || currentUser.supportMode;
   try {
     const [userPayload, branchPayload] = await Promise.all([api('/api/users'), api('/api/branches')]);
     users = userPayload.users || [];
     branches = branchPayload.branches || [];
     renderUsers(); renderBranches(); populateBranchSelect();
     await loadEnterpriseSecurity();
-    if(currentUser.isPlatformUser) await loadOrganisations();
+    if(currentUser.isPlatformUser && !currentUser.supportMode) await loadOrganisations();
     await loadAudit();
   await loadOrganisationCustomisation();
   } catch (error) {

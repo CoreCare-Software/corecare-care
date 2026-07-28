@@ -85,7 +85,11 @@
         <div class="user-menu"><div id="user-avatar" class="avatar">CC</div><div><strong id="user-name">CoreCare user</strong><span id="user-role">Authenticated user</span></div><button id="sign-out" class="text-button">Sign out</button></div>
       </header>
 
-      <div id="support-mode-banner" class="support-mode-banner" hidden><div><strong>Support Mode</strong><span>You are securely viewing <b id="support-mode-org">an organisation</b> as a Platform Owner. All actions are audited.</span></div><button id="exit-support-mode" class="secondary-button compact">Return to platform</button></div>
+      <div id="support-mode-banner" class="support-mode-banner" hidden>
+        <div class="support-mode-main"><strong>Support Mode</strong><span>You are securely viewing <b id="support-mode-org">an organisation</b>. Organisation switching and platform-wide records are locked until you leave Support Mode.</span></div>
+        <div class="support-mode-meta"><span><b>Entered by:</b> <span id="support-mode-user">Platform user</span></span><span><b>Started:</b> <span id="support-mode-started">Now</span></span><span><b>Access:</b> <span id="support-mode-access">Full support</span></span><span><b>Reason:</b> <span id="support-mode-reason">Support request</span></span></div>
+        <button id="exit-support-mode" class="secondary-button compact">Leave Support Mode</button>
+      </div>
       <main id="main-content" tabindex="-1">
         <section id="platform-page" class="page">
           <div class="platform-hero">

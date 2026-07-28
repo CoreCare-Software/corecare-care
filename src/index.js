@@ -1,5 +1,5 @@
 /** CoreCare Cloudflare Worker — v0.5.0 client records */
-const VERSION = "0.12.0";
+const VERSION = "0.13.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, sprint: "Sprint 12 — security completion" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, sprint: "Sprint 13 — isolated support mode" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -224,7 +224,12 @@ async function sessionInfo(request, env) {
 async function requireSession(request, db) {
   const token = cookieValue(request, SESSION_COOKIE);
   if (!token) return unauthorised();
-  const row = await db.prepare(`SELECT s.id AS session_id,s.expires_at,s.user_id,s.organisation_id,s.active_branch_id,s.support_mode,s.support_origin_organisation_id,s.support_started_at,u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.status,u.must_change_password,o.name AS organisation_name,b.name AS branch_name FROM sessions s JOIN users u ON u.id=s.user_id JOIN organisations o ON o.id=s.organisation_id LEFT JOIN branches b ON b.id=s.active_branch_id WHERE s.token_hash=? AND s.expires_at>CURRENT_TIMESTAMP LIMIT 1`).bind(await sha256Base64(token)).first();
+  const row = await db.prepare(`SELECT s.id AS session_id,s.expires_at,s.user_id,s.organisation_id,s.active_branch_id,s.support_mode,s.support_origin_organisation_id,s.support_started_at,
+    (SELECT ss.reason FROM support_sessions ss WHERE ss.session_id=s.id AND ss.ended_at IS NULL ORDER BY ss.started_at DESC LIMIT 1) AS support_reason,
+    (SELECT ss.access_mode FROM support_sessions ss WHERE ss.session_id=s.id AND ss.ended_at IS NULL ORDER BY ss.started_at DESC LIMIT 1) AS support_access_mode,
+    u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.status,u.must_change_password,o.name AS organisation_name,b.name AS branch_name
+    FROM sessions s JOIN users u ON u.id=s.user_id JOIN organisations o ON o.id=s.organisation_id LEFT JOIN branches b ON b.id=s.active_branch_id
+    WHERE s.token_hash=? AND s.expires_at>CURRENT_TIMESTAMP LIMIT 1`).bind(await sha256Base64(token)).first();
   if (!row || row.status !== "active") return unauthorised();
   await db.prepare("UPDATE sessions SET last_seen_at=CURRENT_TIMESTAMP WHERE id=?").bind(row.session_id).run();
   return row;
@@ -559,7 +564,7 @@ function forbidden() { return json({ error: { code: "FORBIDDEN", message: "Your 
 function unauthorised() { return json({ error: { code: "UNAUTHORISED", message: "Sign in to continue." } }, 401, { "set-cookie": expiredSessionCookie() }); }
 function databaseRequired(message = "The D1 database binding named DB is not configured.") { return json({ error: { code: "DATABASE_NOT_CONFIGURED", message } }, 503); }
 function methodNotAllowed(allow) { return json({ error: { code: "METHOD_NOT_ALLOWED", message: "This method is not allowed." } }, 405, { allow: allow.join(", ") }); }
-function publicUser(row) { return { id: row.user_id || row.id, organisationId: row.organisation_id, organisationName: row.organisation_name, branchId: row.active_branch_id || row.home_branch_id || null, branchName: row.branch_name || null, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, isPlatformUser: Boolean(row.is_platform_user), supportMode: Boolean(row.support_mode), supportOriginOrganisationId: row.support_origin_organisation_id || null, supportStartedAt: row.support_started_at || null, mustChangePassword: Boolean(row.must_change_password) }; }
+function publicUser(row) { return { id: row.user_id || row.id, organisationId: row.organisation_id, organisationName: row.organisation_name, branchId: row.active_branch_id || row.home_branch_id || null, branchName: row.branch_name || null, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, isPlatformUser: Boolean(row.is_platform_user), supportMode: Boolean(row.support_mode), supportOriginOrganisationId: row.support_origin_organisation_id || null, supportStartedAt: row.support_started_at || null, supportReason: row.support_reason || null, supportAccessMode: row.support_access_mode || null, mustChangePassword: Boolean(row.must_change_password) }; }
 function toUser(row) { return { id: row.id, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, branchId: row.home_branch_id || null, customRoleId: row.custom_role_id || null, customRoleName: row.custom_role_name || null, status: row.status, mustChangePassword: Boolean(row.must_change_password), lastLoginAt: row.last_login_at, createdAt: row.created_at }; }
 function clean(value) { return String(value ?? "").trim(); }
 async function readJson(request) { try { return await request.json(); } catch { return {}; } }
@@ -629,8 +634,11 @@ async function saveSubscriptionPlan(request,db,session){
 }
 async function listPlatformUsers(db,session){if(!requirePlatform(session))return forbidden();const r=await db.prepare(`SELECT u.id,u.email,u.display_name,u.access_level,u.status,u.last_login_at,o.name AS organisation_name FROM users u JOIN organisations o ON o.id=u.organisation_id WHERE u.is_platform_user=1 OR u.access_level IN ('platform_owner','platform_admin') ORDER BY u.display_name`).all();return json({users:r.results||[]});}
 
-function requirePlatform(session) {
+function requirePlatformIdentity(session) {
   return session.is_platform_user || session.access_level === "platform_owner" || session.access_level === "platform_admin";
+}
+function requirePlatform(session) {
+  return !session.support_mode && requirePlatformIdentity(session);
 }
 
 async function platformDashboard(db, session) {
@@ -724,7 +732,7 @@ async function switchOrganisation(request,db,session){
   return json({ok:true,organisation:org,supportMode:true});
 }
 async function exitSupportMode(db,session){
-  if(!requirePlatform(session)) return forbidden();
+  if(!requirePlatformIdentity(session)) return forbidden();
   if(!session.support_mode) return json({ok:true,supportMode:false});
   const origin=session.support_origin_organisation_id;
   const org=origin?await db.prepare("SELECT id,name,status FROM organisations WHERE id=?").bind(origin).first():null;
