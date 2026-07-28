@@ -1,14 +1,13 @@
 {
-  "name": "forget-me-not",
-  "version": "0.1.0",
+  "name": "corecare",
+  "version": "0.2.0",
   "private": true,
-  "description": "Project Forget Me Not care management platform",
+  "description": "CoreCare cloud care management platform",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "wrangler deploy --dry-run",
-    "test": "node --test"
+    "check": "wrangler deploy --dry-run"
   },
   "devDependencies": {
     "wrangler": "^4.26.1"

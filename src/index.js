@@ -1,9 +1,4 @@
-/**
- * Project Forget Me Not — Cloudflare Worker entry point.
- *
- * Static application files are served from /public by Cloudflare Workers
- * Static Assets. API routes run through this Worker first.
- */
+/** CoreCare Cloudflare Worker */
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -11,7 +6,7 @@ export default {
     if (url.pathname === "/api/health") {
       return json({
         ok: true,
-        service: "forget-me-not",
+        service: "corecare",
         environment: "development",
         timestamp: new Date().toISOString()
       });
@@ -19,22 +14,14 @@ export default {
 
     if (url.pathname === "/api/version") {
       return json({
-        name: "Project Forget Me Not",
-        version: "0.1.0",
-        sprint: "Sprint 1 — Cloudflare foundation"
+        name: "CoreCare",
+        version: "0.2.0",
+        sprint: "Sprint 2 — brand and application shell"
       });
     }
 
     if (url.pathname.startsWith("/api/")) {
-      return json(
-        {
-          error: {
-            code: "API_ROUTE_NOT_FOUND",
-            message: "The requested API route does not exist."
-          }
-        },
-        404
-      );
+      return json({ error: { code: "API_ROUTE_NOT_FOUND", message: "The requested API route does not exist." } }, 404);
     }
 
     return env.ASSETS.fetch(request);

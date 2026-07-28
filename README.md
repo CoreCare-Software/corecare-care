@@ -1,52 +1,28 @@
-# Project Forget Me Not
+# CoreCare
 
-Sprint 1 is the permanent Cloudflare foundation for the Forget Me Not care-management platform.
+CoreCare is a cloud care-management platform being built for UK care providers.
 
-## What is included
+## Current release
 
-- Cloudflare Worker entry point
-- Workers Static Assets configuration
-- Responsive demonstration login and dashboard
-- `/api/health` health endpoint
-- `/api/version` version endpoint
-- Git-connected automatic deployment support
+**Version:** 0.2.0  
+**Sprint:** Brand and application shell
 
-## Cloudflare build settings
+This release includes:
 
-When importing this GitHub repository into Cloudflare Workers Builds, use:
-
-- **Project name:** `forget-me-not`
-- **Production branch:** `main`
-- **Build command:** leave blank
-- **Deploy command:** `npx wrangler deploy`
-
-Cloudflare installs the Wrangler version listed in `package.json` before running the deploy command.
+- Official CoreCare branding
+- Responsive login screen
+- Dashboard and permanent navigation shell
+- Placeholder routes for planned modules
+- Cloudflare Worker API health and version endpoints
+- GitHub-to-Cloudflare automatic deployment
 
 ## Demonstration login
 
-- Email: `admin@demo.fmn`
+- Email: `admin@demo.corecare`
 - Password: `ChangeMe!2026`
 
-This login is only a browser demonstration. It is not production authentication and no real personal or care data must be entered.
+This is a development demonstration only. Do not enter real personal, health or care information.
 
-## Test after deployment
+## Cloudflare
 
-Open the application URL supplied by Cloudflare, then also open:
-
-- `/api/health`
-- `/api/version`
-
-Both API addresses should display JSON.
-
-## Repository structure
-
-```text
-public/          Browser application assets
-src/index.js     Cloudflare Worker and API routes
-package.json     Project metadata and Wrangler dependency
-wrangler.jsonc   Cloudflare deployment configuration
-```
-
-## Next sprint
-
-Sprint 2 will add the first real server-side data foundation, including D1 setup, migrations, organisations, users and authenticated sessions.
+The deployed Worker is still named `forget-me-not` so the existing Cloudflare deployment remains connected. The public product name is now CoreCare. We can rename the Cloudflare Worker and URL separately later without interrupting development.

@@ -3,157 +3,134 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#173f3a">
-  <meta name="description" content="Project Forget Me Not care management platform demonstration">
-  <title>Forget Me Not Care</title>
+  <meta name="theme-color" content="#0f766e">
+  <meta name="description" content="CoreCare care management platform">
+  <title>CoreCare</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div id="login-view" class="login-shell">
     <section class="login-panel" aria-labelledby="login-title">
-      <div class="brand-mark" aria-hidden="true">FMN</div>
-      <p class="eyebrow">Project Forget Me Not</p>
-      <h1 id="login-title">Care management, made clearer.</h1>
-      <p class="intro">This is the first working demonstration of the Forget Me Not platform.</p>
-
+      <div class="brand lockup">
+        <div class="brand-symbol" aria-hidden="true"><span></span><span></span></div>
+        <div><strong>CoreCare</strong><small>Care management platform</small></div>
+      </div>
+      <div class="login-copy">
+        <p class="eyebrow">Secure workspace</p>
+        <h1 id="login-title">Care at the centre of everything.</h1>
+        <p>One clear place for people, visits, medication, quality and compliance.</p>
+      </div>
       <form id="login-form" novalidate>
         <label for="email">Email address</label>
-        <input id="email" name="email" type="email" value="admin@demo.fmn" autocomplete="username" required>
-
-        <label for="password">Password</label>
+        <input id="email" name="email" type="email" value="admin@demo.corecare" autocomplete="username" required>
+        <div class="password-label"><label for="password">Password</label><button id="toggle-password" type="button">Show</button></div>
         <input id="password" name="password" type="password" value="ChangeMe!2026" autocomplete="current-password" required>
-
+        <div class="form-options"><label class="checkbox"><input type="checkbox" checked> Remember me</label><button class="link-button" type="button">Forgot password?</button></div>
         <p id="login-error" class="form-error" role="alert" hidden></p>
-        <button class="primary-button" type="submit">Sign in to demonstration</button>
+        <button class="primary-button" type="submit">Sign in to CoreCare</button>
       </form>
-
-      <div class="demo-note">
-        <strong>Demonstration login</strong>
-        <span>admin@demo.fmn</span>
-        <span>ChangeMe!2026</span>
-      </div>
+      <div class="demo-note"><strong>Demonstration login</strong><span>admin@demo.corecare</span><span>ChangeMe!2026</span></div>
+      <p class="legal-copy">Development version. Do not enter real personal or care information.</p>
     </section>
-
-    <aside class="login-art" aria-label="Platform highlights">
-      <div>
-        <p class="eyebrow light">One connected platform</p>
-        <h2>People, care, visits and compliance in one place.</h2>
-        <ul>
-          <li>Live operational dashboard</li>
-          <li>Client and staff records</li>
-          <li>Care planning and medication</li>
-          <li>Scheduling, incidents and audit history</li>
-        </ul>
+    <aside class="login-art" aria-label="CoreCare platform highlights">
+      <div class="art-orbit orbit-one"></div><div class="art-orbit orbit-two"></div>
+      <div class="art-content">
+        <span class="status-pill"><i></i> Platform online</span>
+        <p class="eyebrow light">Connected care operations</p>
+        <h2>See what matters. Act before it becomes urgent.</h2>
+        <div class="feature-grid">
+          <article><strong>46</strong><span>Visits today</span></article>
+          <article><strong>94%</strong><span>Compliance</span></article>
+          <article><strong>3</strong><span>Medication alerts</span></article>
+          <article><strong>15</strong><span>Team members</span></article>
+        </div>
       </div>
     </aside>
   </div>
 
   <div id="app-view" class="app-shell" hidden>
     <aside class="sidebar">
-      <div class="sidebar-brand">
-        <div class="brand-mark small" aria-hidden="true">FMN</div>
-        <div><strong>Forget Me Not</strong><span>Care platform</span></div>
+      <div class="brand sidebar-brand">
+        <div class="brand-symbol small" aria-hidden="true"><span></span><span></span></div>
+        <div><strong>CoreCare</strong><small>Management platform</small></div>
       </div>
-
       <nav aria-label="Primary navigation">
-        <button class="nav-item active" data-page="dashboard">Dashboard</button>
-        <button class="nav-item" data-page="clients">Clients</button>
-        <button class="nav-item" data-page="staff">Staff</button>
-        <button class="nav-item" data-page="schedule">Schedule</button>
-        <button class="nav-item" data-page="care">Care planning</button>
-        <button class="nav-item" data-page="medication">Medication</button>
-        <button class="nav-item" data-page="incidents">Incidents</button>
-        <button class="nav-item" data-page="documents">Documents</button>
-        <button class="nav-item" data-page="reports">Reports</button>
-        <button class="nav-item" data-page="administration">Administration</button>
+        <p class="nav-section">Overview</p>
+        <button class="nav-item active" data-page="dashboard"><span>⌂</span>Dashboard</button>
+        <p class="nav-section">People</p>
+        <button class="nav-item" data-page="clients"><span>◉</span>Clients</button>
+        <button class="nav-item" data-page="staff"><span>◎</span>Staff</button>
+        <button class="nav-item" data-page="family"><span>◇</span>Family portal</button>
+        <p class="nav-section">Care delivery</p>
+        <button class="nav-item" data-page="care"><span>▤</span>Care plans</button>
+        <button class="nav-item" data-page="medication"><span>✚</span>Medication</button>
+        <button class="nav-item" data-page="visits"><span>◷</span>Visits</button>
+        <p class="nav-section">Operations</p>
+        <button class="nav-item" data-page="rota"><span>▦</span>Rota</button>
+        <button class="nav-item" data-page="tasks"><span>✓</span>Tasks</button>
+        <button class="nav-item" data-page="incidents"><span>!</span>Incidents</button>
+        <button class="nav-item" data-page="finance"><span>£</span>Finance</button>
+        <button class="nav-item" data-page="reports"><span>▥</span>Reports</button>
+        <button class="nav-item" data-page="settings"><span>⚙</span>Settings</button>
       </nav>
-
-      <div class="sidebar-footer">
-        <span class="status-dot"></span> Development demonstration
-      </div>
+      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>Development</strong><small>CoreCare v0.2.0</small></div></div>
     </aside>
 
     <div class="workspace">
       <header class="topbar">
         <button id="menu-button" class="icon-button" aria-label="Open navigation" aria-expanded="false">☰</button>
-        <div>
-          <p id="page-kicker" class="eyebrow">Monday, 28 July 2026</p>
-          <h1 id="page-title">Good afternoon, Chris</h1>
-        </div>
-        <div class="user-menu">
-          <div class="avatar" aria-hidden="true">CW</div>
-          <div><strong>Chris Warman</strong><span>Organisation administrator</span></div>
-          <button id="sign-out" class="text-button">Sign out</button>
-        </div>
+        <div class="page-heading"><p id="page-kicker" class="eyebrow"></p><h1 id="page-title">Good afternoon, Chris</h1></div>
+        <div class="top-actions"><button class="quick-action">+ Quick add</button><button class="notification-button" aria-label="Notifications">●<span>3</span></button></div>
+        <div class="user-menu"><div class="avatar">CW</div><div><strong>Chris Warman</strong><span>Organisation administrator</span></div><button id="sign-out" class="text-button">Sign out</button></div>
       </header>
 
       <main id="main-content" tabindex="-1">
         <section id="dashboard-page" class="page active-page">
-          <div class="notice-banner">
-            <div>
-              <strong>Sprint 1 demonstration</strong>
-              <span>This version uses fictional information and does not store real care data.</span>
-            </div>
-            <span class="badge">Development</span>
-          </div>
-
+          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release uses fictional information while we build the permanent data system.</span></div><span class="badge">Sprint 2</span></div>
           <section class="metrics" aria-label="Key figures">
-            <article class="metric-card"><span>Active clients</span><strong>20</strong><small>2 awaiting review</small></article>
-            <article class="metric-card"><span>Care workers</span><strong>15</strong><small>13 available today</small></article>
-            <article class="metric-card"><span>Visits today</span><strong>46</strong><small>31 completed</small></article>
-            <article class="metric-card warning"><span>Open actions</span><strong>7</strong><small>2 high priority</small></article>
+            <article class="metric-card"><div class="metric-icon">◉</div><div><span>Active clients</span><strong>20</strong><small>2 reviews due</small></div><em>+2 this month</em></article>
+            <article class="metric-card"><div class="metric-icon">◎</div><div><span>Staff available</span><strong>13</strong><small>of 15 team members</small></div><em>87% available</em></article>
+            <article class="metric-card"><div class="metric-icon">◷</div><div><span>Visits today</span><strong>46</strong><small>31 completed</small></div><em>67% complete</em></article>
+            <article class="metric-card alert"><div class="metric-icon">!</div><div><span>Open actions</span><strong>7</strong><small>2 high priority</small></div><em>Needs attention</em></article>
           </section>
 
           <section class="content-grid">
             <article class="panel span-two">
-              <div class="panel-heading"><div><p class="eyebrow">Today</p><h2>Visit progress</h2></div><button class="secondary-button">View schedule</button></div>
-              <div class="progress-row"><div><strong>Completed</strong><span>31 visits</span></div><progress value="31" max="46">31 of 46</progress><strong>67%</strong></div>
+              <div class="panel-heading"><div><p class="eyebrow">Live operations</p><h2>Today's visit progress</h2></div><button class="secondary-button">Open rota</button></div>
+              <div class="progress-summary"><div><strong>31 of 46 visits completed</strong><span>15 visits remaining today</span></div><strong>67%</strong></div>
+              <progress value="31" max="46">31 of 46</progress>
               <div class="visit-list">
-                <div class="visit"><time>14:00</time><div><strong>Margaret Ellis</strong><span>Personal care · East Kirkby</span></div><span class="badge success">Completed</span></div>
-                <div class="visit"><time>15:00</time><div><strong>Arthur Bennett</strong><span>Medication and meal support · Spilsby</span></div><span class="badge">In progress</span></div>
-                <div class="visit"><time>16:30</time><div><strong>Jean Parker</strong><span>Wellbeing visit · Horncastle</span></div><span class="badge neutral">Scheduled</span></div>
+                <div class="visit"><time>14:00</time><div class="person-avatar">ME</div><div><strong>Margaret Ellis</strong><span>Personal care · East Kirkby</span></div><span class="badge success">Completed</span></div>
+                <div class="visit"><time>15:00</time><div class="person-avatar">AB</div><div><strong>Arthur Bennett</strong><span>Medication and meal support · Spilsby</span></div><span class="badge active">In progress</span></div>
+                <div class="visit"><time>16:30</time><div class="person-avatar">JP</div><div><strong>Jean Parker</strong><span>Wellbeing visit · Horncastle</span></div><span class="badge neutral">Scheduled</span></div>
               </div>
             </article>
 
-            <article class="panel">
-              <div class="panel-heading"><div><p class="eyebrow">Attention</p><h2>Priority actions</h2></div></div>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Attention</p><h2>Priority actions</h2></div><button class="icon-more">•••</button></div>
               <ul class="action-list">
-                <li><span class="priority high"></span><div><strong>Care plan review overdue</strong><span>Margaret Ellis · 2 days</span></div></li>
-                <li><span class="priority medium"></span><div><strong>DBS renewal due</strong><span>Helen Foster · 14 days</span></div></li>
-                <li><span class="priority medium"></span><div><strong>Medication audit</strong><span>East Kirkby branch</span></div></li>
+                <li><span class="priority high"></span><div><strong>Care plan review overdue</strong><span>Margaret Ellis · 2 days</span></div><b>›</b></li>
+                <li><span class="priority medium"></span><div><strong>DBS renewal due</strong><span>Helen Foster · 14 days</span></div><b>›</b></li>
+                <li><span class="priority medium"></span><div><strong>Medication audit</strong><span>East Kirkby branch</span></div><b>›</b></li>
               </ul>
             </article>
 
-            <article class="panel">
-              <div class="panel-heading"><div><p class="eyebrow">Quality</p><h2>Compliance overview</h2></div></div>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Quality</p><h2>Compliance score</h2></div><span class="trend">↑ 2.1%</span></div>
               <div class="ring" aria-label="94 percent compliant"><strong>94%</strong><span>Compliant</span></div>
-              <div class="key-row"><span>Training</span><strong>96%</strong></div>
-              <div class="key-row"><span>Care plan reviews</span><strong>91%</strong></div>
-              <div class="key-row"><span>Staff checks</span><strong>95%</strong></div>
+              <div class="key-row"><span>Training</span><strong>96%</strong></div><div class="key-row"><span>Care plan reviews</span><strong>91%</strong></div><div class="key-row"><span>Staff checks</span><strong>95%</strong></div>
             </article>
 
-            <article class="panel span-two">
-              <div class="panel-heading"><div><p class="eyebrow">Recent activity</p><h2>Operational updates</h2></div><button class="text-button">View audit history</button></div>
-              <div class="timeline">
-                <div><span>14:42</span><p><strong>Visit completed</strong> for Margaret Ellis by Helen Foster.</p></div>
-                <div><span>14:18</span><p><strong>Medication administered</strong> and recorded without exception.</p></div>
-                <div><span>13:55</span><p><strong>Care plan updated</strong> by Sarah Mitchell.</p></div>
-                <div><span>12:30</span><p><strong>New incident assigned</strong> to the registered manager.</p></div>
-              </div>
+            <article class="panel span-two"><div class="panel-heading"><div><p class="eyebrow">Recent activity</p><h2>Operational updates</h2></div><button class="text-button">View audit history</button></div>
+              <div class="timeline"><div><span>14:42</span><i class="timeline-dot"></i><p><strong>Visit completed</strong> for Margaret Ellis by Helen Foster.</p></div><div><span>14:18</span><i class="timeline-dot"></i><p><strong>Medication administered</strong> and recorded without exception.</p></div><div><span>13:55</span><i class="timeline-dot"></i><p><strong>Care plan updated</strong> by Sarah Mitchell.</p></div><div><span>12:30</span><i class="timeline-dot"></i><p><strong>New incident assigned</strong> to the registered manager.</p></div></div>
             </article>
           </section>
         </section>
 
         <section id="placeholder-page" class="page placeholder-page">
-          <p class="eyebrow">Coming in the next sprint</p>
-          <h2 id="placeholder-title">Module</h2>
-          <p id="placeholder-copy">This area is connected to the permanent navigation and will receive its working records and forms in future sprints.</p>
-          <button class="primary-button" data-return-dashboard>Return to dashboard</button>
+          <div class="placeholder-icon">CC</div><p class="eyebrow">CoreCare module</p><h2 id="placeholder-title">Module</h2><p id="placeholder-copy"></p><div class="module-status"><span></span>Planned for a future build</div><button class="primary-button compact" data-return-dashboard>Return to dashboard</button>
         </section>
       </main>
     </div>
   </div>
-
-  <script src="app.js" defer></script>
+  <script src="app.js"></script>
 </body>
 </html>
