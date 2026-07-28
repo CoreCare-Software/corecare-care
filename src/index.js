@@ -1,5 +1,5 @@
 /** CoreCare Cloudflare Worker — v0.5.0 client records */
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, sprint: "Sprint 6 — staff and live dashboard" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, sprint: "Sprint 7 — care planning and risks" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -34,6 +34,43 @@ export default {
           const id = decodeURIComponent(staffMatch[1]);
           if (request.method === "PUT") return updateStaff(request, env.DB, session, id);
           return methodNotAllowed(["PUT"]);
+        }
+        const clientCareMatch = url.pathname.match(/^\/api\/clients\/([^/]+)\/(care-plans|risks|documents)$/);
+        if (clientCareMatch) {
+          const clientId = decodeURIComponent(clientCareMatch[1]);
+          const module = clientCareMatch[2];
+          if (module === "care-plans") {
+            if (request.method === "GET") return listCarePlans(env.DB, session, clientId);
+            if (request.method === "POST") return createCarePlan(request, env.DB, session, clientId);
+          }
+          if (module === "risks") {
+            if (request.method === "GET") return listRisks(env.DB, session, clientId);
+            if (request.method === "POST") return createRisk(request, env.DB, session, clientId);
+          }
+          if (module === "documents") {
+            if (request.method === "GET") return listDocuments(env.DB, session, clientId);
+            if (request.method === "POST") return createDocument(request, env.DB, session, clientId);
+          }
+          return methodNotAllowed(["GET", "POST"]);
+        }
+        const carePlanMatch = url.pathname.match(/^\/api\/care-plans\/([^/]+)$/);
+        if (carePlanMatch) {
+          const id = decodeURIComponent(carePlanMatch[1]);
+          if (request.method === "PUT") return updateCarePlan(request, env.DB, session, id);
+          if (request.method === "DELETE") return archiveCarePlan(env.DB, session, id);
+          return methodNotAllowed(["PUT", "DELETE"]);
+        }
+        const riskMatch = url.pathname.match(/^\/api\/risks\/([^/]+)$/);
+        if (riskMatch) {
+          const id = decodeURIComponent(riskMatch[1]);
+          if (request.method === "PUT") return updateRisk(request, env.DB, session, id);
+          return methodNotAllowed(["PUT"]);
+        }
+        const documentMatch = url.pathname.match(/^\/api\/documents\/([^/]+)$/);
+        if (documentMatch) {
+          const id = decodeURIComponent(documentMatch[1]);
+          if (request.method === "DELETE") return archiveDocument(env.DB, session, id);
+          return methodNotAllowed(["DELETE"]);
         }
         if (url.pathname === "/api/clients") {
           if (request.method === "GET") return listClients(env.DB, session, url);
@@ -267,18 +304,23 @@ function toClient(row) {
 
 
 async function dashboardSummary(db, session) {
-  const [clients, staff, auditRows] = await Promise.all([
+  const [clients, staff, plans, risks, auditRows] = await Promise.all([
     db.prepare("SELECT status,risk,next_review FROM clients WHERE organisation_id=?").bind(session.organisation_id).all(),
     db.prepare("SELECT status,dbs_expiry,training_expiry FROM staff WHERE organisation_id=?").bind(session.organisation_id).all(),
+    db.prepare("SELECT status,review_date FROM care_plans WHERE organisation_id=?").bind(session.organisation_id).all(),
+    db.prepare("SELECT status,severity,review_date FROM risk_assessments WHERE organisation_id=?").bind(session.organisation_id).all(),
     db.prepare(`SELECT a.action,a.entity_type,a.created_at,u.display_name AS user_name FROM audit_log a LEFT JOIN users u ON u.id=a.user_id WHERE a.organisation_id=? ORDER BY a.created_at DESC LIMIT 6`).bind(session.organisation_id).all()
   ]);
   const today = new Date().toISOString().slice(0,10);
+  const in30 = new Date(Date.now()+30*86400000).toISOString().slice(0,10);
   const activeClients = clients.results.filter(x => x.status === "Active").length;
   const reviewsDue = clients.results.filter(x => x.status === "Active" && x.next_review && x.next_review < today).length;
   const highRisk = clients.results.filter(x => x.status === "Active" && x.risk === "High").length;
   const activeStaff = staff.results.filter(x => x.status === "Active").length;
   const complianceDue = staff.results.filter(x => x.status === "Active" && ((x.dbs_expiry && x.dbs_expiry < today) || (x.training_expiry && x.training_expiry < today))).length;
-  return json({ metrics: { activeClients, reviewsDue, highRisk, activeStaff, totalStaff: staff.results.length, complianceDue }, activity: auditRows.results });
+  const carePlansDue = plans.results.filter(x => x.status === "Active" && x.review_date && x.review_date <= in30).length;
+  const activeRisks = risks.results.filter(x => x.status === "Active" && x.severity === "High").length;
+  return json({ metrics: { activeClients, reviewsDue, highRisk, activeStaff, totalStaff: staff.results.length, complianceDue, carePlansDue, activeRisks }, activity: auditRows.results });
 }
 
 const STAFF_COLUMNS = `id,first_name,last_name,preferred_name,job_title,employment_type,phone,email,start_date,status,dbs_expiry,training_expiry,notes,created_at,updated_at`;
@@ -312,6 +354,50 @@ function validateStaff(input){
   return {values};
 }
 function toStaff(row){return {id:row.id,firstName:row.first_name,lastName:row.last_name,preferredName:row.preferred_name||"",jobTitle:row.job_title,employmentType:row.employment_type,phone:row.phone||"",email:row.email||"",startDate:row.start_date||"",status:row.status,dbsExpiry:row.dbs_expiry||"",trainingExpiry:row.training_expiry||"",notes:row.notes||"",createdAt:row.created_at,updatedAt:row.updated_at};}
+
+
+async function ensureClient(db, session, clientId) {
+  return db.prepare("SELECT id FROM clients WHERE id=? AND organisation_id=?").bind(clientId, session.organisation_id).first();
+}
+function carePlanInput(input) {
+  const keys=["title","status","effectiveDate","reviewDate","authorName","personalDetails","medicalConditions","communication","mobility","nutritionHydration","medicationSupport","continence","skinIntegrity","mentalCapacity","risks","desiredOutcomes"];
+  const v={}; for(const k of keys)v[k]=clean(input[k]);
+  if(!v.title || !v.reviewDate) return {error:"Enter a care-plan title and review date."};
+  if(!["Draft","Active","Archived"].includes(v.status)) v.status="Draft";
+  return {v};
+}
+async function listCarePlans(db, session, clientId){
+  if(!await ensureClient(db,session,clientId)) return json({error:{code:"CLIENT_NOT_FOUND",message:"Client not found."}},404);
+  const r=await db.prepare("SELECT * FROM care_plans WHERE organisation_id=? AND client_id=? ORDER BY CASE status WHEN 'Active' THEN 0 WHEN 'Draft' THEN 1 ELSE 2 END, review_date").bind(session.organisation_id,clientId).all();
+  return json({carePlans:r.results.map(toCarePlan)});
+}
+async function createCarePlan(request,db,session,clientId){
+  if(!hasRole(session,["owner","manager","carer"])) return forbidden();
+  if(!await ensureClient(db,session,clientId)) return json({error:{code:"CLIENT_NOT_FOUND",message:"Client not found."}},404);
+  const parsed=carePlanInput(await readJson(request)); if(parsed.error)return json({error:{code:"VALIDATION_ERROR",message:parsed.error}},400); const v=parsed.v,id=crypto.randomUUID();
+  await db.batch([db.prepare(`INSERT INTO care_plans (id,organisation_id,client_id,title,status,effective_date,review_date,author_name,personal_details,medical_conditions,communication,mobility,nutrition_hydration,medication_support,continence,skin_integrity,mental_capacity,risks,desired_outcomes,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,clientId,v.title,v.status,v.effectiveDate||null,v.reviewDate,v.authorName,v.personalDetails,v.medicalConditions,v.communication,v.mobility,v.nutritionHydration,v.medicationSupport,v.continence,v.skinIntegrity,v.mentalCapacity,v.risks,v.desiredOutcomes,session.user_id),auditStatement(db,session.organisation_id,session.user_id,"care_plan.created","care_plan",id,{clientId,title:v.title,status:v.status})]);
+  const row=await db.prepare("SELECT * FROM care_plans WHERE id=?").bind(id).first(); return json({carePlan:toCarePlan(row)},201);
+}
+async function updateCarePlan(request,db,session,id){
+  if(!hasRole(session,["owner","manager","carer"])) return forbidden(); const existing=await db.prepare("SELECT * FROM care_plans WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).first(); if(!existing)return json({error:{code:"NOT_FOUND",message:"Care plan not found."}},404);
+  const parsed=carePlanInput(await readJson(request)); if(parsed.error)return json({error:{code:"VALIDATION_ERROR",message:parsed.error}},400); const v=parsed.v,next=Number(existing.version||1)+1;
+  await db.batch([db.prepare("INSERT INTO care_plan_versions (id,organisation_id,care_plan_id,version,snapshot_json,created_by) VALUES (?,?,?,?,?,?)").bind(crypto.randomUUID(),session.organisation_id,id,existing.version||1,JSON.stringify(toCarePlan(existing)),session.user_id),db.prepare(`UPDATE care_plans SET title=?,status=?,version=?,effective_date=?,review_date=?,author_name=?,personal_details=?,medical_conditions=?,communication=?,mobility=?,nutrition_hydration=?,medication_support=?,continence=?,skin_integrity=?,mental_capacity=?,risks=?,desired_outcomes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(v.title,v.status,next,v.effectiveDate||null,v.reviewDate,v.authorName,v.personalDetails,v.medicalConditions,v.communication,v.mobility,v.nutritionHydration,v.medicationSupport,v.continence,v.skinIntegrity,v.mentalCapacity,v.risks,v.desiredOutcomes,id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,"care_plan.updated","care_plan",id,{version:next,status:v.status})]);
+  return json({carePlan:toCarePlan(await db.prepare("SELECT * FROM care_plans WHERE id=?").bind(id).first())});
+}
+async function archiveCarePlan(db,session,id){if(!hasRole(session,["owner","manager"]))return forbidden();const r=await db.prepare("UPDATE care_plans SET status='Archived',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).run();if(!r.meta.changes)return json({error:{code:"NOT_FOUND",message:"Care plan not found."}},404);await audit(db,session.organisation_id,session.user_id,"care_plan.archived","care_plan",id,{});return json({ok:true});}
+function toCarePlan(r){return {id:r.id,clientId:r.client_id,title:r.title,status:r.status,version:r.version,effectiveDate:r.effective_date||"",reviewDate:r.review_date,authorName:r.author_name||"",personalDetails:r.personal_details||"",medicalConditions:r.medical_conditions||"",communication:r.communication||"",mobility:r.mobility||"",nutritionHydration:r.nutrition_hydration||"",medicationSupport:r.medication_support||"",continence:r.continence||"",skinIntegrity:r.skin_integrity||"",mentalCapacity:r.mental_capacity||"",risks:r.risks||"",desiredOutcomes:r.desired_outcomes||"",createdAt:r.created_at,updatedAt:r.updated_at};}
+
+function riskInput(input){const v={category:clean(input.category)||"General Risk",title:clean(input.title),severity:clean(input.severity)||"Medium",likelihood:clean(input.likelihood)||"Possible",controls:clean(input.controls),actions:clean(input.actions),status:clean(input.status)||"Active",reviewDate:clean(input.reviewDate)};if(!v.title||!v.reviewDate)return {error:"Enter a risk title and review date."};return {v};}
+async function listRisks(db,session,clientId){if(!await ensureClient(db,session,clientId))return json({error:{code:"CLIENT_NOT_FOUND",message:"Client not found."}},404);const r=await db.prepare("SELECT * FROM risk_assessments WHERE organisation_id=? AND client_id=? ORDER BY CASE severity WHEN 'High' THEN 0 WHEN 'Medium' THEN 1 ELSE 2 END, review_date").bind(session.organisation_id,clientId).all();return json({risks:r.results.map(toRisk)});}
+async function createRisk(request,db,session,clientId){if(!hasRole(session,["owner","manager","carer"]))return forbidden();const p=riskInput(await readJson(request));if(p.error)return json({error:{code:"VALIDATION_ERROR",message:p.error}},400);const v=p.v,id=crypto.randomUUID();await db.batch([db.prepare("INSERT INTO risk_assessments (id,organisation_id,client_id,category,title,severity,likelihood,controls,actions,status,review_date,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").bind(id,session.organisation_id,clientId,v.category,v.title,v.severity,v.likelihood,v.controls,v.actions,v.status,v.reviewDate,session.user_id),auditStatement(db,session.organisation_id,session.user_id,"risk.created","risk",id,{clientId,title:v.title,severity:v.severity})]);return json({risk:toRisk(await db.prepare("SELECT * FROM risk_assessments WHERE id=?").bind(id).first())},201);}
+async function updateRisk(request,db,session,id){if(!hasRole(session,["owner","manager","carer"]))return forbidden();const p=riskInput(await readJson(request));if(p.error)return json({error:{code:"VALIDATION_ERROR",message:p.error}},400);const v=p.v,r=await db.prepare("UPDATE risk_assessments SET category=?,title=?,severity=?,likelihood=?,controls=?,actions=?,status=?,review_date=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(v.category,v.title,v.severity,v.likelihood,v.controls,v.actions,v.status,v.reviewDate,id,session.organisation_id).run();if(!r.meta.changes)return json({error:{code:"NOT_FOUND",message:"Risk assessment not found."}},404);await audit(db,session.organisation_id,session.user_id,"risk.updated","risk",id,{severity:v.severity,status:v.status});return json({risk:toRisk(await db.prepare("SELECT * FROM risk_assessments WHERE id=?").bind(id).first())});}
+function toRisk(r){return {id:r.id,clientId:r.client_id,category:r.category,title:r.title,severity:r.severity,likelihood:r.likelihood,controls:r.controls||"",actions:r.actions||"",status:r.status,reviewDate:r.review_date,createdAt:r.created_at,updatedAt:r.updated_at};}
+
+function documentInput(input){const v={name:clean(input.name),documentType:clean(input.documentType)||"Other",documentDate:clean(input.documentDate),reviewDate:clean(input.reviewDate),referenceUrl:clean(input.referenceUrl),notes:clean(input.notes),status:clean(input.status)||"Current"};if(!v.name)return {error:"Enter a document name."};return {v};}
+async function listDocuments(db,session,clientId){if(!await ensureClient(db,session,clientId))return json({error:{code:"CLIENT_NOT_FOUND",message:"Client not found."}},404);const r=await db.prepare("SELECT * FROM client_documents WHERE organisation_id=? AND client_id=? ORDER BY created_at DESC").bind(session.organisation_id,clientId).all();return json({documents:r.results.map(toDocument)});}
+async function createDocument(request,db,session,clientId){if(!hasRole(session,["owner","manager","carer"]))return forbidden();const p=documentInput(await readJson(request));if(p.error)return json({error:{code:"VALIDATION_ERROR",message:p.error}},400);const v=p.v,id=crypto.randomUUID();await db.batch([db.prepare("INSERT INTO client_documents (id,organisation_id,client_id,name,document_type,document_date,review_date,reference_url,notes,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)").bind(id,session.organisation_id,clientId,v.name,v.documentType,v.documentDate||null,v.reviewDate||null,v.referenceUrl,v.notes,v.status,session.user_id),auditStatement(db,session.organisation_id,session.user_id,"document.added","document",id,{clientId,name:v.name,type:v.documentType})]);return json({document:toDocument(await db.prepare("SELECT * FROM client_documents WHERE id=?").bind(id).first())},201);}
+async function archiveDocument(db,session,id){if(!hasRole(session,["owner","manager"]))return forbidden();const r=await db.prepare("UPDATE client_documents SET status='Archived',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).run();if(!r.meta.changes)return json({error:{code:"NOT_FOUND",message:"Document not found."}},404);await audit(db,session.organisation_id,session.user_id,"document.archived","document",id,{});return json({ok:true});}
+function toDocument(r){return {id:r.id,clientId:r.client_id,name:r.name,documentType:r.document_type,documentDate:r.document_date||"",reviewDate:r.review_date||"",referenceUrl:r.reference_url||"",notes:r.notes||"",status:r.status,createdAt:r.created_at};}
 
 async function listUsers(db, session) {
   if (!hasRole(session, ["owner", "manager", "auditor"])) return forbidden();

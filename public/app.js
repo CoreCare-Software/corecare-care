@@ -24,6 +24,9 @@ const staffDialog = $('#staff-dialog');
 const staffForm = $('#staff-form');
 const quickAddDialog = $('#quick-add-dialog');
 let staff = [];
+let carePlans = [];
+let clientRisks = [];
+let clientDocuments = [];
 
 const labels = {
   family: ['Family portal', 'Secure family access, updates and messaging will be introduced in a later milestone.'],
@@ -193,6 +196,8 @@ async function loadDashboard() {
   $('#dash-active-staff').textContent = m.activeStaff ?? 0;
   $('#dash-total-staff').textContent = m.totalStaff ?? 0;
   $('#dash-compliance-due').textContent = m.complianceDue ?? 0;
+  $('#dash-care-plans-due').textContent = m.carePlansDue ?? 0;
+  $('#dash-active-risks').textContent = m.activeRisks ?? 0;
   const activity = payload.activity || [];
   $('#dashboard-activity').innerHTML = activity.length ? activity.map(event => {
     const when = new Date(event.created_at);
@@ -332,6 +337,8 @@ async function openClientProfile(id) {
   try {
     const payload = await api(`/api/clients/${encodeURIComponent(id)}`);
     renderClientProfile(payload.client);
+    await loadClientWorkspace(id);
+    showClientTab('overview');
     activatePage('#client-profile-page');
     pageKicker.textContent = 'Client record';
     pageTitle.textContent = clientDisplayName(payload.client);
@@ -384,6 +391,32 @@ function renderClientProfile(client) {
   ].join('');
   $('#archive-profile-client').hidden = client.status === 'Archived' || !['owner', 'manager'].includes(currentUser?.role);
 }
+
+
+function showClientTab(name){
+  $$('[data-client-tab]').forEach(b=>b.classList.toggle('active',b.dataset.clientTab===name));
+  $$('.client-tab-panel').forEach(p=>p.classList.remove('active-tab-panel'));
+  $(`#client-tab-${name}`)?.classList.add('active-tab-panel');
+}
+async function loadClientWorkspace(id){
+  const encoded=encodeURIComponent(id);
+  const [plans,risks,documents]=await Promise.all([api(`/api/clients/${encoded}/care-plans`),api(`/api/clients/${encoded}/risks`),api(`/api/clients/${encoded}/documents`)]);
+  carePlans=plans.carePlans||[]; clientRisks=risks.risks||[]; clientDocuments=documents.documents||[];
+  renderCarePlans(); renderRisks(); renderDocuments();
+}
+function dueClass(date){return date && new Date(`${date}T23:59:59`)<new Date()?'date-overdue':'';}
+function renderCarePlans(){
+ const el=$('#care-plan-list'); if(!el)return;
+ el.innerHTML=carePlans.length?carePlans.map(p=>`<article class="record-card"><header><div><p class="eyebrow">Version ${p.version}</p><h3>${escapeHtml(p.title)}</h3></div><span class="badge ${p.status==='Active'?'success':p.status==='Draft'?'active':'neutral'}">${escapeHtml(p.status)}</span></header><div class="record-meta"><span>Review: <strong class="${dueClass(p.reviewDate)}">${formatDate(p.reviewDate)}</strong></span><span>Author: ${escapeHtml(p.authorName||'Not recorded')}</span></div><p>${escapeHtml(p.desiredOutcomes||p.personalDetails||'No plan summary recorded.')}</p><div class="record-actions"><button class="row-action" data-edit-plan="${escapeHtml(p.id)}">Open / edit</button></div></article>`).join(''):'<div class="empty-records">No care plans have been created for this client.</div>';
+ $$('[data-edit-plan]').forEach(b=>b.addEventListener('click',()=>openCarePlanDialog(b.dataset.editPlan)));
+}
+function openCarePlanDialog(id=''){const form=$('#care-plan-form');form.reset();form.elements.id.value=id;$('#care-plan-error').hidden=true;const item=carePlans.find(x=>x.id===id);$('#care-plan-dialog-title').textContent=id?'Edit care plan':'Add care plan';if(item)Object.entries(item).forEach(([k,v])=>{const f=form.elements.namedItem(k);if(f)f.value=v??'';});$('#care-plan-dialog').showModal();}
+async function saveCarePlan(e){e.preventDefault();const form=e.currentTarget,data=Object.fromEntries(new FormData(form)),error=$('#care-plan-error');error.hidden=true;try{await api(data.id?`/api/care-plans/${encodeURIComponent(data.id)}`:`/api/clients/${encodeURIComponent(selectedClientId)}/care-plans`,{method:data.id?'PUT':'POST',body:JSON.stringify(data)});$('#care-plan-dialog').close();await loadClientWorkspace(selectedClientId);await loadDashboard();}catch(x){error.textContent=x.message;error.hidden=false;}}
+function renderRisks(){const el=$('#risk-list');if(!el)return;el.innerHTML=clientRisks.length?clientRisks.map(r=>`<article class="record-card risk-${r.severity.toLowerCase()}"><header><div><p class="eyebrow">${escapeHtml(r.category)}</p><h3>${escapeHtml(r.title)}</h3></div><span class="badge ${r.severity==='High'?'danger':r.severity==='Medium'?'active':'success'}">${escapeHtml(r.severity)}</span></header><div class="record-meta"><span>${escapeHtml(r.likelihood)} likelihood</span><span class="${dueClass(r.reviewDate)}">Review ${formatDate(r.reviewDate)}</span><span>${escapeHtml(r.status)}</span></div><p><strong>Controls:</strong> ${escapeHtml(r.controls||'None recorded')}</p><div class="record-actions"><button class="row-action" data-edit-risk="${escapeHtml(r.id)}">Edit</button></div></article>`).join(''):'<div class="empty-records">No risk assessments have been recorded.</div>';$$('[data-edit-risk]').forEach(b=>b.addEventListener('click',()=>openRiskDialog(b.dataset.editRisk)));}
+function openRiskDialog(id=''){const form=$('#risk-form');form.reset();form.elements.id.value=id;$('#risk-error').hidden=true;const item=clientRisks.find(x=>x.id===id);$('#risk-dialog-title').textContent=id?'Edit risk':'Add risk';if(item)Object.entries(item).forEach(([k,v])=>{const f=form.elements.namedItem(k);if(f)f.value=v??'';});$('#risk-dialog').showModal();}
+async function saveRisk(e){e.preventDefault();const data=Object.fromEntries(new FormData(e.currentTarget)),error=$('#risk-error');error.hidden=true;try{await api(data.id?`/api/risks/${encodeURIComponent(data.id)}`:`/api/clients/${encodeURIComponent(selectedClientId)}/risks`,{method:data.id?'PUT':'POST',body:JSON.stringify(data)});$('#risk-dialog').close();await loadClientWorkspace(selectedClientId);await loadDashboard();}catch(x){error.textContent=x.message;error.hidden=false;}}
+function renderDocuments(){const el=$('#document-list');if(!el)return;el.innerHTML=clientDocuments.length?clientDocuments.map(d=>`<article class="record-card"><header><div><p class="eyebrow">${escapeHtml(d.documentType)}</p><h3>${escapeHtml(d.name)}</h3></div><span class="badge ${d.status==='Current'?'success':'neutral'}">${escapeHtml(d.status)}</span></header><div class="record-meta"><span>Dated ${formatDate(d.documentDate)}</span>${d.reviewDate?`<span class="${dueClass(d.reviewDate)}">Review ${formatDate(d.reviewDate)}</span>`:''}</div><p>${escapeHtml(d.notes||'No notes recorded.')}</p><div class="record-actions">${d.referenceUrl?`<a class="row-action" href="${escapeHtml(d.referenceUrl)}" target="_blank" rel="noopener">Open reference</a>`:''}${['owner','manager'].includes(currentUser?.role)?`<button class="row-action" data-archive-document="${escapeHtml(d.id)}">Archive</button>`:''}</div></article>`).join(''):'<div class="empty-records">No document records have been added.</div>';$$('[data-archive-document]').forEach(b=>b.addEventListener('click',async()=>{if(confirm('Archive this document record?')){await api(`/api/documents/${encodeURIComponent(b.dataset.archiveDocument)}`,{method:'DELETE'});await loadClientWorkspace(selectedClientId);}}));}
+async function saveDocument(e){e.preventDefault();const data=Object.fromEntries(new FormData(e.currentTarget)),error=$('#document-error');error.hidden=true;try{await api(`/api/clients/${encodeURIComponent(selectedClientId)}/documents`,{method:'POST',body:JSON.stringify(data)});$('#document-dialog').close();e.currentTarget.reset();await loadClientWorkspace(selectedClientId);}catch(x){error.textContent=x.message;error.hidden=false;}}
 
 async function archiveSelectedClient() {
   const client = clients.find(item => item.id === selectedClientId);
@@ -471,6 +504,20 @@ clientForm.addEventListener('submit', saveClient);
 $('#back-to-clients').addEventListener('click', () => $('[data-page="clients"]').click());
 $('#edit-profile-client').addEventListener('click', () => openClientDialog(selectedClientId));
 $('#archive-profile-client').addEventListener('click', archiveSelectedClient);
+
+$$('[data-client-tab]').forEach(button => button.addEventListener('click', () => showClientTab(button.dataset.clientTab)));
+$('#add-care-plan').addEventListener('click', () => openCarePlanDialog());
+$('#close-care-plan-dialog').addEventListener('click', () => $('#care-plan-dialog').close());
+$('#cancel-care-plan').addEventListener('click', () => $('#care-plan-dialog').close());
+$('#care-plan-form').addEventListener('submit', saveCarePlan);
+$('#add-risk').addEventListener('click', () => openRiskDialog());
+$('#close-risk-dialog').addEventListener('click', () => $('#risk-dialog').close());
+$('#cancel-risk').addEventListener('click', () => $('#risk-dialog').close());
+$('#risk-form').addEventListener('submit', saveRisk);
+$('#add-document').addEventListener('click', () => $('#document-dialog').showModal());
+$('#close-document-dialog').addEventListener('click', () => $('#document-dialog').close());
+$('#cancel-document').addEventListener('click', () => $('#document-dialog').close());
+$('#document-form').addEventListener('submit', saveDocument);
 
 function openPasswordDialog(required = false) {
   passwordForm.reset();
