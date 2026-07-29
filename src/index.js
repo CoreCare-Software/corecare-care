@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.13.1 — Rota-First Recurring Visits */
-const VERSION = "1.13.1";
+/** CoreCare Enterprise 1.13.2 — Recurring Visit Workflow Hotfix */
+const VERSION = "1.13.2";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.13.1 — Rota-First Recurring Visits" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.13.2 — Recurring Visit Workflow Hotfix" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -494,7 +494,14 @@ async function rotaBoard(db, session, url) {
   const from=clean(url.searchParams.get('from'))||new Date().toISOString().slice(0,10);
   const to=clean(url.searchParams.get('to'))||new Date(Date.now()+6*86400000).toISOString().slice(0,10);
   const [visits,clients,staff]=await Promise.all([
-    db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,s.first_name||' '||s.last_name staff_name,(SELECT rt.status FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_status
+    db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,s.first_name||' '||s.last_name staff_name,
+      (SELECT rt.status FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_status,
+      (SELECT GROUP_CONCAT(rt.day_of_week) FROM rota_visit_templates rt WHERE rt.organisation_id=v.organisation_id AND rt.series_id=v.recurrence_group_id) recurrence_days,
+      (SELECT MAX(rt.interval_weeks) FROM rota_visit_templates rt WHERE rt.organisation_id=v.organisation_id AND rt.series_id=v.recurrence_group_id) recurrence_interval_weeks,
+      (SELECT MIN(rt.effective_from) FROM rota_visit_templates rt WHERE rt.organisation_id=v.organisation_id AND rt.series_id=v.recurrence_group_id) recurrence_effective_from,
+      (SELECT MAX(rt.effective_to) FROM rota_visit_templates rt WHERE rt.organisation_id=v.organisation_id AND rt.series_id=v.recurrence_group_id) recurrence_effective_to,
+      (SELECT MAX(rt.end_after_occurrences) FROM rota_visit_templates rt WHERE rt.organisation_id=v.organisation_id AND rt.series_id=v.recurrence_group_id) recurrence_end_after_occurrences,
+      CASE WHEN v.staff_id IS NOT NULL THEN 1 ELSE 0 END recurrence_keep_carer
       FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN staff s ON s.id=v.staff_id AND s.organisation_id=v.organisation_id
       WHERE v.organisation_id=? AND date(v.scheduled_start) BETWEEN date(?) AND date(?) AND v.rota_status!='cancelled'
       ORDER BY v.scheduled_start`).bind(org,from,to).all(),
