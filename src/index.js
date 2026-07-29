@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.13.0 — Intelligent Template & Recurrence Engine */
-const VERSION = "1.13.0";
+/** CoreCare Enterprise 1.13.1 — Rota-First Recurring Visits */
+const VERSION = "1.13.1";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.13.0 — Intelligent Template & Recurrence Engine" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.13.1 — Rota-First Recurring Visits" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -42,6 +42,7 @@ export default {
         const requirementMatch = url.pathname.match(/^\/api\/clients\/([^/]+)\/visit-requirements$/);
         if (requirementMatch && request.method === "GET") return listVisitRequirements(env.DB, session, decodeURIComponent(requirementMatch[1]));
         if (requirementMatch && request.method === "POST") return saveVisitRequirements(request, env.DB, session, decodeURIComponent(requirementMatch[1]));
+        if (/^\/api\/rota\/[^/]+\/recurrence$/.test(url.pathname) && request.method === "POST") return manageVisitRecurrence(request, env.DB, session, url.pathname.split("/")[3]);
         if (/^\/api\/rota\/[^/]+$/.test(url.pathname) && request.method === "PATCH") return updateRotaVisit(request, env, session, url.pathname.split("/").pop());
         if (/^\/api\/rota\/[^/]+\/cancel$/.test(url.pathname) && request.method === "POST") return cancelRotaVisit(request, env.DB, session, url.pathname.split("/")[3]);
         if (url.pathname === "/api/visits/board" && request.method === "GET") return visitsBoard(env.DB, session);
@@ -493,7 +494,7 @@ async function rotaBoard(db, session, url) {
   const from=clean(url.searchParams.get('from'))||new Date().toISOString().slice(0,10);
   const to=clean(url.searchParams.get('to'))||new Date(Date.now()+6*86400000).toISOString().slice(0,10);
   const [visits,clients,staff]=await Promise.all([
-    db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,s.first_name||' '||s.last_name staff_name
+    db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,s.first_name||' '||s.last_name staff_name,(SELECT rt.status FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_status
       FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN staff s ON s.id=v.staff_id AND s.organisation_id=v.organisation_id
       WHERE v.organisation_id=? AND date(v.scheduled_start) BETWEEN date(?) AND date(?) AND v.rota_status!='cancelled'
       ORDER BY v.scheduled_start`).bind(org,from,to).all(),
@@ -547,7 +548,7 @@ async function generateRotaFromTemplates(request,env,session){
   const i=await readJson(request),weekValue=clean(i.weekCommencing);if(!weekValue)return json({error:{code:'VALIDATION_ERROR',message:'Select a week to generate.'}},400);const week=mondayOf(weekValue),weekEnd=new Date(week);weekEnd.setDate(weekEnd.getDate()+7);const mode=['fill','regenerate'].includes(clean(i.mode))?clean(i.mode):'fill';
   if(mode==='regenerate')await db.prepare(`DELETE FROM care_visits WHERE organisation_id=? AND rota_source='template' AND status='scheduled' AND datetime(scheduled_start)>=datetime(?) AND datetime(scheduled_start)<datetime(?) AND COALESCE(manually_overridden,0)=0`).bind(session.organisation_id,week.toISOString(),weekEnd.toISOString()).run();
   const templates=(await db.prepare(`SELECT * FROM rota_visit_templates WHERE organisation_id=? AND status='active' ORDER BY day_of_week,preferred_time`).bind(session.organisation_id).all()).results||[];let created=0,skipped=0,unallocated=0;const warnings=[],statements=[];
-  for(const t of templates){const day=new Date(week);day.setDate(day.getDate()+Number(t.day_of_week)-1);const date=day.toISOString().slice(0,10);if(t.effective_from&&date<t.effective_from){skipped++;continue}if(t.effective_to&&date>t.effective_to){skipped++;continue}
+  for(const t of templates){const day=new Date(week);day.setDate(day.getDate()+Number(t.day_of_week)-1);const date=day.toISOString().slice(0,10);if(t.effective_from&&date<t.effective_from){skipped++;continue}if(t.effective_to&&date>t.effective_to){skipped++;continue}const interval=Math.max(1,Number(t.interval_weeks)||1);if(interval>1&&t.effective_from){const origin=mondayOf(t.effective_from),weeks=Math.floor((week-origin)/(7*86400000));if(weeks<0||weeks%interval!==0){skipped++;continue}}if(Number(t.end_after_occurrences)>0){const made=await db.prepare(`SELECT COUNT(*) count FROM care_visits WHERE organisation_id=? AND template_id=? AND status!='cancelled'`).bind(session.organisation_id,t.id).first();if(Number(made?.count||0)>=Number(t.end_after_occurrences)){skipped++;continue}}
     const start=new Date(`${date}T${t.preferred_time}:00`),end=new Date(start.getTime()+Number(t.duration_minutes)*60000);
     const duplicate=await db.prepare(`SELECT id FROM care_visits WHERE organisation_id=? AND template_id=? AND date(scheduled_start)=date(?) AND status!='cancelled' LIMIT 1`).bind(session.organisation_id,t.id,start.toISOString()).first();if(duplicate){skipped++;continue}
     const ex=await db.prepare(`SELECT * FROM rota_template_exceptions WHERE organisation_id=? AND (template_id=? OR client_id=? OR staff_id IN (?,?)) AND datetime(start_at)<=datetime(?) AND datetime(COALESCE(end_at,start_at,'9999-12-31'))>=datetime(?) ORDER BY created_at DESC LIMIT 1`).bind(session.organisation_id,t.id,t.client_id,t.preferred_staff_id||'',t.backup_staff_id||'',end.toISOString(),start.toISOString()).first();if(ex&&ex.action==='exclude'){skipped++;warnings.push(`${t.name}: skipped due to ${ex.exception_type}`);continue}
@@ -574,6 +575,33 @@ async function createRotaVisit(request,env,session){
   occurrences.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_published','visit',id,{clientId,staffId,recurrence,count}));
   await db.batch(occurrences);return json({ok:true,id,created:count});
 }
+
+async function manageVisitRecurrence(request,db,session,id){
+  if(!await userHasPermission(db,session,'rota.templates.manage')&&!hasRole(session,['owner','manager','scheduler','organisation_owner','organisation_admin','branch_manager']))return forbidden();
+  const visit=await db.prepare(`SELECT * FROM care_visits WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id).first();if(!visit)return notFound('Rota visit');
+  const i=await readJson(request),action=clean(i.action)||'create';
+  const existing=visit.template_id?await db.prepare(`SELECT * FROM rota_visit_templates WHERE id=? AND organisation_id=?`).bind(visit.template_id,session.organisation_id).first():null;
+  const seriesId=existing?.series_id||clean(i.seriesId)||crypto.randomUUID();
+  if(action==='pause'||action==='resume'){
+    await db.batch([db.prepare(`UPDATE rota_visit_templates SET status=?,paused_at=?,updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND series_id=?`).bind(action==='pause'?'paused':'active',action==='pause'?new Date().toISOString():null,session.organisation_id,seriesId),auditStatement(db,session.organisation_id,session.user_id,`rota.recurrence_${action}`,'rota_recurrence',seriesId,{visitId:id})]);return json({ok:true,action,seriesId});
+  }
+  if(action==='stop'){
+    const stopDate=clean(i.effectiveTo)||new Date(visit.scheduled_start).toISOString().slice(0,10);
+    await db.batch([db.prepare(`UPDATE rota_visit_templates SET effective_to=?,status='ended',updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND series_id=?`).bind(stopDate,session.organisation_id,seriesId),auditStatement(db,session.organisation_id,session.user_id,'rota.recurrence_stopped','rota_recurrence',seriesId,{visitId:id,stopDate})]);return json({ok:true,action,seriesId});
+  }
+  const start=new Date(visit.scheduled_start),duration=Math.max(15,Math.round(((visit.scheduled_end?new Date(visit.scheduled_end):new Date(start.getTime()+30*60000))-start)/60000));
+  const days=Array.isArray(i.days)&&i.days.length?[...new Set(i.days.map(Number).filter(x=>x>=1&&x<=7))]:[((start.getDay()+6)%7)+1];
+  const interval=Math.min(52,Math.max(1,Number(i.intervalWeeks)||1)),effectiveFrom=clean(i.effectiveFrom)||start.toISOString().slice(0,10),effectiveTo=clean(i.effectiveTo)||null,endAfter=Math.max(0,Number(i.endAfterOccurrences)||0);
+  const keepCarer=i.keepCarer!==false,staffId=keepCarer?visit.staff_id:null,name=clean(i.name)||`${visit.visit_type||'Care visit'} recurring visit`;
+  const statements=[];
+  if(action==='update'&&seriesId)statements.push(db.prepare(`DELETE FROM rota_visit_templates WHERE organisation_id=? AND series_id=?`).bind(session.organisation_id,seriesId));
+  let firstTemplateId=null;
+  for(const day of days){const tid=crypto.randomUUID();if(!firstTemplateId)firstTemplateId=tid;statements.push(db.prepare(`INSERT INTO rota_visit_templates(id,organisation_id,client_id,name,visit_type,day_of_week,preferred_time,duration_minutes,carers_required,preferred_staff_id,backup_staff_id,window_minutes,effective_from,effective_to,status,notes,created_by,series_id,interval_weeks,end_after_occurrences,paused_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(tid,session.organisation_id,visit.client_id,name,visit.visit_type||'Care visit',day,start.toISOString().slice(11,16),duration,1,staffId,null,15,effectiveFrom,effectiveTo,'active',clean(i.notes)||visit.planner_notes||'',session.user_id,seriesId,interval,endAfter,null));}
+  statements.push(db.prepare(`UPDATE care_visits SET template_id=?,recurrence_group_id=?,recurrence_pattern=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(firstTemplateId,seriesId,interval===1?'weekly':`every_${interval}_weeks`,id,session.organisation_id));
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,action==='update'?'rota.recurrence_updated':'rota.recurrence_created','rota_recurrence',seriesId,{visitId:id,days,interval,effectiveFrom,effectiveTo,endAfter,staffId}));
+  await db.batch(statements);return json({ok:true,action,seriesId,templateId:firstTemplateId,templatesCreated:days.length});
+}
+
 async function updateRotaVisit(request,env,session,id){
   const db=env.DB;
   const i=await readJson(request),row=await db.prepare(`SELECT * FROM care_visits WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id).first();if(!row)return notFound('Rota visit');
