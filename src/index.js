@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.3.3 — Workspace UX Polish */
-const VERSION = "1.3.3";
+/** CoreCare Enterprise 1.4.0 — Live Operations Board */
+const VERSION = "1.4.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.3.3 — Workspace UX Polish" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.4.0 — Live Operations Board" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -24,6 +24,16 @@ export default {
         if (url.pathname === "/api/auth/change-password" && request.method === "POST") return changePassword(request, env.DB, session);
         if (url.pathname === "/api/development/status") return developmentStatus(env, session);
         if (url.pathname === "/api/dashboard" && request.method === "GET") return dashboardSummary(env.DB, session);
+        if (url.pathname === "/api/operations/board" && request.method === "GET") return operationsBoard(env.DB, session);
+        if (url.pathname === "/api/operations/tasks" && request.method === "POST") return createOperationsTask(request, env.DB, session);
+        const operationsTaskMatch = url.pathname.match(/^\/api\/operations\/tasks\/([^/]+)\/(complete|escalate)$/);
+        if (operationsTaskMatch && request.method === "POST") return updateOperationsTask(env.DB, session, decodeURIComponent(operationsTaskMatch[1]), operationsTaskMatch[2]);
+        if (url.pathname === "/api/operations/incidents" && request.method === "POST") return createOperationsIncident(request, env.DB, session);
+        const operationsIncidentMatch = url.pathname.match(/^\/api\/operations\/incidents\/([^/]+)\/review$/);
+        if (operationsIncidentMatch && request.method === "POST") return reviewOperationsIncident(request, env.DB, session, decodeURIComponent(operationsIncidentMatch[1]));
+        if (url.pathname === "/api/operations/handovers" && request.method === "POST") return createShiftHandover(request, env.DB, session);
+        const handoverAckMatch = url.pathname.match(/^\/api\/operations\/handovers\/([^/]+)\/acknowledge$/);
+        if (handoverAckMatch && request.method === "POST") return acknowledgeShiftHandover(env.DB, session, decodeURIComponent(handoverAckMatch[1]));
         if (url.pathname === "/api/care-plans" && request.method === "GET") return listAllCarePlans(env.DB, session, url);
         if (url.pathname === "/api/platform/dashboard" && request.method === "GET") return platformDashboard(env.DB, session);
         if (url.pathname === "/api/platform/revenue" && request.method === "GET") return platformRevenue(env.DB, session);
@@ -379,6 +389,30 @@ function toClient(row) {
   };
 }
 
+
+async function operationsBoard(db, session) {
+  const org=session.organisation_id;
+  const [tasks,incidents,handovers,clients,staff,careDue,riskDue]=await Promise.all([
+    db.prepare(`SELECT t.*,c.first_name||' '||c.last_name client_name,s.first_name||' '||s.last_name staff_name FROM operations_tasks t LEFT JOIN clients c ON c.id=t.client_id LEFT JOIN staff s ON s.id=t.assigned_staff_id WHERE t.organisation_id=? ORDER BY CASE t.status WHEN 'escalated' THEN 1 WHEN 'overdue' THEN 2 WHEN 'open' THEN 3 ELSE 4 END,COALESCE(t.due_at,t.created_at) LIMIT 100`).bind(org).all(),
+    db.prepare(`SELECT i.*,c.first_name||' '||c.last_name client_name FROM operations_incidents i LEFT JOIN clients c ON c.id=i.client_id WHERE i.organisation_id=? ORDER BY CASE i.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 ELSE 3 END,i.created_at DESC LIMIT 50`).bind(org).all(),
+    db.prepare(`SELECT h.*,u.display_name created_by_name FROM shift_handovers h LEFT JOIN users u ON u.id=h.created_by WHERE h.organisation_id=? ORDER BY h.created_at DESC LIMIT 20`).bind(org).all(),
+    db.prepare(`SELECT id,first_name,last_name,preferred_name FROM clients WHERE organisation_id=? AND archived_at IS NULL ORDER BY first_name,last_name`).bind(org).all(),
+    db.prepare(`SELECT id,first_name,last_name,preferred_name,job_title FROM staff WHERE organisation_id=? AND status='Active' ORDER BY first_name,last_name`).bind(org).all(),
+    db.prepare(`SELECT COUNT(*) count FROM care_plans WHERE organisation_id=? AND status='Active' AND date(review_date)<=date('now','+30 day')`).bind(org).first(),
+    db.prepare(`SELECT COUNT(*) count FROM risk_assessments WHERE organisation_id=? AND status='Active' AND date(review_date)<=date('now','+30 day')`).bind(org).first()
+  ]);
+  const taskRows=tasks.results||[], incidentRows=incidents.results||[];
+  const now=Date.now(); taskRows.forEach(t=>{if(t.status==='open'&&t.due_at&&new Date(t.due_at).getTime()<now)t.status='overdue'});
+  const stats={open:taskRows.filter(x=>x.status==='open').length,overdue:taskRows.filter(x=>x.status==='overdue').length,completed:taskRows.filter(x=>x.status==='completed').length,escalated:taskRows.filter(x=>x.status==='escalated').length,incidentsOpen:incidentRows.filter(x=>x.status!=='closed').length,incidentsHigh:incidentRows.filter(x=>['high','critical'].includes(x.severity)&&x.status!=='closed').length,handoversUnread:(handovers.results||[]).filter(x=>!x.acknowledged_at).length,careDue:careDue?.count||0,riskDue:riskDue?.count||0,activeStaff:(staff.results||[]).length,activeClients:(clients.results||[]).length};
+  const timeline=[...taskRows.slice(0,20).map(x=>({type:'task',title:x.title,detail:`${x.status}${x.client_name?' · '+x.client_name:''}`,created_at:x.updated_at||x.created_at})),...incidentRows.slice(0,20).map(x=>({type:'incident',title:x.title,detail:`${x.severity} · ${x.status}`,created_at:x.updated_at||x.created_at})),...(handovers.results||[]).slice(0,10).map(x=>({type:'handover',title:`${x.shift} handover`,detail:x.summary,created_at:x.created_at}))].sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).slice(0,25);
+  return json({stats,tasks:taskRows,incidents:incidentRows,handovers:handovers.results||[],clients:clients.results||[],staff:staff.results||[],timeline});
+}
+async function createOperationsTask(request,db,session){const i=await readJson(request),title=clean(i.title);if(!title)return json({error:{code:'VALIDATION_ERROR',message:'Enter a task title.'}},400);const id=crypto.randomUUID();await db.batch([db.prepare(`INSERT INTO operations_tasks(id,organisation_id,client_id,assigned_staff_id,title,description,category,priority,status,due_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,clean(i.clientId)||null,clean(i.staffId)||null,title,clean(i.description),clean(i.category)||'Care',['low','normal','high','critical'].includes(clean(i.priority))?clean(i.priority):'normal','open',clean(i.dueAt)||null,session.user_id),auditStatement(db,session.organisation_id,session.user_id,'operations.task_created','task',id,{title})]);return json({ok:true,id});}
+async function updateOperationsTask(db,session,id,action){const row=await db.prepare('SELECT title FROM operations_tasks WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();if(!row)return notFound('Task');const status=action==='complete'?'completed':'escalated',column=action==='complete'?'completed_at':'escalated_at';await db.batch([db.prepare(`UPDATE operations_tasks SET status=?,${column}=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(status,id),auditStatement(db,session.organisation_id,session.user_id,`operations.task_${action}`,'task',id,{title:row.title})]);return json({ok:true});}
+async function createOperationsIncident(request,db,session){const i=await readJson(request),title=clean(i.title),description=clean(i.description);if(!title||!description)return json({error:{code:'VALIDATION_ERROR',message:'Enter an incident title and description.'}},400);const id=crypto.randomUUID();await db.batch([db.prepare(`INSERT INTO operations_incidents(id,organisation_id,client_id,reported_by,category,severity,title,description,status,occurred_at) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,clean(i.clientId)||null,session.user_id,clean(i.category)||'General',['low','medium','high','critical'].includes(clean(i.severity))?clean(i.severity):'medium',title,description,'open',clean(i.occurredAt)||null),auditStatement(db,session.organisation_id,session.user_id,'operations.incident_created','incident',id,{title,severity:i.severity})]);return json({ok:true,id});}
+async function reviewOperationsIncident(request,db,session,id){const i=await readJson(request);const row=await db.prepare('SELECT title FROM operations_incidents WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();if(!row)return notFound('Incident');await db.batch([db.prepare(`UPDATE operations_incidents SET status='closed',manager_review=?,reviewed_by=?,reviewed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(clean(i.review)||'Reviewed and closed.',session.user_id,id),auditStatement(db,session.organisation_id,session.user_id,'operations.incident_reviewed','incident',id,{title:row.title})]);return json({ok:true});}
+async function createShiftHandover(request,db,session){const i=await readJson(request),summary=clean(i.summary);if(!summary)return json({error:{code:'VALIDATION_ERROR',message:'Enter a handover summary.'}},400);const id=crypto.randomUUID();await db.batch([db.prepare(`INSERT INTO shift_handovers(id,organisation_id,shift,summary,concerns,outstanding_actions,created_by) VALUES(?,?,?,?,?,?,?)`).bind(id,session.organisation_id,clean(i.shift)||'Day',summary,clean(i.concerns),clean(i.outstandingActions),session.user_id),auditStatement(db,session.organisation_id,session.user_id,'operations.handover_created','handover',id,{shift:i.shift})]);return json({ok:true,id});}
+async function acknowledgeShiftHandover(db,session,id){const row=await db.prepare('SELECT shift FROM shift_handovers WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();if(!row)return notFound('Handover');await db.batch([db.prepare('UPDATE shift_handovers SET acknowledged_by=?,acknowledged_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?').bind(session.user_id,id),auditStatement(db,session.organisation_id,session.user_id,'operations.handover_acknowledged','handover',id,{shift:row.shift})]);return json({ok:true});}
 
 async function dashboardSummary(db, session) {
   const [clients, staff, plans, risks, auditRows] = await Promise.all([

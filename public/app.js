@@ -116,7 +116,7 @@ function updateIdentity() {
   document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
-const CORECARE_FALLBACK_VERSION = '1.3.3';
+const CORECARE_FALLBACK_VERSION = '1.4.0';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -263,6 +263,13 @@ function showPage(page) {
     pageKicker.textContent = 'Platform owner';
     pageTitle.textContent = 'Platform administration';
     loadPlatformWorkspace().catch(showToastError);
+    return;
+  }
+  if (page === 'operations') {
+    activatePage('#operations-page');
+    pageKicker.textContent = 'Care delivery';
+    pageTitle.textContent = 'Live Operations Board';
+    loadOperationsBoard().catch(showToastError);
     return;
   }
   if (page === 'dashboard') {
@@ -1224,3 +1231,19 @@ function renderNotifications(stats={}){
   $$('[data-notification-archive]').forEach(b=>b.addEventListener('click',async()=>{await api(`/api/platform/notifications/${encodeURIComponent(b.dataset.notificationArchive)}/archive`,{method:'POST',body:'{}'});await loadNotifications();}));
 }
 $('#notifications-refresh')?.addEventListener('click',loadNotifications);$('#notification-category-filter')?.addEventListener('change',loadNotifications);$('#notification-status-filter')?.addEventListener('change',loadNotifications);$('#notification-search')?.addEventListener('input',()=>{clearTimeout(window.notificationSearchTimer);window.notificationSearchTimer=setTimeout(loadNotifications,250)});$('#notifications-mark-all')?.addEventListener('click',async()=>{await api('/api/platform/notifications/mark-all-read',{method:'POST',body:'{}'});await loadNotifications();});
+
+
+let operationsData={tasks:[],incidents:[],handovers:[],clients:[],staff:[],timeline:[],stats:{}};
+function opFmt(value){if(!value)return 'No due time';try{return new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(new Date(String(value).endsWith('Z')?value:value+'Z'))}catch{return value}}
+async function loadOperationsBoard(){operationsData=await api('/api/operations/board');renderOperationsBoard();}
+function renderOperationsBoard(){const s=operationsData.stats||{};setText('#op-open',s.open||0);setText('#op-overdue',s.overdue||0);setText('#op-escalated',s.escalated||0);setText('#op-incidents',s.incidentsOpen||0);setText('#op-high-incidents',s.incidentsHigh||0);setText('#op-handovers',s.handoversUnread||0);setText('#op-compliance',(s.careDue||0)+(s.riskDue||0));
+  const filter=$('#operations-task-filter')?.value||'active';let tasks=operationsData.tasks||[];if(filter==='active')tasks=tasks.filter(x=>x.status!=='completed');if(filter==='completed')tasks=tasks.filter(x=>x.status==='completed');
+  $('#operations-task-list').innerHTML=tasks.map(t=>`<article class="operations-row priority-${escapeHtml(t.priority||'normal')}"><div class="operations-row-status ${escapeHtml(t.status)}"></div><div><strong>${escapeHtml(t.title)}</strong><p>${escapeHtml(t.description||'No description')}</p><small>${escapeHtml(t.client_name||'General operation')} · ${escapeHtml(t.staff_name||'Unassigned')} · ${opFmt(t.due_at)}</small></div><span class="badge ${t.status==='completed'?'success':t.status==='escalated'?'danger':t.status==='overdue'?'warning':'neutral'}">${escapeHtml(t.status)}</span><div class="operations-row-actions">${t.status!=='completed'?`<button data-op-complete="${escapeHtml(t.id)}">Complete</button>`:''}${!['completed','escalated'].includes(t.status)?`<button data-op-escalate="${escapeHtml(t.id)}">Escalate</button>`:''}</div></article>`).join('')||'<div class="empty-state"><strong>No tasks in this view</strong><span>Create a task to begin coordinating today’s work.</span></div>';
+  $('#operations-incident-list').innerHTML=(operationsData.incidents||[]).filter(x=>x.status!=='closed').map(i=>`<article class="mini-operation"><div><strong>${escapeHtml(i.title)}</strong><small>${escapeHtml(i.severity)} · ${escapeHtml(i.client_name||'No client')} · ${opFmt(i.occurred_at||i.created_at)}</small></div><button data-op-review="${escapeHtml(i.id)}">Review</button></article>`).join('')||'<p class="muted">No open incidents.</p>';
+  $('#operations-handover-list').innerHTML=(operationsData.handovers||[]).slice(0,5).map(h=>`<article class="mini-operation"><div><strong>${escapeHtml(h.shift)} handover</strong><p>${escapeHtml(h.summary)}</p><small>${opFmt(h.created_at)}</small></div>${h.acknowledged_at?'<span class="badge success">Acknowledged</span>':`<button data-op-ack="${escapeHtml(h.id)}">Acknowledge</button>`}</article>`).join('')||'<p class="muted">No handovers recorded.</p>';
+  $('#operations-timeline').innerHTML=(operationsData.timeline||[]).map(x=>`<div><span class="timeline-dot"></span><div><strong>${escapeHtml(x.title)}</strong><p>${escapeHtml(x.detail||'')}</p><time>${opFmt(x.created_at)}</time></div></div>`).join('')||'<p class="muted">No operational activity yet.</p>';
+  const clientOptions='<option value="">No client</option>'+(operationsData.clients||[]).map(x=>`<option value="${escapeHtml(x.id)}">${escapeHtml(x.preferred_name||x.first_name)} ${escapeHtml(x.last_name)}</option>`).join(''); const staffOptions='<option value="">Unassigned</option>'+(operationsData.staff||[]).map(x=>`<option value="${escapeHtml(x.id)}">${escapeHtml(x.preferred_name||x.first_name)} ${escapeHtml(x.last_name)} · ${escapeHtml(x.job_title||'Staff')}</option>`).join(''); if($('#operations-task-client'))$('#operations-task-client').innerHTML=clientOptions;if($('#operations-incident-client'))$('#operations-incident-client').innerHTML=clientOptions;if($('#operations-task-staff'))$('#operations-task-staff').innerHTML=staffOptions;
+  $$('[data-op-complete]').forEach(b=>b.onclick=async()=>{await api(`/api/operations/tasks/${encodeURIComponent(b.dataset.opComplete)}/complete`,{method:'POST',body:'{}'});await loadOperationsBoard();});$$('[data-op-escalate]').forEach(b=>b.onclick=async()=>{await api(`/api/operations/tasks/${encodeURIComponent(b.dataset.opEscalate)}/escalate`,{method:'POST',body:'{}'});await loadOperationsBoard();});$$('[data-op-review]').forEach(b=>b.onclick=async()=>{const review=prompt('Manager review note:','Reviewed and closed.');if(review===null)return;await api(`/api/operations/incidents/${encodeURIComponent(b.dataset.opReview)}/review`,{method:'POST',body:JSON.stringify({review})});await loadOperationsBoard();});$$('[data-op-ack]').forEach(b=>b.onclick=async()=>{await api(`/api/operations/handovers/${encodeURIComponent(b.dataset.opAck)}/acknowledge`,{method:'POST',body:'{}'});await loadOperationsBoard();});
+}
+$('#operations-refresh-board')?.addEventListener('click',loadOperationsBoard);$('#operations-task-filter')?.addEventListener('change',renderOperationsBoard);$('#operations-new-task')?.addEventListener('click',()=>$('#operations-task-dialog')?.showModal());$('#operations-record-incident')?.addEventListener('click',()=>$('#operations-incident-dialog')?.showModal());$('#operations-add-handover')?.addEventListener('click',()=>$('#operations-handover-dialog')?.showModal());$$('[data-close-dialog]').forEach(b=>b.addEventListener('click',()=>document.getElementById(b.dataset.closeDialog)?.close()));
+$('#operations-task-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);await api('/api/operations/tasks',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});e.currentTarget.reset();$('#operations-task-dialog').close();await loadOperationsBoard();});$('#operations-incident-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);await api('/api/operations/incidents',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});e.currentTarget.reset();$('#operations-incident-dialog').close();await loadOperationsBoard();});$('#operations-handover-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);await api('/api/operations/handovers',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});e.currentTarget.reset();$('#operations-handover-dialog').close();await loadOperationsBoard();});
