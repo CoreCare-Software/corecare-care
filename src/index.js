@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.14.0 — Planner Intelligence */
-const VERSION = "1.14.0";
+/** CoreCare Enterprise 1.15.0 — Care Delivery Foundation */
+const VERSION = "1.15.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.14.0 — Planner Intelligence" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.15.0 — Care Delivery Foundation" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -59,6 +59,11 @@ export default {
         const handoverAckMatch = url.pathname.match(/^\/api\/operations\/handovers\/([^/]+)\/acknowledge$/);
         if (handoverAckMatch && request.method === "POST") return acknowledgeShiftHandover(env.DB, session, decodeURIComponent(handoverAckMatch[1]));
         if (url.pathname === "/api/care-plans" && request.method === "GET") return listAllCarePlans(env.DB, session, url);
+        if (url.pathname === "/api/care-delivery/dashboard" && request.method === "GET") return careDeliveryDashboard(env.DB, session);
+        const carePlanActionMatch = url.pathname.match(/^\/api\/care-plans\/([^/]+)\/(approve|generate-visits)$/);
+        if (carePlanActionMatch && request.method === "POST") return carePlanAction(request, env.DB, session, decodeURIComponent(carePlanActionMatch[1]), carePlanActionMatch[2]);
+        const careAlertMatch = url.pathname.match(/^\/api\/care-delivery\/alerts\/([^/]+)\/acknowledge$/);
+        if (careAlertMatch && request.method === "POST") return acknowledgeCareAlert(env.DB, session, decodeURIComponent(careAlertMatch[1]));
         if (url.pathname === "/api/platform/dashboard" && request.method === "GET") return platformDashboard(env.DB, session);
         if (url.pathname === "/api/platform/revenue" && request.method === "GET") return platformRevenue(env.DB, session);
         if (url.pathname === "/api/platform/customer-success" && request.method === "GET") return platformCustomerSuccess(env.DB, session);
@@ -752,6 +757,56 @@ async function reviewOperationsIncident(request,db,session,id){const i=await rea
 async function createShiftHandover(request,db,session){const i=await readJson(request),summary=clean(i.summary);if(!summary)return json({error:{code:'VALIDATION_ERROR',message:'Enter a handover summary.'}},400);const id=crypto.randomUUID();await db.batch([db.prepare(`INSERT INTO shift_handovers(id,organisation_id,shift,summary,concerns,outstanding_actions,created_by) VALUES(?,?,?,?,?,?,?)`).bind(id,session.organisation_id,clean(i.shift)||'Day',summary,clean(i.concerns),clean(i.outstandingActions),session.user_id),auditStatement(db,session.organisation_id,session.user_id,'operations.handover_created','handover',id,{shift:i.shift})]);return json({ok:true,id});}
 async function acknowledgeShiftHandover(db,session,id){const row=await db.prepare('SELECT shift FROM shift_handovers WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();if(!row)return notFound('Handover');await db.batch([db.prepare('UPDATE shift_handovers SET acknowledged_by=?,acknowledged_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?').bind(session.user_id,id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'operations.handover_acknowledged','handover',id,{shift:row.shift})]);return json({ok:true});}
 
+
+async function refreshCareDeliveryAlerts(db, session) {
+  const org=session.organisation_id, today=new Date().toISOString().slice(0,10), in30=new Date(Date.now()+30*86400000).toISOString().slice(0,10);
+  const [plans,risks,clients]=await Promise.all([
+    db.prepare("SELECT id,client_id,title,review_date,approval_status,status FROM care_plans WHERE organisation_id=? AND status='Active'").bind(org).all(),
+    db.prepare("SELECT id,client_id,title,severity,review_date,status FROM risk_assessments WHERE organisation_id=? AND status='Active'").bind(org).all(),
+    db.prepare("SELECT id,first_name,last_name FROM clients WHERE organisation_id=? AND status='Active'").bind(org).all()
+  ]);
+  const names=Object.fromEntries((clients.results||[]).map(c=>[c.id,`${c.first_name} ${c.last_name}`]));
+  const statements=[];
+  for(const p of plans.results||[]){
+    if(p.approval_status!=='approved') statements.push(db.prepare(`INSERT OR IGNORE INTO care_delivery_alerts(id,organisation_id,client_id,care_plan_id,alert_type,severity,title,message,due_date) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),org,p.client_id,p.id,'care_plan_approval','warning',`Care plan awaiting approval: ${names[p.client_id]||'Client'}`,p.title,p.review_date));
+    if(p.review_date&&p.review_date<=in30) statements.push(db.prepare(`INSERT OR IGNORE INTO care_delivery_alerts(id,organisation_id,client_id,care_plan_id,alert_type,severity,title,message,due_date) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),org,p.client_id,p.id,'care_plan_review',p.review_date<today?'critical':'warning',`Care plan review ${p.review_date<today?'overdue':'due soon'}: ${names[p.client_id]||'Client'}`,p.title,p.review_date));
+    if(p.review_date) statements.push(db.prepare(`INSERT OR IGNORE INTO care_review_schedule(id,organisation_id,client_id,record_type,record_id,due_date) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),org,p.client_id,'care_plan',p.id,p.review_date));
+  }
+  for(const r of risks.results||[]){
+    if(r.severity==='High') statements.push(db.prepare(`INSERT OR IGNORE INTO care_delivery_alerts(id,organisation_id,client_id,risk_assessment_id,alert_type,severity,title,message,due_date) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),org,r.client_id,r.id,'high_risk','critical',`High risk: ${names[r.client_id]||'Client'}`,r.title,r.review_date));
+    if(r.review_date&&r.review_date<=in30) statements.push(db.prepare(`INSERT OR IGNORE INTO care_delivery_alerts(id,organisation_id,client_id,risk_assessment_id,alert_type,severity,title,message,due_date) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),org,r.client_id,r.id,'risk_review',r.review_date<today?'critical':'warning',`Risk review ${r.review_date<today?'overdue':'due soon'}: ${names[r.client_id]||'Client'}`,r.title,r.review_date));
+    if(r.review_date) statements.push(db.prepare(`INSERT OR IGNORE INTO care_review_schedule(id,organisation_id,client_id,record_type,record_id,due_date) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),org,r.client_id,'risk',r.id,r.review_date));
+  }
+  if(statements.length) await db.batch(statements);
+}
+async function careDeliveryDashboard(db,session){
+  await refreshCareDeliveryAlerts(db,session); const org=session.organisation_id,today=new Date().toISOString().slice(0,10);
+  const [plans,risks,alerts,reviews,visits]=await Promise.all([
+    db.prepare(`SELECT cp.*,c.first_name||' '||c.last_name client_name FROM care_plans cp JOIN clients c ON c.id=cp.client_id WHERE cp.organisation_id=? ORDER BY cp.review_date`).bind(org).all(),
+    db.prepare(`SELECT r.*,c.first_name||' '||c.last_name client_name FROM risk_assessments r JOIN clients c ON c.id=r.client_id WHERE r.organisation_id=? AND r.status='Active' ORDER BY CASE r.severity WHEN 'High' THEN 0 ELSE 1 END,r.review_date`).bind(org).all(),
+    db.prepare(`SELECT a.*,c.first_name||' '||c.last_name client_name FROM care_delivery_alerts a LEFT JOIN clients c ON c.id=a.client_id WHERE a.organisation_id=? AND a.status='open' ORDER BY CASE a.severity WHEN 'critical' THEN 0 ELSE 1 END,a.due_date LIMIT 50`).bind(org).all(),
+    db.prepare(`SELECT * FROM care_review_schedule WHERE organisation_id=? AND status='scheduled' ORDER BY due_date LIMIT 50`).bind(org).all(),
+    db.prepare(`SELECT COUNT(*) total,COUNT(CASE WHEN rota_status='draft' THEN 1 END) draft FROM care_visits WHERE organisation_id=? AND date(scheduled_start)>=date('now')`).bind(org).first()
+  ]);
+  const active=(plans.results||[]).filter(x=>x.status==='Active'), pending=active.filter(x=>x.approval_status!=='approved').length, overdue=active.filter(x=>x.review_date&&x.review_date<today).length, high=(risks.results||[]).filter(x=>x.severity==='High').length;
+  return json({metrics:{activePlans:active.length,pendingApproval:pending,overdueReviews:overdue,highRisks:high,openAlerts:(alerts.results||[]).length,futureVisits:Number(visits?.total||0),draftVisits:Number(visits?.draft||0)},alerts:alerts.results||[],reviews:reviews.results||[],plans:(plans.results||[]).map(r=>({...toCarePlan(r),clientName:r.client_name})),risks:risks.results||[]});
+}
+async function carePlanAction(request,db,session,id,action){
+  if(!hasRole(session,['owner','manager','organisation_owner','organisation_admin','branch_manager']))return forbidden();
+  const plan=await db.prepare(`SELECT * FROM care_plans WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id).first(); if(!plan)return notFound('Care plan');
+  if(action==='approve'){
+    await db.batch([db.prepare(`UPDATE care_plans SET status='Active',approval_status='approved',approved_by=?,approved_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(session.user_id,id,session.organisation_id),db.prepare(`UPDATE client_onboarding_items SET status='completed',completed_at=CURRENT_TIMESTAMP,completed_by=?,updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND client_id=? AND item_key='care_plan'`).bind(session.user_id,session.organisation_id,plan.client_id),auditStatement(db,session.organisation_id,session.user_id,'care_plan.approved','care_plan',id,{clientId:plan.client_id})]);
+    return json({ok:true,status:'approved'});
+  }
+  if(plan.approval_status!=='approved')return json({error:{code:'APPROVAL_REQUIRED',message:'Approve the care plan before generating visits.'}},409);
+  const reqs=await db.prepare(`SELECT * FROM client_visit_requirements WHERE organisation_id=? AND client_id=? AND status='active'`).bind(session.organisation_id,plan.client_id).all();
+  if(!(reqs.results||[]).length)return json({error:{code:'NO_VISIT_REQUIREMENTS',message:'Add visit requirements to the client before generating visits.'}},409);
+  const statements=[];let count=0;
+  for(const r of reqs.results||[]){const requirement={visitType:r.visit_type,days:JSON.parse(r.days_json||'[]'),preferredTime:r.preferred_time,windowMinutes:r.window_minutes,durationMinutes:r.duration_minutes,carersRequired:r.carers_required,notes:r.notes,startDate:r.start_date,endDate:r.end_date};for(const date of generatedDates(requirement)){const day=date.toISOString().slice(0,10),start=new Date(`${day}T${requirement.preferredTime}:00`),end=new Date(start.getTime()+requirement.durationMinutes*60000);statements.push(db.prepare(`INSERT OR IGNORE INTO care_visits(id,organisation_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,requirement_id,requirement_occurrence_date,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,plan.client_id,null,requirement.visitType,start.toISOString(),end.toISOString(),'scheduled','care_plan','draft',r.id,'requirement',r.id,day,session.user_id));count++;}}
+  statements.push(db.prepare(`UPDATE care_plans SET visit_generation_status='generated',visits_generated_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id));statements.push(auditStatement(db,session.organisation_id,session.user_id,'care_plan.visits_generated','care_plan',id,{clientId:plan.client_id,attempted:count}));await db.batch(statements);return json({ok:true,visitsGenerated:count});
+}
+async function acknowledgeCareAlert(db,session,id){const result=await db.prepare(`UPDATE care_delivery_alerts SET status='acknowledged',acknowledged_by=?,acknowledged_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(session.user_id,id,session.organisation_id).run();if(!result.meta.changes)return notFound('Alert');return json({ok:true});}
+
 async function dashboardSummary(db, session) {
   const [clients, staff, plans, risks, auditRows] = await Promise.all([
     db.prepare("SELECT status,risk,next_review FROM clients WHERE organisation_id=?").bind(session.organisation_id).all(),
@@ -858,7 +913,7 @@ async function updateCarePlan(request,db,session,id){
   return json({carePlan:toCarePlan(await db.prepare("SELECT * FROM care_plans WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).first())});
 }
 async function archiveCarePlan(db,session,id){if(!hasRole(session,["owner","manager"]))return forbidden();const r=await db.prepare("UPDATE care_plans SET status='Archived',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).run();if(!r.meta.changes)return json({error:{code:"NOT_FOUND",message:"Care plan not found."}},404);await audit(db,session.organisation_id,session.user_id,"care_plan.archived","care_plan",id,{});return json({ok:true});}
-function toCarePlan(r){return {id:r.id,clientId:r.client_id,title:r.title,status:r.status,version:r.version,effectiveDate:r.effective_date||"",reviewDate:r.review_date,authorName:r.author_name||"",personalDetails:r.personal_details||"",medicalConditions:r.medical_conditions||"",communication:r.communication||"",mobility:r.mobility||"",nutritionHydration:r.nutrition_hydration||"",medicationSupport:r.medication_support||"",continence:r.continence||"",skinIntegrity:r.skin_integrity||"",mentalCapacity:r.mental_capacity||"",risks:r.risks||"",desiredOutcomes:r.desired_outcomes||"",createdAt:r.created_at,updatedAt:r.updated_at};}
+function toCarePlan(r){return {id:r.id,clientId:r.client_id,title:r.title,status:r.status,version:r.version,effectiveDate:r.effective_date||"",reviewDate:r.review_date,authorName:r.author_name||"",personalDetails:r.personal_details||"",medicalConditions:r.medical_conditions||"",communication:r.communication||"",mobility:r.mobility||"",nutritionHydration:r.nutrition_hydration||"",medicationSupport:r.medication_support||"",continence:r.continence||"",skinIntegrity:r.skin_integrity||"",mentalCapacity:r.mental_capacity||"",risks:r.risks||"",desiredOutcomes:r.desired_outcomes||"",approvalStatus:r.approval_status||"pending",approvedAt:r.approved_at||"",visitGenerationStatus:r.visit_generation_status||"not_generated",visitsGeneratedAt:r.visits_generated_at||"",createdAt:r.created_at,updatedAt:r.updated_at};}
 
 function riskInput(input){const v={category:clean(input.category)||"General Risk",title:clean(input.title),severity:clean(input.severity)||"Medium",likelihood:clean(input.likelihood)||"Possible",controls:clean(input.controls),actions:clean(input.actions),status:clean(input.status)||"Active",reviewDate:clean(input.reviewDate)};if(!v.title||!v.reviewDate)return {error:"Enter a risk title and review date."};return {v};}
 async function listRisks(db,session,clientId){if(!await ensureClient(db,session,clientId))return json({error:{code:"CLIENT_NOT_FOUND",message:"Client not found."}},404);const r=await db.prepare("SELECT * FROM risk_assessments WHERE organisation_id=? AND client_id=? ORDER BY CASE severity WHEN 'High' THEN 0 WHEN 'Medium' THEN 1 ELSE 2 END, review_date").bind(session.organisation_id,clientId).all();return json({risks:r.results.map(toRisk)});}

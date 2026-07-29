@@ -319,7 +319,7 @@ function showPage(page) {
     activatePage('#care-page');
     pageKicker.textContent = 'Care delivery';
     pageTitle.textContent = 'Care plans';
-    loadAllCarePlans().catch(showToastError);
+    Promise.all([loadAllCarePlans(),loadCareDeliveryDashboard()]).catch(showToastError);
     return;
   }
   if (page === 'settings') {
@@ -506,6 +506,20 @@ async function managePlatformOrganisation(organisationId){
   $$('[data-org360-tab]').forEach(button=>button.addEventListener('click',()=>{$$('[data-org360-tab]').forEach(x=>x.classList.toggle('active',x===button));$$('[data-org360-panel]').forEach(x=>x.hidden=x.dataset.org360Panel!==button.dataset.org360Tab);}));
   if(typeof dialog.showModal==='function') dialog.showModal(); else dialog.setAttribute('open','');
 }
+
+async function loadCareDeliveryDashboard(){
+  const payload=await api('/api/care-delivery/dashboard'),m=payload.metrics||{};
+  setText('#care-pending-approval',m.pendingApproval||0);setText('#care-high-risks',m.highRisks||0);setText('#care-open-alerts',m.openAlerts||0);setText('#care-future-visits',m.futureVisits||0);setText('#care-draft-visits',m.draftVisits||0);
+  const alerts=$('#care-delivery-alerts');if(alerts)alerts.innerHTML=(payload.alerts||[]).map(a=>`<div class="care-alert-row"><div><strong>${escapeHtml(a.title)}</strong><small>${escapeHtml(a.message||'')} ${a.due_date?'· Due '+formatDate(a.due_date):''}</small></div><div class="care-plan-actions"><span class="badge ${a.severity==='critical'?'danger':'active'}">${escapeHtml(a.severity)}</span><button class="row-action care-plan-action" data-ack-care-alert="${escapeHtml(a.id)}">Acknowledge</button></div></div>`).join('')||'<div class="operations-empty"><strong>No open care alerts</strong><span>Care-plan and risk review monitoring is clear.</span></div>';
+  const reviews=$('#care-review-schedule');if(reviews)reviews.innerHTML=(payload.reviews||[]).slice(0,12).map(r=>`<div class="care-review-row"><div><strong>${escapeHtml((r.record_type||'Review').replaceAll('_',' '))}</strong><small>${formatDate(r.due_date)}</small></div><span class="badge ${new Date(r.due_date+'T23:59:59')<new Date()?'danger':'neutral'}">${new Date(r.due_date+'T23:59:59')<new Date()?'Overdue':'Scheduled'}</span></div>`).join('')||'<div class="operations-empty"><strong>No reviews scheduled</strong><span>Review dates will appear when care plans and risks are saved.</span></div>';
+  $$('[data-ack-care-alert]').forEach(b=>b.addEventListener('click',async()=>{b.disabled=true;try{await api(`/api/care-delivery/alerts/${encodeURIComponent(b.dataset.ackCareAlert)}/acknowledge`,{method:'POST'});await loadCareDeliveryDashboard();}catch(e){showToastError(e);b.disabled=false;}}));
+}
+async function runCarePlanAction(id,action){
+  const label=action==='approve'?'approve this care plan':'generate the next eight weeks of draft visits from this client’s visit requirements';
+  if(!confirm(`Are you sure you want to ${label}?`))return;
+  try{const result=await api(`/api/care-plans/${encodeURIComponent(id)}/${action}`,{method:'POST'});if(action==='generate-visits')alert(`${result.visitsGenerated||0} visit occurrences were processed. Existing occurrences were not duplicated.`);await Promise.all([loadAllCarePlans(),loadCareDeliveryDashboard(),loadDashboard()]);}catch(e){showToastError(e);}
+}
+
 async function loadAllCarePlans() {
   const payload = await api('/api/care-plans');
   allCarePlans = payload.carePlans || [];
@@ -536,7 +550,7 @@ function renderAllCarePlans() {
   list.innerHTML = visible.map(plan => {
     const due = carePlanDueState(plan.reviewDate);
     const dueLabel = due === 'overdue' ? 'Overdue' : due === 'due' ? 'Due soon' : 'Current';
-    return `<article class="care-overview-row">
+    return `<article class="care-overview-row ${plan.approvalStatus==='approved'?'care-plan-approved':'care-plan-pending'}">
       <button class="care-client-link" data-open-care-client="${escapeHtml(plan.clientId)}">
         <span class="person-avatar">${escapeHtml(initialsFromName(plan.clientName))}</span>
         <span><strong>${escapeHtml(plan.clientName)}</strong><small>${escapeHtml(plan.title)}</small></span>
@@ -544,14 +558,16 @@ function renderAllCarePlans() {
       <span><small>Status</small><strong>${escapeHtml(plan.status)}</strong></span>
       <span><small>Version</small><strong>${escapeHtml(plan.version)}</strong></span>
       <span><small>Review</small><strong class="${due === 'overdue' ? 'date-overdue' : ''}">${formatDate(plan.reviewDate)}</strong></span>
-      <span class="badge ${due === 'overdue' ? 'danger' : due === 'due' ? 'active' : 'success'}">${dueLabel}</span>
-      <button class="row-action" data-open-care-client="${escapeHtml(plan.clientId)}">Open</button>
+      <span class="badge ${plan.approvalStatus==='approved'?'success':'active'}">${plan.approvalStatus==='approved'?'Approved':'Approval pending'}</span>
+      <div class="care-plan-actions">${plan.approvalStatus!=='approved'?`<button class="row-action care-plan-action" data-care-plan-approve="${escapeHtml(plan.id)}">Approve</button>`:`<button class="row-action care-plan-action" data-care-plan-generate="${escapeHtml(plan.id)}">Generate visits</button>`}<button class="row-action care-plan-action" data-open-care-client="${escapeHtml(plan.clientId)}">Open</button></div>
     </article>`;
   }).join('');
   $$('[data-open-care-client]').forEach(button => button.addEventListener('click', async () => {
     await openClientProfile(button.dataset.openCareClient);
     showClientTab('care-plans');
   }));
+  $$('[data-care-plan-approve]').forEach(button=>button.addEventListener('click',()=>runCarePlanAction(button.dataset.carePlanApprove,'approve')));
+  $$('[data-care-plan-generate]').forEach(button=>button.addEventListener('click',()=>runCarePlanAction(button.dataset.carePlanGenerate,'generate-visits')));
 }
 
 function renderCareClientPicker() {
@@ -1480,3 +1496,5 @@ $('#template-visit-form')?.addEventListener('submit',e=>submitTemplateForm(e,'/a
 $('#template-generate-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=e.currentTarget,err=f.querySelector('.form-error'),result=$('#template-generate-result');try{const r=await api('/api/rota/templates/generate',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(f)))});result.hidden=false;result.innerHTML=`<strong>${r.created} visits created</strong><span>${r.unallocated} left in the allocation queue · ${r.skipped} skipped</span>${r.warnings?.length?`<small>${r.warnings.slice(0,5).map(escapeHtml).join('<br>')}</small>`:''}`;await Promise.all([loadRotaTemplates(),loadRotaBoard()])}catch(ex){err.textContent=ex.message;err.hidden=false}});
 document.addEventListener('click',async e=>{const b=e.target.closest?.('[data-template-delete]');if(!b)return;if(!confirm('Delete this template item?'))return;try{await api(`/api/rota/templates/${b.dataset.templateDelete}/${b.dataset.id}`,{method:'DELETE'});await loadRotaTemplates()}catch(ex){alert(ex.message)}});
 const originalLoadRotaBoard=loadRotaBoard;loadRotaBoard=async function(){const r=await originalLoadRotaBoard.apply(this,arguments);if($('#template-visit-list')&&!rotaTemplates.clients.length)await loadRotaTemplates();return r};
+
+$('#care-delivery-refresh')?.addEventListener('click',()=>Promise.all([loadAllCarePlans(),loadCareDeliveryDashboard()]).catch(showToastError));
