@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.4.2 — Operations Task Submission Hotfix */
-const VERSION = "1.4.2";
+/** CoreCare Enterprise 1.5.0 — Electronic Call Monitoring Foundation */
+const VERSION = "1.5.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.4.2 — Operations Task Submission Hotfix" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.5.0 — Electronic Call Monitoring Foundation" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -25,6 +25,10 @@ export default {
         if (url.pathname === "/api/development/status") return developmentStatus(env, session);
         if (url.pathname === "/api/dashboard" && request.method === "GET") return dashboardSummary(env.DB, session);
         if (url.pathname === "/api/operations/board" && request.method === "GET") return operationsBoard(env.DB, session);
+        if (url.pathname === "/api/visits/board" && request.method === "GET") return visitsBoard(env.DB, session);
+        if (url.pathname === "/api/visits" && request.method === "POST") return createVisit(request, env.DB, session);
+        if (url.pathname === "/api/visits/client-code" && request.method === "POST") return ensureClientVisitCode(request, env.DB, session);
+        if (url.pathname === "/api/visits/sync" && request.method === "POST") return syncVisitEvents(request, env.DB, session);
         if (url.pathname === "/api/operations/tasks" && request.method === "POST") return createOperationsTask(request, env.DB, session);
         const operationsTaskMatch = url.pathname.match(/^\/api\/operations\/tasks\/([^/]+)\/(complete|escalate)$/);
         if (operationsTaskMatch && request.method === "POST") return updateOperationsTask(env.DB, session, decodeURIComponent(operationsTaskMatch[1]), operationsTaskMatch[2]);
@@ -389,6 +393,24 @@ function toClient(row) {
   };
 }
 
+
+
+async function visitsBoard(db, session) {
+  const org=session.organisation_id;
+  const [visits,clients,staff,codes]=await Promise.all([
+    db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,s.first_name||' '||s.last_name staff_name FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id LEFT JOIN staff s ON s.id=v.staff_id WHERE v.organisation_id=? AND date(v.scheduled_start)=date('now') ORDER BY v.scheduled_start`).bind(org).all(),
+    db.prepare(`SELECT id,first_name,last_name,preferred_name FROM clients WHERE organisation_id=? AND archived_at IS NULL ORDER BY first_name,last_name`).bind(org).all(),
+    db.prepare(`SELECT id,first_name,last_name,preferred_name,job_title FROM staff WHERE organisation_id=? AND status='Active' ORDER BY first_name,last_name`).bind(org).all(),
+    db.prepare(`SELECT client_id,code FROM client_visit_codes WHERE organisation_id=? AND active=1`).bind(org).all()
+  ]);
+  const rows=visits.results||[], now=Date.now();
+  rows.forEach(v=>{if(v.status==='scheduled'&&new Date(v.scheduled_start).getTime()+15*60000<now)v.live_status='late';else if(v.status==='in_progress'&&v.scheduled_end&&new Date(v.scheduled_end).getTime()<now)v.live_status='overrunning';else v.live_status=v.status;});
+  const stats={scheduled:rows.filter(x=>x.status==='scheduled').length,inProgress:rows.filter(x=>x.status==='in_progress').length,late:rows.filter(x=>x.live_status==='late').length,completed:rows.filter(x=>x.status==='completed').length,overrunning:rows.filter(x=>x.live_status==='overrunning').length};
+  return json({visits:rows,clients:clients.results||[],staff:staff.results||[],codes:codes.results||[],stats});
+}
+async function createVisit(request,db,session){const i=await readJson(request);if(!clean(i.clientId)||!clean(i.scheduledStart))return json({error:{code:'VALIDATION_ERROR',message:'Select a client and scheduled start.'}},400);const id=crypto.randomUUID();await db.batch([db.prepare(`INSERT INTO care_visits(id,organisation_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,created_by) VALUES(?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,clean(i.clientId),clean(i.staffId)||null,clean(i.visitType)||'Care visit',clean(i.scheduledStart),clean(i.scheduledEnd)||null,session.user_id),auditStatement(db,session.organisation_id,session.user_id,'visits.created','visit',id,{clientId:i.clientId})]);return json({ok:true,id});}
+async function ensureClientVisitCode(request,db,session){const i=await readJson(request),clientId=clean(i.clientId);if(!clientId)return json({error:{code:'VALIDATION_ERROR',message:'Select a client.'}},400);const client=await db.prepare('SELECT id FROM clients WHERE id=? AND organisation_id=? AND archived_at IS NULL').bind(clientId,session.organisation_id).first();if(!client)return notFound('Client');let row=await db.prepare('SELECT code FROM client_visit_codes WHERE organisation_id=? AND client_id=? AND active=1').bind(session.organisation_id,clientId).first();if(!row){const code='CC-'+crypto.randomUUID().replaceAll('-','').slice(0,20).toUpperCase();await db.prepare('INSERT INTO client_visit_codes(id,organisation_id,client_id,code,created_by) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(),session.organisation_id,clientId,code,session.user_id).run();row={code};}return json({ok:true,code:row.code});}
+async function syncVisitEvents(request,db,session){const i=await readJson(request),events=Array.isArray(i.events)?i.events:[];const results=[];for(const event of events){const eventId=clean(event.eventId),code=clean(event.code),type=clean(event.type),deviceTime=clean(event.deviceTime);if(!eventId||!code||!['clock_in','clock_out'].includes(type)||!deviceTime){results.push({eventId,ok:false,error:'Invalid event'});continue;}const existing=await db.prepare('SELECT id FROM visit_events WHERE device_event_id=?').bind(eventId).first();if(existing){results.push({eventId,ok:true,duplicate:true});continue;}const clientCode=await db.prepare('SELECT client_id FROM client_visit_codes WHERE organisation_id=? AND code=? AND active=1').bind(session.organisation_id,code).first();if(!clientCode){results.push({eventId,ok:false,error:'Invalid or inactive client code'});continue;}let visit=await db.prepare(`SELECT id,status FROM care_visits WHERE organisation_id=? AND client_id=? AND (staff_id IS NULL OR staff_id=?) AND date(scheduled_start)=date(?) AND status IN ('scheduled','in_progress') ORDER BY ABS(strftime('%s',scheduled_start)-strftime('%s',?)) LIMIT 1`).bind(session.organisation_id,clientCode.client_id,session.staff_id||'',deviceTime,deviceTime).first();if(!visit){results.push({eventId,ok:false,error:'No matching visit found'});continue;}if(type==='clock_in'&&visit.status!=='scheduled'){results.push({eventId,ok:true,duplicate:true});continue;}if(type==='clock_out'&&visit.status!=='in_progress'){results.push({eventId,ok:false,error:'Visit is not clocked in'});continue;}const source=clean(event.source)||'online';const update=type==='clock_in'?db.prepare(`UPDATE care_visits SET status='in_progress',actual_start=?,clock_in_method='qr',clock_in_device_time=?,clock_in_received_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(deviceTime,deviceTime,visit.id):db.prepare(`UPDATE care_visits SET status='completed',actual_end=?,clock_out_method='qr',clock_out_device_time=?,clock_out_received_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(deviceTime,deviceTime,visit.id);await db.batch([update,db.prepare(`INSERT INTO visit_events(id,organisation_id,visit_id,event_type,device_event_id,device_time,source,payload_json,created_by) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,visit.id,type,eventId,deviceTime,source,JSON.stringify(event),session.user_id),auditStatement(db,session.organisation_id,session.user_id,`visits.${type}`,'visit',visit.id,{deviceTime,source})]);results.push({eventId,ok:true,visitId:visit.id});}return json({ok:true,results,receivedAt:new Date().toISOString()});}
 
 async function operationsBoard(db, session) {
   const org=session.organisation_id;

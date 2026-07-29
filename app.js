@@ -266,6 +266,13 @@ function showPage(page) {
     loadPlatformWorkspace().catch(showToastError);
     return;
   }
+  if (page === 'visits') {
+    activatePage('#visits-page');
+    pageKicker.textContent = 'Electronic call monitoring';
+    pageTitle.textContent = 'Visits';
+    loadVisitsBoard().catch(showToastError);
+    return;
+  }
   if (page === 'operations') {
     activatePage('#operations-page');
     pageKicker.textContent = 'Care delivery';
@@ -1272,3 +1279,24 @@ $('#operations-task-form')?.addEventListener('submit', e => {
   submitOperationsForm(e.currentTarget, '/api/operations/tasks', 'operations-task-dialog', 'operations-task-submit');
 });
 $('#operations-incident-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);await api('/api/operations/incidents',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});e.currentTarget.reset();$('#operations-incident-dialog').close();await loadOperationsBoard();});$('#operations-handover-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);await api('/api/operations/handovers',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});e.currentTarget.reset();$('#operations-handover-dialog').close();await loadOperationsBoard();});
+
+
+/* Electronic Call Monitoring 1.5.0 */
+let visitsData={visits:[],clients:[],staff:[],codes:[],stats:{}};
+const VISIT_QUEUE_KEY='corecare_visit_event_queue_v1';
+function visitQueue(){try{return JSON.parse(localStorage.getItem(VISIT_QUEUE_KEY)||'[]')}catch{return[]}}
+function saveVisitQueue(q){localStorage.setItem(VISIT_QUEUE_KEY,JSON.stringify(q));renderSyncStatus();}
+function setVisitText(sel,val){const n=$(sel);if(n)n.textContent=String(val??0)}
+async function loadVisitsBoard(){visitsData=await api('/api/visits/board');renderVisitsBoard();await syncPendingVisitEvents();}
+function renderVisitsBoard(){const s=visitsData.stats||{};setVisitText('#visit-scheduled',s.scheduled);setVisitText('#visit-progress',s.inProgress);setVisitText('#visit-late',s.late);setVisitText('#visit-completed',s.completed);setVisitText('#visit-overrunning',s.overrunning);
+ const list=$('#visits-live-list');if(list)list.innerHTML=(visitsData.visits||[]).map(v=>`<article class="operations-row"><div class="operations-row-status ${escapeHtml(v.live_status||v.status)}"></div><div><strong>${escapeHtml(v.client_name||'Client')}</strong><p>${escapeHtml(v.visit_type||'Care visit')}</p><small>${opFmt(v.scheduled_start)} · ${escapeHtml(v.staff_name||'Unallocated')}</small></div><span class="badge ${v.live_status==='late'||v.live_status==='overrunning'?'danger':v.status==='completed'?'success':v.status==='in_progress'?'active':'neutral'}">${escapeHtml((v.live_status||v.status).replaceAll('_',' '))}</span></article>`).join('')||'<div class="empty-state"><strong>No visits today</strong><span>Schedule a visit to begin live monitoring.</span></div>';
+ const co='<option value="">Select client</option>'+(visitsData.clients||[]).map(x=>`<option value="${escapeHtml(x.id)}">${escapeHtml(x.preferred_name||x.first_name)} ${escapeHtml(x.last_name)}</option>`).join('');const so='<option value="">Unallocated</option>'+(visitsData.staff||[]).map(x=>`<option value="${escapeHtml(x.id)}">${escapeHtml(x.preferred_name||x.first_name)} ${escapeHtml(x.last_name)}</option>`).join('');if($('#visit-client'))$('#visit-client').innerHTML=co;if($('#visit-code-client'))$('#visit-code-client').innerHTML=co;if($('#visit-staff'))$('#visit-staff').innerHTML=so;renderSyncStatus();}
+function renderSyncStatus(){const q=visitQueue(),n=$('#visit-sync-status');if(n)n.innerHTML=q.length?`<strong>${q.length} event${q.length===1?'':'s'} saved offline</strong><span>CoreCare will retry automatically. <button id="visit-sync-now" class="text-button">Sync now</button></span>`:'<strong>All visit events synced</strong><span>No offline records waiting.</span>';$('#visit-sync-now')?.addEventListener('click',syncPendingVisitEvents);}
+async function queueVisitEvent(type,code){const event={eventId:crypto.randomUUID(),type,code:code.trim(),deviceTime:new Date().toISOString(),source:navigator.onLine?'online':'offline'};const q=visitQueue();q.push(event);saveVisitQueue(q);await syncPendingVisitEvents();}
+async function syncPendingVisitEvents(){const q=visitQueue();if(!q.length||!navigator.onLine)return;try{const response=await api('/api/visits/sync',{method:'POST',body:JSON.stringify({events:q})});const ok=new Set((response.results||[]).filter(x=>x.ok).map(x=>x.eventId));saveVisitQueue(q.filter(x=>!ok.has(x.eventId)));if(ok.size)await loadVisitsBoardNoSync();}catch(e){console.warn('Visit sync deferred',e);renderSyncStatus();}}
+async function loadVisitsBoardNoSync(){visitsData=await api('/api/visits/board');renderVisitsBoard();}
+$('#visits-refresh')?.addEventListener('click',loadVisitsBoard);$('#visit-new')?.addEventListener('click',()=>$('#visit-dialog')?.showModal());$('#visit-clock')?.addEventListener('click',()=>$('#visit-clock-dialog')?.showModal());$('#visit-code')?.addEventListener('click',()=>$('#visit-code-dialog')?.showModal());
+$('#visit-form')?.addEventListener('submit',async e=>{e.preventDefault();await api('/api/visits',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.currentTarget)))});e.currentTarget.reset();$('#visit-dialog')?.close();await loadVisitsBoard();});
+$('#visit-code-form')?.addEventListener('submit',async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.currentTarget));const r=await api('/api/visits/client-code',{method:'POST',body:JSON.stringify(data)});$('#visit-code-result').textContent=r.code;$('#visit-code-result-wrap').hidden=false;});
+$('#visit-clock-form')?.addEventListener('submit',async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(e.currentTarget));await queueVisitEvent(data.type,data.code);$('#visit-clock-dialog')?.close();e.currentTarget.reset();});
+window.addEventListener('online',syncPendingVisitEvents);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')syncPendingVisitEvents()});setInterval(syncPendingVisitEvents,60000);renderSyncStatus();
