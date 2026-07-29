@@ -1,5 +1,10 @@
+<<<<<<< HEAD
 /** CoreCare Enterprise 1.3.1 — Workflow Engine */
 const VERSION = "1.3.1";
+=======
+/** CoreCare Enterprise 1.3.0 — AI Executive Assistant */
+const VERSION = "1.3.0";
+>>>>>>> d02e49a45f726f9472027e0b573e0339a3bcc43d
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +16,11 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
+<<<<<<< HEAD
       if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.3.1 — Workflow Engine" });
+=======
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.3.0 — AI Executive Assistant" });
+>>>>>>> d02e49a45f726f9472027e0b573e0339a3bcc43d
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -30,6 +39,7 @@ export default {
         if (url.pathname === "/api/platform/customer-success" && request.method === "GET") return platformCustomerSuccess(env.DB, session);
         if (url.pathname === "/api/platform/assistant" && request.method === "POST") return platformAssistant(request, env.DB, session);
         if (url.pathname === "/api/platform/assistant/history" && request.method === "GET") return platformAssistantHistory(env.DB, session);
+<<<<<<< HEAD
         if (url.pathname === "/api/platform/workflows" && request.method === "GET") return listWorkflows(env.DB, session, url);
         if (url.pathname === "/api/platform/workflows" && request.method === "POST") return createWorkflow(request, env.DB, session);
         if (url.pathname === "/api/platform/workflows/templates" && request.method === "GET") return listWorkflowTemplates(env.DB, session);
@@ -39,6 +49,8 @@ export default {
         if (workflowMatch && request.method === "DELETE") return deleteWorkflow(env.DB, session, decodeURIComponent(workflowMatch[1]));
         const workflowRunMatch = url.pathname.match(/^\/api\/platform\/workflows\/([^/]+)\/run$/);
         if (workflowRunMatch && request.method === "POST") return runWorkflow(request, env.DB, session, decodeURIComponent(workflowRunMatch[1]));
+=======
+>>>>>>> d02e49a45f726f9472027e0b573e0339a3bcc43d
         if (url.pathname === "/api/platform/search" && request.method === "GET") return platformSearch(env.DB, session, url);
         if (url.pathname === "/api/platform/audit" && request.method === "GET") return platformAudit(env.DB, session, url);
         if (url.pathname === "/api/platform/notifications" && request.method === "GET") return platformNotifications(env.DB, session);
@@ -688,6 +700,7 @@ async function saveSubscriptionPlan(request,db,session){
 }
 async function listPlatformUsers(db,session){if(!requirePlatform(session))return forbidden();const r=await db.prepare(`SELECT u.id,u.email,u.display_name,u.access_level,u.status,u.last_login_at,o.name AS organisation_name FROM users u JOIN organisations o ON o.id=u.organisation_id WHERE u.is_platform_user=1 OR u.access_level IN ('platform_owner','platform_admin') ORDER BY u.display_name`).all();return json({users:r.results||[]});}
 
+<<<<<<< HEAD
 
 
 async function listWorkflows(db,session,url){
@@ -722,6 +735,8 @@ async function runWorkflow(request,db,session,id){
 async function listWorkflowRuns(db,session,url){if(!requirePlatform(session))return forbidden();const workflowId=clean(url.searchParams.get('workflowId'));const limit=Math.min(100,Math.max(1,Number(url.searchParams.get('limit'))||30));const q=`SELECT r.*,w.name AS workflow_name,o.name AS organisation_name FROM workflow_runs r JOIN workflow_definitions w ON w.id=r.workflow_id LEFT JOIN organisations o ON o.id=r.organisation_id ${workflowId?'WHERE r.workflow_id=?':''} ORDER BY r.started_at DESC LIMIT ?`;const result=workflowId?await db.prepare(q).bind(workflowId,limit).all():await db.prepare(q).bind(limit).all();return json({runs:result.results||[]});}
 function safeJson(value,fallback){try{return JSON.parse(value||'')}catch{return fallback}}
 
+=======
+>>>>>>> d02e49a45f726f9472027e0b573e0339a3bcc43d
 function requirePlatformIdentity(session) {
   return session.is_platform_user || session.access_level === "platform_owner" || session.access_level === "platform_admin";
 }
