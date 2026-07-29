@@ -116,11 +116,7 @@ function updateIdentity() {
   document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
-<<<<<<< HEAD
 const CORECARE_FALLBACK_VERSION = '1.3.1';
-=======
-const CORECARE_FALLBACK_VERSION = '1.3.0';
->>>>>>> d02e49a45f726f9472027e0b573e0339a3bcc43d
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -141,10 +137,7 @@ const platformViewMeta = {
   'organisation-portfolio': { title: 'Organisations', kicker: 'Customers' },
   'platform-global-search-panel': { title: 'Global search', kicker: 'Customers' },
   'platform-ai-assistant': { title: 'AI executive assistant', kicker: 'Intelligence' },
-<<<<<<< HEAD
   'platform-workflow-engine': { title: 'Workflow engine', kicker: 'Automation' },
-=======
->>>>>>> d02e49a45f726f9472027e0b573e0339a3bcc43d
   'platform-operations-panel': { title: 'Platform operations', kicker: 'Governance' },
   'platform-admin-drawer': { title: 'Security & audit', kicker: 'Governance' }
 };
@@ -155,10 +148,7 @@ const platformDedicatedTargets = [
   'organisation-portfolio',
   'platform-global-search-panel',
   'platform-ai-assistant',
-<<<<<<< HEAD
   'platform-workflow-engine',
-=======
->>>>>>> d02e49a45f726f9472027e0b573e0339a3bcc43d
   'platform-operations-panel',
   'platform-admin-drawer'
 ];
@@ -1112,10 +1102,7 @@ $$('[data-platform-target]').forEach(button => button.addEventListener('click', 
   event.preventDefault();
   showPage('platform');
   showPlatformView(button.dataset.platformTarget || 'platform-page');
-<<<<<<< HEAD
   if(button.dataset.platformTarget==='platform-workflow-engine') loadWorkflowEngine().catch(error=>alert(error.message));
-=======
->>>>>>> d02e49a45f726f9472027e0b573e0339a3bcc43d
 }));
 window.addEventListener('popstate', event => {
   if (currentUser?.isPlatformUser && !currentUser?.supportMode) {
@@ -1128,7 +1115,6 @@ $('#platform-org-search')?.addEventListener('input',renderPlatformOrganisations)
 $('#platform-org-status')?.addEventListener('change',renderPlatformOrganisations);
 $('#platform-add-organisation')?.addEventListener('click',()=>$('#add-organisation')?.click());
 
-<<<<<<< HEAD
 
 
 let workflowData=[];
@@ -1155,8 +1141,6 @@ $('#workflow-form')?.addEventListener('submit',async e=>{e.preventDefault();cons
 $('#workflow-new')?.addEventListener('click',()=>{resetWorkflowForm();$('#workflow-form')?.scrollIntoView({behavior:'smooth'})});
 $('#workflow-reset')?.addEventListener('click',resetWorkflowForm);$('#workflow-refresh')?.addEventListener('click',loadWorkflowEngine);$('#workflow-status-filter')?.addEventListener('change',loadWorkflowEngine);
 
-=======
->>>>>>> d02e49a45f726f9472027e0b573e0339a3bcc43d
 restoreSession();
 
 $('#exit-support-mode')?.addEventListener('click',async()=>{try{await api('/api/platform/exit-support',{method:'POST'});location.reload();}catch(error){alert(error.message);}});
