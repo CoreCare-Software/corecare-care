@@ -116,7 +116,7 @@ function updateIdentity() {
   document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
-const CORECARE_FALLBACK_VERSION = '1.3.1';
+const CORECARE_FALLBACK_VERSION = '1.3.2';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -138,6 +138,7 @@ const platformViewMeta = {
   'platform-global-search-panel': { title: 'Global search', kicker: 'Customers' },
   'platform-ai-assistant': { title: 'AI executive assistant', kicker: 'Intelligence' },
   'platform-workflow-engine': { title: 'Workflow engine', kicker: 'Automation' },
+  'platform-notification-centre': { title: 'Notification centre', kicker: 'Alerts' },
   'platform-operations-panel': { title: 'Platform operations', kicker: 'Governance' },
   'platform-admin-drawer': { title: 'Security & audit', kicker: 'Governance' }
 };
@@ -149,6 +150,7 @@ const platformDedicatedTargets = [
   'platform-global-search-panel',
   'platform-ai-assistant',
   'platform-workflow-engine',
+  'platform-notification-centre',
   'platform-operations-panel',
   'platform-admin-drawer'
 ];
@@ -1103,6 +1105,7 @@ $$('[data-platform-target]').forEach(button => button.addEventListener('click', 
   showPage('platform');
   showPlatformView(button.dataset.platformTarget || 'platform-page');
   if(button.dataset.platformTarget==='platform-workflow-engine') loadWorkflowEngine().catch(error=>alert(error.message));
+  if(button.dataset.platformTarget==='platform-notification-centre') loadNotifications().catch(error=>alert(error.message));
 }));
 window.addEventListener('popstate', event => {
   if (currentUser?.isPlatformUser && !currentUser?.supportMode) {
@@ -1203,3 +1206,21 @@ async function askAiAssistant(question){
 $('#ai-form')?.addEventListener('submit',e=>{e.preventDefault();const q=$('#ai-question')?.value.trim();if(!q)return;$('#ai-question').value='';askAiAssistant(q);});
 $$('[data-ai-question]').forEach(b=>b.addEventListener('click',()=>askAiAssistant(b.dataset.aiQuestion)));
 $('#ai-new-conversation')?.addEventListener('click',async()=>{aiConversationId=null;const chat=$('#ai-chat');if(chat)chat.innerHTML='<div class="ai-message assistant"><div class="ai-avatar">✦</div><div><strong>CoreCare Assistant</strong><p>New conversation started. What would you like to know?</p></div></div>';});
+
+
+let notificationData=[];
+async function loadNotifications(){
+  if(!$('#notification-list'))return;
+  const category=$('#notification-category-filter')?.value||'all',status=$('#notification-status-filter')?.value||'all',search=$('#notification-search')?.value||'';
+  const p=await api(`/api/platform/notifications?category=${encodeURIComponent(category)}&status=${encodeURIComponent(status)}&search=${encodeURIComponent(search)}`);
+  notificationData=p.notifications||[];renderNotifications(p.stats||{});
+}
+function renderNotifications(stats={}){
+  $('#notification-unread-count').textContent=stats.unread||0;$('#notification-critical-count').textContent=stats.critical||0;$('#notification-today-count').textContent=stats.today||0;$('#notification-ack-count').textContent=stats.acknowledged||0;
+  const list=$('#notification-list');if(!list)return;
+  list.innerHTML=notificationData.map(n=>`<article class="notification-item ${n.read_at?'':'unread'}"><span class="notification-priority ${escapeHtml(n.priority||'information')}"></span><div class="notification-body"><strong>${escapeHtml(n.title)}</strong><p>${escapeHtml(n.message)}</p><small>${escapeHtml(n.category||'system')} · ${new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(new Date(`${n.created_at}${String(n.created_at).endsWith('Z')?'':'Z'}`))}${n.organisation_name?' · '+escapeHtml(n.organisation_name):''}</small></div><div class="notification-actions">${!n.read_at?`<button class="row-action" data-notification-read="${escapeHtml(n.id)}">Read</button>`:''}${!n.acknowledged_at?`<button class="row-action" data-notification-ack="${escapeHtml(n.id)}">Acknowledge</button>`:''}<button class="row-action" data-notification-archive="${escapeHtml(n.id)}">Archive</button></div></article>`).join('')||'<div class="empty-state"><strong>No notifications found</strong><span>Change the filters or wait for new platform events.</span></div>';
+  $$('[data-notification-read]').forEach(b=>b.addEventListener('click',async()=>{await api(`/api/platform/notifications/${encodeURIComponent(b.dataset.notificationRead)}/read`,{method:'POST',body:'{}'});await loadNotifications();}));
+  $$('[data-notification-ack]').forEach(b=>b.addEventListener('click',async()=>{await api(`/api/platform/notifications/${encodeURIComponent(b.dataset.notificationAck)}/acknowledge`,{method:'POST',body:'{}'});await loadNotifications();}));
+  $$('[data-notification-archive]').forEach(b=>b.addEventListener('click',async()=>{await api(`/api/platform/notifications/${encodeURIComponent(b.dataset.notificationArchive)}/archive`,{method:'POST',body:'{}'});await loadNotifications();}));
+}
+$('#notifications-refresh')?.addEventListener('click',loadNotifications);$('#notification-category-filter')?.addEventListener('change',loadNotifications);$('#notification-status-filter')?.addEventListener('change',loadNotifications);$('#notification-search')?.addEventListener('input',()=>{clearTimeout(window.notificationSearchTimer);window.notificationSearchTimer=setTimeout(loadNotifications,250)});$('#notifications-mark-all')?.addEventListener('click',async()=>{await api('/api/platform/notifications/mark-all-read',{method:'POST',body:'{}'});await loadNotifications();});

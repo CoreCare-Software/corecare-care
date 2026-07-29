@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.3.1 — Workflow Engine */
-const VERSION = "1.3.1";
+/** CoreCare Enterprise 1.3.2 — Workflow Engine */
+const VERSION = "1.3.2";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.3.1 — Workflow Engine" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.3.2 — Workflow Engine" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -30,6 +30,10 @@ export default {
         if (url.pathname === "/api/platform/customer-success" && request.method === "GET") return platformCustomerSuccess(env.DB, session);
         if (url.pathname === "/api/platform/assistant" && request.method === "POST") return platformAssistant(request, env.DB, session);
         if (url.pathname === "/api/platform/assistant/history" && request.method === "GET") return platformAssistantHistory(env.DB, session);
+        if (url.pathname === "/api/platform/notifications" && request.method === "GET") return listNotifications(env.DB, session, url);
+        if (url.pathname === "/api/platform/notifications/mark-all-read" && request.method === "POST") return markAllNotificationsRead(env.DB, session);
+        const notificationActionMatch = url.pathname.match(/^\/api\/platform\/notifications\/([^/]+)\/(read|acknowledge|archive)$/);
+        if (notificationActionMatch && request.method === "POST") return updateNotificationState(env.DB, session, decodeURIComponent(notificationActionMatch[1]), notificationActionMatch[2]);
         if (url.pathname === "/api/platform/workflows" && request.method === "GET") return listWorkflows(env.DB, session, url);
         if (url.pathname === "/api/platform/workflows" && request.method === "POST") return createWorkflow(request, env.DB, session);
         if (url.pathname === "/api/platform/workflows/templates" && request.method === "GET") return listWorkflowTemplates(env.DB, session);
@@ -1079,3 +1083,28 @@ async function platformAssistant(request, db, session) {
   ]);
   return json({ conversationId, answer, generatedAt: new Date().toISOString() });
 }
+
+
+async function listNotifications(db,session,url){
+  if(!requirePlatform(session))return forbidden();
+  const category=clean(url.searchParams.get('category')),status=clean(url.searchParams.get('status')),search=clean(url.searchParams.get('search'));
+  const clauses=[],args=[];
+  if(category&&category!=='all'){clauses.push('n.category=?');args.push(category)}
+  if(status==='unread')clauses.push('n.read_at IS NULL AND n.archived_at IS NULL');
+  if(status==='read')clauses.push('n.read_at IS NOT NULL AND n.archived_at IS NULL');
+  if(status==='acknowledged')clauses.push('n.acknowledged_at IS NOT NULL');
+  if(status==='archived')clauses.push('n.archived_at IS NOT NULL');
+  if(search){clauses.push('(LOWER(n.title) LIKE ? OR LOWER(n.message) LIKE ?)');args.push(`%${search.toLowerCase()}%`,`%${search.toLowerCase()}%`)}
+  const where=clauses.length?`WHERE ${clauses.join(' AND ')}`:'';
+  const q=`SELECT n.*,o.name AS organisation_name FROM notifications n LEFT JOIN organisations o ON o.id=n.organisation_id ${where} ORDER BY CASE n.priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'warning' THEN 3 ELSE 4 END,n.created_at DESC LIMIT 200`;
+  const rows=await db.prepare(q).bind(...args).all();
+  const stats=await db.prepare(`SELECT SUM(CASE WHEN read_at IS NULL AND archived_at IS NULL THEN 1 ELSE 0 END) unread,SUM(CASE WHEN priority='critical' AND archived_at IS NULL THEN 1 ELSE 0 END) critical,SUM(CASE WHEN date(created_at)=date('now') THEN 1 ELSE 0 END) today,SUM(CASE WHEN acknowledged_at IS NOT NULL THEN 1 ELSE 0 END) acknowledged FROM notifications`).first();
+  return json({notifications:rows.results||[],stats:stats||{}});
+}
+async function updateNotificationState(db,session,id,action){
+  if(!requirePlatform(session))return forbidden();const row=await db.prepare('SELECT id,title FROM notifications WHERE id=?').bind(id).first();if(!row)return notFound('Notification');
+  const column=action==='read'?'read_at':action==='acknowledge'?'acknowledged_at':'archived_at';
+  await db.batch([db.prepare(`UPDATE notifications SET ${column}=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(id),auditStatement(db,session.organisation_id,session.user_id,`platform.notification_${action}`,'notification',id,{title:row.title})]);
+  return json({ok:true});
+}
+async function markAllNotificationsRead(db,session){if(!requirePlatform(session))return forbidden();await db.batch([db.prepare('UPDATE notifications SET read_at=COALESCE(read_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE archived_at IS NULL'),auditStatement(db,session.organisation_id,session.user_id,'platform.notifications_mark_all_read','notification','all',{})]);return json({ok:true});}
