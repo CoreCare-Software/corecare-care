@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.9.0 — Adaptive Allocation Board */
-const VERSION = "1.9.0";
+/** CoreCare Enterprise 1.10.0 — Automated Client Onboarding */
+const VERSION = "1.10.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.9.0 — Adaptive Allocation Board" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.10.0 — Automated Client Onboarding" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -27,6 +27,9 @@ export default {
         if (url.pathname === "/api/operations/board" && request.method === "GET") return operationsBoard(env.DB, session);
         if (url.pathname === "/api/rota" && request.method === "GET") return rotaBoard(env.DB, session, url);
         if (url.pathname === "/api/rota" && request.method === "POST") return createRotaVisit(request, env.DB, session);
+        const requirementMatch = url.pathname.match(/^\/api\/clients\/([^/]+)\/visit-requirements$/);
+        if (requirementMatch && request.method === "GET") return listVisitRequirements(env.DB, session, decodeURIComponent(requirementMatch[1]));
+        if (requirementMatch && request.method === "POST") return saveVisitRequirements(request, env.DB, session, decodeURIComponent(requirementMatch[1]));
         if (/^\/api\/rota\/[^/]+$/.test(url.pathname) && request.method === "PATCH") return updateRotaVisit(request, env.DB, session, url.pathname.split("/").pop());
         if (/^\/api\/rota\/[^/]+\/cancel$/.test(url.pathname) && request.method === "POST") return cancelRotaVisit(request, env.DB, session, url.pathname.split("/")[3]);
         if (url.pathname === "/api/visits/board" && request.method === "GET") return visitsBoard(env.DB, session);
@@ -320,16 +323,78 @@ async function getClient(db, session, id) {
 
 async function createClient(request, db, session) {
   if (!hasRole(session, ["owner", "manager", "carer"])) return forbidden();
-  const input = normaliseClient(await readJson(request));
+  const raw = await readJson(request);
+  const input = normaliseClient(raw);
   const validation = validateClient(input);
   if (validation) return json({ error: { code: "VALIDATION_ERROR", message: validation } }, 400);
   const id = crypto.randomUUID();
   const fields = clientFields(input);
-  await db.batch([
+  const requirements = normaliseVisitRequirements(raw.visitRequirements, raw.visitStartDate);
+  const statements = [
     db.prepare(`INSERT INTO clients (id,organisation_id,branch_id,${fields.names.join(",")}) VALUES (?, ?, ?, ${fields.names.map(() => "?").join(",")})`).bind(id, session.organisation_id, activeBranch(session), ...fields.values),
     auditStatement(db, session.organisation_id, session.user_id, "client.created", "client", id, { name: `${input.firstName} ${input.lastName}` })
-  ]);
-  return json({ client: { ...input, id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } }, 201);
+  ];
+  statements.push(...clientOnboardingStatements(db, session, id, input));
+  for (const requirement of requirements) statements.push(...visitRequirementStatements(db, session, id, requirement));
+  await db.batch(statements);
+  return json({ client: { ...input, id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, requirementsCreated: requirements.length, visitsGenerated: requirements.reduce((n,r)=>n+generatedOccurrenceCount(r),0) }, 201);
+}
+
+
+function normaliseVisitRequirements(value, fallbackStartDate) {
+  if (!Array.isArray(value)) return [];
+  const fallback = clean(fallbackStartDate) || new Date().toISOString().slice(0,10);
+  return value.map(item => ({
+    visitType: clean(item.visitType) || 'Personal care',
+    days: Array.isArray(item.days) ? item.days.map(Number).filter(n => n >= 0 && n <= 6) : [1,2,3,4,5,6,0],
+    preferredTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(clean(item.preferredTime)) ? clean(item.preferredTime) : '08:00',
+    windowMinutes: Math.max(0, Math.min(240, Number(item.windowMinutes) || 60)),
+    durationMinutes: Math.max(15, Math.min(480, Number(item.durationMinutes) || 30)),
+    carersRequired: Math.max(1, Math.min(4, Number(item.carersRequired) || 1)),
+    notes: clean(item.notes),
+    startDate: clean(item.startDate) || fallback,
+    endDate: clean(item.endDate) || null
+  })).filter(r => r.days.length);
+}
+function generatedDates(requirement, weeks=8) {
+  const dates=[]; const start=new Date(`${requirement.startDate}T12:00:00`); const endLimit=requirement.endDate?new Date(`${requirement.endDate}T23:59:59`):new Date(start.getTime()+weeks*7*86400000);
+  for(let d=new Date(start);d<=endLimit;d.setDate(d.getDate()+1)){if(requirement.days.includes(d.getDay()))dates.push(new Date(d));}
+  return dates;
+}
+function generatedOccurrenceCount(requirement){return generatedDates(requirement).length;}
+function visitRequirementStatements(db, session, clientId, requirement) {
+  const requirementId=crypto.randomUUID();
+  const statements=[db.prepare(`INSERT INTO client_visit_requirements(id,organisation_id,client_id,visit_type,days_json,preferred_time,window_minutes,duration_minutes,carers_required,notes,start_date,end_date,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(requirementId,session.organisation_id,clientId,requirement.visitType,JSON.stringify(requirement.days),requirement.preferredTime,requirement.windowMinutes,requirement.durationMinutes,requirement.carersRequired,requirement.notes,requirement.startDate,requirement.endDate,session.user_id)];
+  for(const date of generatedDates(requirement)){
+    const day=date.toISOString().slice(0,10), start=new Date(`${day}T${requirement.preferredTime}:00`), end=new Date(start.getTime()+requirement.durationMinutes*60000);
+    statements.push(db.prepare(`INSERT OR IGNORE INTO care_visits(id,organisation_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,requirement_id,requirement_occurrence_date,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,clientId,null,requirement.visitType,start.toISOString(),end.toISOString(),'scheduled','requirement','draft',requirementId,'requirement',requirementId,day,session.user_id));
+  }
+  return statements;
+}
+function clientOnboardingStatements(db,session,clientId,input){
+  const due=new Date(Date.now()+3*86400000).toISOString();
+  const items=[['assessment','Complete initial assessment','critical'],['care_plan','Complete and approve care plan','critical'],['risk_assessment','Complete risk assessments','critical'],['medication','Complete medication assessment','warning'],['consent','Record consent and key documents','warning'],['funding','Confirm funding and invoicing details','warning'],['visit_requirements','Review visit requirements','warning']];
+  const clientName=`${input.firstName} ${input.lastName}`;
+  const st=[];
+  for(const [key,title,severity] of items){
+    st.push(db.prepare(`INSERT INTO client_onboarding_items(id,organisation_id,client_id,item_key,title,severity,due_at) VALUES(?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,clientId,key,title,severity,due));
+    st.push(db.prepare(`INSERT INTO operations_tasks(id,organisation_id,branch_id,client_id,title,description,category,priority,status,due_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,activeBranch(session),clientId,`${title}: ${clientName}`,'Automatically created during client onboarding.','Onboarding',severity==='critical'?'high':'normal','open',due,session.user_id));
+  }
+  st.push(db.prepare(`INSERT INTO notifications(id,organisation_id,category,priority,title,message,source,source_id,action_url) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,'care','warning',`New client onboarding: ${clientName}`,'Visit requirements have been sent to the allocation queue. Complete the assessment, care plan and risk assessments before publishing care.','client_onboarding',clientId,'#clients'));
+  return st;
+}
+async function listVisitRequirements(db,session,clientId){
+  const rows=await db.prepare(`SELECT * FROM client_visit_requirements WHERE organisation_id=? AND client_id=? AND status='active' ORDER BY preferred_time`).bind(session.organisation_id,clientId).all();
+  return json({requirements:(rows.results||[]).map(r=>({...r,days:JSON.parse(r.days_json||'[]')}))});
+}
+async function saveVisitRequirements(request,db,session,clientId){
+  if(!hasRole(session,['owner','manager','carer']))return forbidden();
+  const input=await readJson(request),requirements=normaliseVisitRequirements(input.requirements,input.startDate);
+  if(!requirements.length)return json({error:{code:'VALIDATION_ERROR',message:'Add at least one valid visit requirement.'}},400);
+  const client=await db.prepare('SELECT id FROM clients WHERE id=? AND organisation_id=?').bind(clientId,session.organisation_id).first();if(!client)return notFound('Client');
+  const statements=[];for(const r of requirements)statements.push(...visitRequirementStatements(db,session,clientId,r));
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,'client.visit_requirements_created','client',clientId,{count:requirements.length}));
+  await db.batch(statements);return json({ok:true,requirementsCreated:requirements.length,visitsGenerated:requirements.reduce((n,r)=>n+generatedOccurrenceCount(r),0)});
 }
 
 async function updateClient(request, db, session, id) {
@@ -442,9 +507,22 @@ async function createRotaVisit(request,db,session){
 async function updateRotaVisit(request,db,session,id){
   const i=await readJson(request),row=await db.prepare(`SELECT * FROM care_visits WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id).first();if(!row)return notFound('Rota visit');
   if(['in_progress','completed'].includes(row.status))return json({error:{code:'VISIT_STARTED',message:'A started or completed visit cannot be rescheduled from the rota.'}},409);
-  const staffId=clean(i.staffId)||null,start=clean(i.scheduledStart)||row.scheduled_start,end=clean(i.scheduledEnd)||row.scheduled_end;
+  const staffId=clean(i.staffId)||null,start=clean(i.scheduledStart)||row.scheduled_start,end=clean(i.scheduledEnd)||row.scheduled_end,scope=['single','future','series'].includes(clean(i.scope))?clean(i.scope):'single',reason=clean(i.reason)||'Planner adjustment';
   if(staffId){const clash=await db.prepare(`SELECT id FROM care_visits WHERE organisation_id=? AND staff_id=? AND id!=? AND rota_status!='cancelled' AND datetime(scheduled_start)<datetime(COALESCE(?,?,'9999-12-31')) AND datetime(COALESCE(scheduled_end,scheduled_start,'9999-12-31'))>datetime(?) LIMIT 1`).bind(session.organisation_id,staffId,id,end,start,start).first();if(clash)return json({error:{code:'ROTA_CLASH',message:'This staff member already has an overlapping visit.'}},409);}
-  await db.batch([db.prepare(`UPDATE care_visits SET client_id=?,staff_id=?,visit_type=?,scheduled_start=?,scheduled_end=?,rota_source='rota',rota_status='published',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.clientId)||row.client_id,staffId,clean(i.visitType)||row.visit_type,start,end,id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'rota.visit_updated','visit',id,{staffId,start,end})]);return json({ok:true});
+  const before=JSON.stringify({staffId:row.staff_id,start:row.scheduled_start,end:row.scheduled_end,visitType:row.visit_type});
+  const after=JSON.stringify({staffId,start,end,visitType:clean(i.visitType)||row.visit_type});
+  const statements=[];
+  if(scope==='single'||!row.requirement_id){statements.push(db.prepare(`UPDATE care_visits SET client_id=?,staff_id=?,visit_type=?,scheduled_start=?,scheduled_end=?,rota_source='planner',rota_status='draft',change_reason=?,manually_overridden=1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.clientId)||row.client_id,staffId,clean(i.visitType)||row.visit_type,start,end,reason,id,session.organisation_id));}
+  else {
+    const time=new Date(start).toISOString().slice(11,16),duration=Math.max(15,Math.round((new Date(end)-new Date(start))/60000));
+    statements.push(db.prepare(`UPDATE client_visit_requirements SET visit_type=?,preferred_time=?,duration_minutes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.visitType)||row.visit_type,time,duration,row.requirement_id,session.organisation_id));
+    const condition=scope==='future'?'AND date(scheduled_start)>=date(?)':'';
+    const bind=[staffId,clean(i.visitType)||row.visit_type,reason,row.requirement_id,session.organisation_id];if(scope==='future')bind.push(row.scheduled_start);
+    statements.push(db.prepare(`UPDATE care_visits SET staff_id=?,visit_type=?,rota_source='planner',rota_status='draft',change_reason=?,manually_overridden=1,updated_at=CURRENT_TIMESTAMP WHERE requirement_id=? AND organisation_id=? AND status='scheduled' ${condition}`).bind(...bind));
+  }
+  statements.push(db.prepare(`INSERT INTO visit_change_history(id,organisation_id,visit_id,requirement_id,change_scope,reason,before_json,after_json,changed_by) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,id,row.requirement_id,scope,reason,before,after,session.user_id));
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_updated','visit',id,{staffId,start,end,scope,reason}));
+  await db.batch(statements);return json({ok:true,scope});
 }
 async function cancelRotaVisit(request,db,session,id){const i=await readJson(request);const row=await db.prepare(`SELECT status FROM care_visits WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id).first();if(!row)return notFound('Rota visit');if(row.status==='completed')return json({error:{code:'VISIT_COMPLETED',message:'A completed visit cannot be cancelled.'}},409);await db.batch([db.prepare(`UPDATE care_visits SET status='cancelled',rota_status='cancelled',cancelled_at=CURRENT_TIMESTAMP,cancellation_reason=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.reason)||'Cancelled from rota',id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'rota.visit_cancelled','visit',id,{reason:i.reason})]);return json({ok:true});}
 
