@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.13.2 — Recurring Visit Workflow Hotfix */
-const VERSION = "1.13.2";
+/** CoreCare Enterprise 1.13.3 — Unified Visit Template Editor */
+const VERSION = "1.13.3";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.13.2 — Recurring Visit Workflow Hotfix" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.13.3 — Unified Visit Template Editor" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -496,12 +496,12 @@ async function rotaBoard(db, session, url) {
   const [visits,clients,staff]=await Promise.all([
     db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,s.first_name||' '||s.last_name staff_name,
       (SELECT rt.status FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_status,
-      (SELECT GROUP_CONCAT(rt.day_of_week) FROM rota_visit_templates rt WHERE rt.organisation_id=v.organisation_id AND rt.series_id=v.recurrence_group_id) recurrence_days,
-      (SELECT MAX(rt.interval_weeks) FROM rota_visit_templates rt WHERE rt.organisation_id=v.organisation_id AND rt.series_id=v.recurrence_group_id) recurrence_interval_weeks,
-      (SELECT MIN(rt.effective_from) FROM rota_visit_templates rt WHERE rt.organisation_id=v.organisation_id AND rt.series_id=v.recurrence_group_id) recurrence_effective_from,
-      (SELECT MAX(rt.effective_to) FROM rota_visit_templates rt WHERE rt.organisation_id=v.organisation_id AND rt.series_id=v.recurrence_group_id) recurrence_effective_to,
-      (SELECT MAX(rt.end_after_occurrences) FROM rota_visit_templates rt WHERE rt.organisation_id=v.organisation_id AND rt.series_id=v.recurrence_group_id) recurrence_end_after_occurrences,
-      CASE WHEN v.staff_id IS NOT NULL THEN 1 ELSE 0 END recurrence_keep_carer
+      (SELECT rt.interval_weeks FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_interval_weeks,
+      (SELECT rt.effective_from FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_effective_from,
+      (SELECT rt.effective_to FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_effective_to,
+      (SELECT rt.end_after_occurrences FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_end_after_occurrences,
+      (SELECT GROUP_CONCAT(rt.day_of_week) FROM rota_visit_templates rt WHERE rt.series_id=v.recurrence_group_id AND rt.organisation_id=v.organisation_id) recurrence_days,
+      CASE WHEN (SELECT rt.preferred_staff_id FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) IS NULL THEN 0 ELSE 1 END recurrence_keep_carer
       FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN staff s ON s.id=v.staff_id AND s.organisation_id=v.organisation_id
       WHERE v.organisation_id=? AND date(v.scheduled_start) BETWEEN date(?) AND date(?) AND v.rota_status!='cancelled'
       ORDER BY v.scheduled_start`).bind(org,from,to).all(),
@@ -594,7 +594,9 @@ async function manageVisitRecurrence(request,db,session,id){
   }
   if(action==='stop'){
     const stopDate=clean(i.effectiveTo)||new Date(visit.scheduled_start).toISOString().slice(0,10);
-    await db.batch([db.prepare(`UPDATE rota_visit_templates SET effective_to=?,status='ended',updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND series_id=?`).bind(stopDate,session.organisation_id,seriesId),auditStatement(db,session.organisation_id,session.user_id,'rota.recurrence_stopped','rota_recurrence',seriesId,{visitId:id,stopDate})]);return json({ok:true,action,seriesId});
+    const statements=[db.prepare(`UPDATE rota_visit_templates SET effective_to=?,status='ended',updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND series_id=?`).bind(stopDate,session.organisation_id,seriesId)];
+    if(i.detachVisit!==false)statements.push(db.prepare(`UPDATE care_visits SET template_id=NULL,recurrence_group_id=NULL,recurrence_pattern='none',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id));
+    statements.push(auditStatement(db,session.organisation_id,session.user_id,'rota.recurrence_stopped','rota_recurrence',seriesId,{visitId:id,stopDate,detached:i.detachVisit!==false}));await db.batch(statements);return json({ok:true,action,seriesId,detached:i.detachVisit!==false});
   }
   const start=new Date(visit.scheduled_start),duration=Math.max(15,Math.round(((visit.scheduled_end?new Date(visit.scheduled_end):new Date(start.getTime()+30*60000))-start)/60000));
   const days=Array.isArray(i.days)&&i.days.length?[...new Set(i.days.map(Number).filter(x=>x>=1&&x<=7))]:[((start.getDay()+6)%7)+1];

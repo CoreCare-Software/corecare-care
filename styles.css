@@ -305,13 +305,9 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:none;box-s
 .template-centre-panel{margin-bottom:1rem}.template-tabs{display:flex;gap:.45rem;flex-wrap:wrap;border-bottom:1px solid var(--border,#d9e1e7);margin-bottom:1rem}.template-tabs button{border:0;background:transparent;padding:.75rem 1rem;font-weight:700;cursor:pointer}.template-tabs button.active{border-bottom:3px solid var(--primary,#0f766e);color:var(--primary,#0f766e)}.template-panel{display:none}.template-panel.active{display:block}.template-panel-head{display:flex;justify-content:space-between;align-items:center;gap:1rem;margin-bottom:.8rem}.template-card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:.75rem}.template-card{display:flex;justify-content:space-between;gap:.75rem;border:1px solid var(--border,#d9e1e7);border-radius:12px;padding:1rem;background:var(--surface,#fff)}.template-card h3{margin:.55rem 0 .2rem}.template-card p,.template-card small{display:block;margin:.15rem 0;color:var(--muted,#64748b)}.generation-result{display:grid;gap:.35rem;padding:1rem;border-radius:10px;background:#ecfdf5;border:1px solid #a7f3d0;margin-top:1rem}.generation-result span,.generation-result small{display:block}.template-card .icon-button{flex:0 0 auto}@media(max-width:700px){.template-panel-head{align-items:flex-start;flex-direction:column}.template-card-grid{grid-template-columns:1fr}}
 .recurrence-days{border:1px solid var(--border,#d8dee8);border-radius:12px;padding:12px;display:flex;flex-wrap:wrap;gap:10px 16px}.recurrence-days legend{font-weight:700;padding:0 6px}.recurrence-days label,.check-label{display:flex!important;align-items:center;gap:7px}.recurrence-days input,.check-label input{width:auto!important}.scheduler-visit .recurrence-badge{position:absolute;right:5px;top:4px;font-style:normal;font-size:12px;background:rgba(255,255,255,.85);border-radius:10px;padding:1px 4px}
 
-
-/* CoreCare 1.13.2 recurring-series visual identity */
-.scheduler-visit[class*="recurrence-series-"]{border-left-width:5px}
-.scheduler-visit.recurrence-series-0{border-left-color:#7c3aed}
-.scheduler-visit.recurrence-series-1{border-left-color:#2563eb}
-.scheduler-visit.recurrence-series-2{border-left-color:#0891b2}
-.scheduler-visit.recurrence-series-3{border-left-color:#ca8a04}
-.scheduler-visit.recurrence-series-4{border-left-color:#db2777}
-.scheduler-visit.recurrence-series-5{border-left-color:#16a34a}
-.recurrence-badge{font-style:normal;position:absolute;right:4px;top:3px;font-size:.72rem;filter:saturate(.9)}
+/* CoreCare 1.13.3 unified visit template editor */
+.visit-template-section{margin-top:18px;padding:18px;border:1px solid var(--border,#d9e2df);border-radius:16px;background:linear-gradient(180deg,rgba(31,111,95,.055),rgba(255,255,255,.7))}
+.visit-template-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:14px}.visit-template-heading h3{margin:2px 0 4px}.visit-template-heading p{margin:0;color:var(--muted,#66736f)}
+.recurrence-editor{margin-top:14px;padding-top:14px;border-top:1px solid var(--border,#d9e2df)}
+.series-actions{display:flex;gap:10px;flex-wrap:wrap;padding-top:8px}.danger-button{border:1px solid #b42318;background:#fff;color:#b42318;border-radius:10px;padding:9px 13px;font-weight:700}.danger-button:hover{background:#fff3f2}
+.planner-edit-dialog{width:min(760px,calc(100vw - 32px));max-height:92vh}.planner-edit-dialog form{max-height:88vh;overflow:auto;padding-right:4px}
