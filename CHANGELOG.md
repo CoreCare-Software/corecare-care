@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.2
+
+- Hardened organisation isolation across live visits, rotas and operations.
+- Added database-level tenant boundary triggers.
+- Added tenant-safe joins and organisation-scoped writes.
+- Scoped offline event duplicate detection to the active organisation.
+
 ## 0.4.1 — Sprint 4B
 
 - Replaced browser-only demonstration sessions with D1-backed authentication.
