@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.5.0 — Electronic Call Monitoring Foundation */
-const VERSION = "1.5.0";
+/** CoreCare Enterprise 1.5.1 — Electronic Call Monitoring Foundation */
+const VERSION = "1.5.1";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.5.0 — Electronic Call Monitoring Foundation" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.5.1 — Electronic Call Monitoring Foundation" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -25,6 +25,10 @@ export default {
         if (url.pathname === "/api/development/status") return developmentStatus(env, session);
         if (url.pathname === "/api/dashboard" && request.method === "GET") return dashboardSummary(env.DB, session);
         if (url.pathname === "/api/operations/board" && request.method === "GET") return operationsBoard(env.DB, session);
+        if (url.pathname === "/api/rota" && request.method === "GET") return rotaBoard(env.DB, session, url);
+        if (url.pathname === "/api/rota" && request.method === "POST") return createRotaVisit(request, env.DB, session);
+        if (/^\/api\/rota\/[^/]+$/.test(url.pathname) && request.method === "PATCH") return updateRotaVisit(request, env.DB, session, url.pathname.split("/").pop());
+        if (/^\/api\/rota\/[^/]+\/cancel$/.test(url.pathname) && request.method === "POST") return cancelRotaVisit(request, env.DB, session, url.pathname.split("/")[3]);
         if (url.pathname === "/api/visits/board" && request.method === "GET") return visitsBoard(env.DB, session);
         if (url.pathname === "/api/visits" && request.method === "POST") return createVisit(request, env.DB, session);
         if (url.pathname === "/api/visits/client-code" && request.method === "POST") return ensureClientVisitCode(request, env.DB, session);
@@ -395,6 +399,44 @@ function toClient(row) {
 
 
 
+
+async function rotaBoard(db, session, url) {
+  const org=session.organisation_id;
+  const from=clean(url.searchParams.get('from'))||new Date().toISOString().slice(0,10);
+  const to=clean(url.searchParams.get('to'))||new Date(Date.now()+6*86400000).toISOString().slice(0,10);
+  const [visits,clients,staff]=await Promise.all([
+    db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,s.first_name||' '||s.last_name staff_name
+      FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id LEFT JOIN staff s ON s.id=v.staff_id
+      WHERE v.organisation_id=? AND date(v.scheduled_start) BETWEEN date(?) AND date(?) AND v.rota_status!='cancelled'
+      ORDER BY v.scheduled_start`).bind(org,from,to).all(),
+    db.prepare(`SELECT id,first_name,last_name,preferred_name FROM clients WHERE organisation_id=? AND archived_at IS NULL ORDER BY first_name,last_name`).bind(org).all(),
+    db.prepare(`SELECT id,first_name,last_name,preferred_name,job_title FROM staff WHERE organisation_id=? AND status='Active' ORDER BY first_name,last_name`).bind(org).all()
+  ]);
+  const rows=visits.results||[], now=Date.now();
+  rows.forEach(v=>{const start=new Date(v.scheduled_start).getTime(),end=v.scheduled_end?new Date(v.scheduled_end).getTime():start+3600000;v.live_status=v.status==='scheduled'&&start<now?'late':v.status==='in_progress'&&end<now?'overrunning':v.status;});
+  const stats={total:rows.length,unallocated:rows.filter(x=>!x.staff_id).length,late:rows.filter(x=>x.live_status==='late').length,inProgress:rows.filter(x=>x.status==='in_progress').length,completed:rows.filter(x=>x.status==='completed').length};
+  return json({from,to,visits:rows,clients:clients.results||[],staff:staff.results||[],stats});
+}
+async function createRotaVisit(request,db,session){
+  const i=await readJson(request),clientId=clean(i.clientId),start=clean(i.scheduledStart);
+  if(!clientId||!start)return json({error:{code:'VALIDATION_ERROR',message:'Select a client and start time.'}},400);
+  const staffId=clean(i.staffId)||null,end=clean(i.scheduledEnd)||null;
+  if(staffId){const clash=await db.prepare(`SELECT id FROM care_visits WHERE organisation_id=? AND staff_id=? AND rota_status!='cancelled' AND status!='cancelled' AND datetime(scheduled_start)<datetime(COALESCE(?,?,'9999-12-31')) AND datetime(COALESCE(scheduled_end,scheduled_start,'9999-12-31'))>datetime(?) LIMIT 1`).bind(session.organisation_id,staffId,end,start,start).first();if(clash)return json({error:{code:'ROTA_CLASH',message:'This staff member already has an overlapping visit.'}},409);}
+  const id=crypto.randomUUID(),recurrence=clean(i.recurrence)||'none',group=recurrence==='none'?null:crypto.randomUUID();
+  const occurrences=[];let cursor=new Date(start),finish=end?new Date(end):null,count=recurrence==='weekly'?Math.min(Number(i.occurrences)||4,52):1;
+  for(let n=0;n<count;n++){const vid=n===0?id:crypto.randomUUID();occurrences.push(db.prepare(`INSERT INTO care_visits(id,organisation_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,published_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)`).bind(vid,session.organisation_id,clientId,staffId,clean(i.visitType)||'Care visit',cursor.toISOString(),finish?finish.toISOString():null,'scheduled','rota','published',group,recurrence,session.user_id));cursor=new Date(cursor.getTime()+7*86400000);if(finish)finish=new Date(finish.getTime()+7*86400000);}
+  occurrences.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_published','visit',id,{clientId,staffId,recurrence,count}));
+  await db.batch(occurrences);return json({ok:true,id,created:count});
+}
+async function updateRotaVisit(request,db,session,id){
+  const i=await readJson(request),row=await db.prepare(`SELECT * FROM care_visits WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id).first();if(!row)return notFound('Rota visit');
+  if(['in_progress','completed'].includes(row.status))return json({error:{code:'VISIT_STARTED',message:'A started or completed visit cannot be rescheduled from the rota.'}},409);
+  const staffId=clean(i.staffId)||null,start=clean(i.scheduledStart)||row.scheduled_start,end=clean(i.scheduledEnd)||row.scheduled_end;
+  if(staffId){const clash=await db.prepare(`SELECT id FROM care_visits WHERE organisation_id=? AND staff_id=? AND id!=? AND rota_status!='cancelled' AND datetime(scheduled_start)<datetime(COALESCE(?,?,'9999-12-31')) AND datetime(COALESCE(scheduled_end,scheduled_start,'9999-12-31'))>datetime(?) LIMIT 1`).bind(session.organisation_id,staffId,id,end,start,start).first();if(clash)return json({error:{code:'ROTA_CLASH',message:'This staff member already has an overlapping visit.'}},409);}
+  await db.batch([db.prepare(`UPDATE care_visits SET client_id=?,staff_id=?,visit_type=?,scheduled_start=?,scheduled_end=?,rota_source='rota',rota_status='published',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(clean(i.clientId)||row.client_id,staffId,clean(i.visitType)||row.visit_type,start,end,id),auditStatement(db,session.organisation_id,session.user_id,'rota.visit_updated','visit',id,{staffId,start,end})]);return json({ok:true});
+}
+async function cancelRotaVisit(request,db,session,id){const i=await readJson(request);const row=await db.prepare(`SELECT status FROM care_visits WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id).first();if(!row)return notFound('Rota visit');if(row.status==='completed')return json({error:{code:'VISIT_COMPLETED',message:'A completed visit cannot be cancelled.'}},409);await db.batch([db.prepare(`UPDATE care_visits SET status='cancelled',rota_status='cancelled',cancelled_at=CURRENT_TIMESTAMP,cancellation_reason=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(clean(i.reason)||'Cancelled from rota',id),auditStatement(db,session.organisation_id,session.user_id,'rota.visit_cancelled','visit',id,{reason:i.reason})]);return json({ok:true});}
+
 async function visitsBoard(db, session) {
   const org=session.organisation_id;
   const [visits,clients,staff,codes]=await Promise.all([
@@ -408,7 +450,7 @@ async function visitsBoard(db, session) {
   const stats={scheduled:rows.filter(x=>x.status==='scheduled').length,inProgress:rows.filter(x=>x.status==='in_progress').length,late:rows.filter(x=>x.live_status==='late').length,completed:rows.filter(x=>x.status==='completed').length,overrunning:rows.filter(x=>x.live_status==='overrunning').length};
   return json({visits:rows,clients:clients.results||[],staff:staff.results||[],codes:codes.results||[],stats});
 }
-async function createVisit(request,db,session){const i=await readJson(request);if(!clean(i.clientId)||!clean(i.scheduledStart))return json({error:{code:'VALIDATION_ERROR',message:'Select a client and scheduled start.'}},400);const id=crypto.randomUUID();await db.batch([db.prepare(`INSERT INTO care_visits(id,organisation_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,created_by) VALUES(?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,clean(i.clientId),clean(i.staffId)||null,clean(i.visitType)||'Care visit',clean(i.scheduledStart),clean(i.scheduledEnd)||null,session.user_id),auditStatement(db,session.organisation_id,session.user_id,'visits.created','visit',id,{clientId:i.clientId})]);return json({ok:true,id});}
+async function createVisit(request,db,session){const i=await readJson(request);if(!clean(i.clientId)||!clean(i.scheduledStart))return json({error:{code:'VALIDATION_ERROR',message:'Select a client and scheduled start.'}},400);const id=crypto.randomUUID();await db.batch([db.prepare(`INSERT INTO care_visits(id,organisation_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,rota_source,rota_status,published_at,created_by) VALUES(?,?,?,?,?,?,?,'manual','published',CURRENT_TIMESTAMP,?)`).bind(id,session.organisation_id,clean(i.clientId),clean(i.staffId)||null,clean(i.visitType)||'Care visit',clean(i.scheduledStart),clean(i.scheduledEnd)||null,session.user_id),auditStatement(db,session.organisation_id,session.user_id,'visits.created','visit',id,{clientId:i.clientId})]);return json({ok:true,id});}
 async function ensureClientVisitCode(request,db,session){const i=await readJson(request),clientId=clean(i.clientId);if(!clientId)return json({error:{code:'VALIDATION_ERROR',message:'Select a client.'}},400);const client=await db.prepare('SELECT id FROM clients WHERE id=? AND organisation_id=? AND archived_at IS NULL').bind(clientId,session.organisation_id).first();if(!client)return notFound('Client');let row=await db.prepare('SELECT code FROM client_visit_codes WHERE organisation_id=? AND client_id=? AND active=1').bind(session.organisation_id,clientId).first();if(!row){const code='CC-'+crypto.randomUUID().replaceAll('-','').slice(0,20).toUpperCase();await db.prepare('INSERT INTO client_visit_codes(id,organisation_id,client_id,code,created_by) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(),session.organisation_id,clientId,code,session.user_id).run();row={code};}return json({ok:true,code:row.code});}
 async function syncVisitEvents(request,db,session){const i=await readJson(request),events=Array.isArray(i.events)?i.events:[];const results=[];for(const event of events){const eventId=clean(event.eventId),code=clean(event.code),type=clean(event.type),deviceTime=clean(event.deviceTime);if(!eventId||!code||!['clock_in','clock_out'].includes(type)||!deviceTime){results.push({eventId,ok:false,error:'Invalid event'});continue;}const existing=await db.prepare('SELECT id FROM visit_events WHERE device_event_id=?').bind(eventId).first();if(existing){results.push({eventId,ok:true,duplicate:true});continue;}const clientCode=await db.prepare('SELECT client_id FROM client_visit_codes WHERE organisation_id=? AND code=? AND active=1').bind(session.organisation_id,code).first();if(!clientCode){results.push({eventId,ok:false,error:'Invalid or inactive client code'});continue;}let visit=await db.prepare(`SELECT id,status FROM care_visits WHERE organisation_id=? AND client_id=? AND (staff_id IS NULL OR staff_id=?) AND date(scheduled_start)=date(?) AND status IN ('scheduled','in_progress') ORDER BY ABS(strftime('%s',scheduled_start)-strftime('%s',?)) LIMIT 1`).bind(session.organisation_id,clientCode.client_id,session.staff_id||'',deviceTime,deviceTime).first();if(!visit){results.push({eventId,ok:false,error:'No matching visit found'});continue;}if(type==='clock_in'&&visit.status!=='scheduled'){results.push({eventId,ok:true,duplicate:true});continue;}if(type==='clock_out'&&visit.status!=='in_progress'){results.push({eventId,ok:false,error:'Visit is not clocked in'});continue;}const source=clean(event.source)||'online';const update=type==='clock_in'?db.prepare(`UPDATE care_visits SET status='in_progress',actual_start=?,clock_in_method='qr',clock_in_device_time=?,clock_in_received_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(deviceTime,deviceTime,visit.id):db.prepare(`UPDATE care_visits SET status='completed',actual_end=?,clock_out_method='qr',clock_out_device_time=?,clock_out_received_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(deviceTime,deviceTime,visit.id);await db.batch([update,db.prepare(`INSERT INTO visit_events(id,organisation_id,visit_id,event_type,device_event_id,device_time,source,payload_json,created_by) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,visit.id,type,eventId,deviceTime,source,JSON.stringify(event),session.user_id),auditStatement(db,session.organisation_id,session.user_id,`visits.${type}`,'visit',visit.id,{deviceTime,source})]);results.push({eventId,ok:true,visitId:visit.id});}return json({ok:true,results,receivedAt:new Date().toISOString()});}
 

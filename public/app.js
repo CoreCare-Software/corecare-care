@@ -266,6 +266,11 @@ function showPage(page) {
     loadPlatformWorkspace().catch(showToastError);
     return;
   }
+  if (page === 'rota') {
+    activatePage('#rota-page');
+    loadRotaBoard();
+    return;
+  }
   if (page === 'visits') {
     activatePage('#visits-page');
     pageKicker.textContent = 'Electronic call monitoring';
@@ -1281,7 +1286,17 @@ $('#operations-task-form')?.addEventListener('submit', e => {
 $('#operations-incident-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);await api('/api/operations/incidents',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});e.currentTarget.reset();$('#operations-incident-dialog').close();await loadOperationsBoard();});$('#operations-handover-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);await api('/api/operations/handovers',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});e.currentTarget.reset();$('#operations-handover-dialog').close();await loadOperationsBoard();});
 
 
-/* Electronic Call Monitoring 1.5.0 */
+/* Electronic Call Monitoring 1.5.1 */
+
+let rotaData={visits:[],clients:[],staff:[],stats:{}};
+function mondayOf(value){const d=value?new Date(value+'T12:00:00'):new Date(),day=(d.getDay()+6)%7;d.setDate(d.getDate()-day);return d.toISOString().slice(0,10)}
+async function loadRotaBoard(){const week=$('#rota-week');if(week&&!week.value)week.value=mondayOf();const from=week?.value||mondayOf(),to=new Date(new Date(from+'T12:00:00').getTime()+6*86400000).toISOString().slice(0,10);rotaData=await api(`/api/rota?from=${from}&to=${to}`);renderRotaBoard();}
+function renderRotaBoard(){const s=rotaData.stats||{};setVisitText('#rota-total',s.total);setVisitText('#rota-unallocated',s.unallocated);setVisitText('#rota-late',s.late);setVisitText('#rota-progress',s.inProgress);setVisitText('#rota-completed',s.completed);const co='<option value="">Select client</option>'+(rotaData.clients||[]).map(x=>`<option value="${escapeHtml(x.id)}">${escapeHtml(x.preferred_name||x.first_name)} ${escapeHtml(x.last_name)}</option>`).join(''),so='<option value="">Unallocated</option>'+(rotaData.staff||[]).map(x=>`<option value="${escapeHtml(x.id)}">${escapeHtml(x.preferred_name||x.first_name)} ${escapeHtml(x.last_name)}</option>`).join('');if($('#rota-client'))$('#rota-client').innerHTML=co;if($('#rota-staff'))$('#rota-staff').innerHTML=so;const sf=$('#rota-staff-filter');if(sf){const val=sf.value;sf.innerHTML='<option value="all">All staff</option><option value="unallocated">Unallocated</option>'+so.replace('<option value="">Unallocated</option>','');sf.value=val||'all';}
+ const staffFilter=$('#rota-staff-filter')?.value||'all',statusFilter=$('#rota-status-filter')?.value||'all';let rows=rotaData.visits||[];if(staffFilter==='unallocated')rows=rows.filter(x=>!x.staff_id);else if(staffFilter!=='all')rows=rows.filter(x=>x.staff_id===staffFilter);if(statusFilter==='unallocated')rows=rows.filter(x=>!x.staff_id);else if(statusFilter!=='all')rows=rows.filter(x=>(x.live_status||x.status)===statusFilter);
+ const groups={};rows.forEach(v=>{const day=v.scheduled_start.slice(0,10);(groups[day]??=[]).push(v)});const grid=$('#rota-grid');if(grid)grid.innerHTML=Object.entries(groups).map(([day,items])=>`<section class="rota-day"><header><strong>${new Date(day+'T12:00:00').toLocaleDateString('en-GB',{weekday:'long'})}</strong><span>${new Date(day+'T12:00:00').toLocaleDateString('en-GB',{day:'numeric',month:'short'})}</span></header>${items.map(v=>`<article class="rota-visit"><time>${new Date(v.scheduled_start).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</time><div><strong>${escapeHtml(v.client_name||'Client')}</strong><span>${escapeHtml(v.visit_type)} · ${escapeHtml(v.staff_name||'Unallocated')}</span></div><span class="badge ${v.live_status==='late'||v.live_status==='overrunning'?'danger':v.status==='completed'?'success':v.status==='in_progress'?'active':'neutral'}">${escapeHtml((v.live_status||v.status).replaceAll('_',' '))}</span>${['scheduled'].includes(v.status)?`<button class="text-button" data-rota-cancel="${v.id}">Cancel</button>`:''}</article>`).join('')}</section>`).join('');if($('#rota-empty'))$('#rota-empty').hidden=rows.length>0;document.querySelectorAll('[data-rota-cancel]').forEach(b=>b.addEventListener('click',async()=>{if(!confirm('Cancel this rota visit?'))return;await api(`/api/rota/${b.dataset.rotaCancel}/cancel`,{method:'POST',body:JSON.stringify({reason:'Cancelled by manager'})});await loadRotaBoard();await loadVisitsBoardNoSync();}));}
+$('#rota-new')?.addEventListener('click',async()=>{if(!rotaData.clients?.length)await loadRotaBoard();$('#rota-form')?.reset();$('#rota-dialog')?.showModal();});$('#rota-refresh')?.addEventListener('click',loadRotaBoard);$('#rota-week')?.addEventListener('change',loadRotaBoard);$('#rota-staff-filter')?.addEventListener('change',renderRotaBoard);$('#rota-status-filter')?.addEventListener('change',renderRotaBoard);
+$('#rota-form')?.addEventListener('submit',async e=>{e.preventDefault();const err=$('#rota-form-error');if(err)err.hidden=true;try{const r=await api('/api/rota',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.currentTarget)))});e.currentTarget.reset();$('#rota-dialog')?.close();await loadRotaBoard();await loadVisitsBoardNoSync();if(r.created>1)alert(`${r.created} weekly visits published.`);}catch(ex){if(err){err.textContent=ex.message;err.hidden=false;}}});
+
 let visitsData={visits:[],clients:[],staff:[],codes:[],stats:{}};
 const VISIT_QUEUE_KEY='corecare_visit_event_queue_v1';
 function visitQueue(){try{return JSON.parse(localStorage.getItem(VISIT_QUEUE_KEY)||'[]')}catch{return[]}}

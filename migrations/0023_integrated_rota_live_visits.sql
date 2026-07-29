@@ -1,0 +1,10 @@
+PRAGMA foreign_keys = ON;
+ALTER TABLE care_visits ADD COLUMN rota_source TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE care_visits ADD COLUMN rota_status TEXT NOT NULL DEFAULT 'published';
+ALTER TABLE care_visits ADD COLUMN recurrence_group_id TEXT;
+ALTER TABLE care_visits ADD COLUMN recurrence_pattern TEXT;
+ALTER TABLE care_visits ADD COLUMN cancelled_at TEXT;
+ALTER TABLE care_visits ADD COLUMN cancellation_reason TEXT DEFAULT '';
+ALTER TABLE care_visits ADD COLUMN published_at TEXT;
+CREATE INDEX IF NOT EXISTS idx_care_visits_rota ON care_visits(organisation_id,scheduled_start,rota_status,staff_id);
+CREATE INDEX IF NOT EXISTS idx_care_visits_recurrence ON care_visits(organisation_id,recurrence_group_id);

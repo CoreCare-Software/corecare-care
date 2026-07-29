@@ -11,3 +11,6 @@
 ## 0.4.0 — Sprint 4A
 
 - Added the Cloudflare D1 foundation, organisations, users, clients and audit logging.
+
+## 1.5.1
+- Integrated rota planning with live visit monitoring and electronic call records.
