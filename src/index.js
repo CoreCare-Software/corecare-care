@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.5.2 — Tenant Isolation Hardening */
-const VERSION = "1.5.2";
+/** CoreCare Enterprise 1.6.1 — Custom Access Control D1 Hotfix */
+const VERSION = "1.6.1";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.5.2 — Tenant Isolation Hardening" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.6.1 — Custom Access Control D1 Hotfix" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -100,6 +100,16 @@ export default {
         }
         if (url.pathname === "/api/security/login-history" && request.method === "GET") return listLoginHistory(env.DB, session);
         if (url.pathname === "/api/security/effective-access" && request.method === "GET") return effectiveAccess(env.DB, session, url);
+        if (url.pathname === "/api/security/modules") {
+          if (request.method === "GET") return listOrganisationModules(env.DB, session);
+          if (request.method === "PUT") return updateOrganisationModules(request, env.DB, session);
+        }
+        const userPermissionMatch = url.pathname.match(/^\/api\/security\/users\/([^/]+)\/permissions$/);
+        if (userPermissionMatch) {
+          const targetUserId = decodeURIComponent(userPermissionMatch[1]);
+          if (request.method === "GET") return getUserPermissionOverrides(env.DB, session, targetUserId);
+          if (request.method === "PUT") return updateUserPermissionOverrides(request, env.DB, session, targetUserId);
+        }
         if (url.pathname === "/api/security/emergency-mode" && request.method === "PUT") return updateEmergencyMode(request, env.DB, session);
         if (url.pathname === "/api/branches") {
           if (request.method === "GET") return listBranches(env.DB, session);
@@ -253,7 +263,8 @@ async function sessionInfo(request, env) {
   if (!env.DB) return databaseRequired();
   const session = await requireSession(request, env.DB);
   if (session instanceof Response) return session;
-  return json({ user: publicUser(session), expiresAt: session.expires_at });
+  const access = await buildAccessProfile(env.DB, session);
+  return json({ user: {...publicUser(session), permissions: access.permissions, modules: access.modules}, expiresAt: session.expires_at });
 }
 
 async function requireSession(request, db) {
@@ -1060,17 +1071,21 @@ async function saveFamilyAccess(request,db,session){if(!hasRole(session,["owner"
 
 // Sprint 12 — completed enterprise security services
 const STANDARD_PERMISSION_MAP = {
-  organisation_owner: ['*'], organisation_admin: ['organisation.settings.view','organisation.settings.manage','security.roles.view','security.roles.manage','security.users.view','security.users.manage','security.audit.view','security.sessions.manage','clients.view','clients.create','clients.edit','clients.archive','staff.view','staff.create','staff.edit','care_plans.view','care_plans.create','care_plans.edit','care_plans.archive','risks.view','risks.manage','documents.view','documents.manage','reports.view','data.export'],
-  branch_manager: ['organisation.settings.view','security.roles.view','security.users.view','clients.view','clients.create','clients.edit','staff.view','staff.create','staff.edit','care_plans.view','care_plans.create','care_plans.edit','risks.view','risks.manage','documents.view','documents.manage','reports.view'],
-  senior_carer: ['clients.view','clients.edit','staff.view','care_plans.view','care_plans.create','care_plans.edit','risks.view','risks.manage','documents.view','documents.manage'],
-  carer: ['clients.view','staff.view','care_plans.view','risks.view','documents.view'],
-  office_staff: ['organisation.settings.view','clients.view','clients.create','clients.edit','staff.view','staff.create','staff.edit','reports.view'],
-  auditor: ['organisation.settings.view','security.roles.view','security.users.view','security.audit.view','clients.view','staff.view','care_plans.view','risks.view','documents.view','reports.view'],
+  organisation_owner: ['*'], organisation_admin: ['dashboard.view','operations.view','operations.manage','rota.view','rota.create','rota.edit','rota.publish','rota.cancel','visits.view','visits.clock','visits.override','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','finance.view','finance.manage','family_portal.manage','organisation.settings.view','organisation.settings.manage','security.roles.view','security.roles.manage','security.users.view','security.users.manage','security.audit.view','security.sessions.manage','clients.view','clients.create','clients.edit','clients.archive','staff.view','staff.create','staff.edit','care_plans.view','care_plans.create','care_plans.edit','care_plans.archive','risks.view','risks.manage','documents.view','documents.manage','reports.view','data.export'],
+  branch_manager: ['dashboard.view','operations.view','operations.manage','rota.view','rota.create','rota.edit','rota.publish','visits.view','visits.clock','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','family_portal.manage','organisation.settings.view','security.roles.view','security.users.view','clients.view','clients.create','clients.edit','staff.view','staff.create','staff.edit','care_plans.view','care_plans.create','care_plans.edit','risks.view','risks.manage','documents.view','documents.manage','reports.view'],
+  senior_carer: ['dashboard.view','operations.view','visits.view','visits.clock','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','clients.view','clients.edit','staff.view','care_plans.view','care_plans.create','care_plans.edit','risks.view','risks.manage','documents.view','documents.manage'],
+  carer: ['dashboard.view','visits.view','visits.clock','tasks.view','medication.view','clients.view','staff.view','care_plans.view','risks.view','documents.view'],
+  office_staff: ['dashboard.view','operations.view','rota.view','rota.create','rota.edit','rota.publish','visits.view','tasks.view','tasks.manage','incidents.view','family_portal.manage','organisation.settings.view','clients.view','clients.create','clients.edit','staff.view','staff.create','staff.edit','reports.view'],
+  auditor: ['dashboard.view','operations.view','rota.view','visits.view','medication.view','tasks.view','incidents.view','finance.view','organisation.settings.view','security.roles.view','security.users.view','security.audit.view','clients.view','staff.view','care_plans.view','risks.view','documents.view','reports.view'],
   family: ['clients.view'], platform_owner: ['*'], platform_admin: ['*']
 };
 function canManageSecurity(session){return session.is_platform_user || ['organisation_owner','organisation_admin'].includes(session.access_level) || session.role==='owner';}
 async function userHasPermission(db,session,key){
   if(session.is_platform_user || ['platform_owner','organisation_owner'].includes(session.access_level)) return true;
+  const overrides=await db.prepare(`SELECT permission_key,effect FROM user_permission_overrides WHERE organisation_id=? AND user_id=?`).bind(session.organisation_id,session.user_id).all();
+  const direct=overrides.results||[];
+  if(direct.some(r=>r.permission_key===key&&r.effect==='deny')) return false;
+  if(direct.some(r=>r.permission_key===key&&r.effect==='allow')) return true;
   const assignments=await db.prepare(`SELECT crp.permission_key,crp.effect FROM user_custom_roles ucr JOIN custom_roles cr ON cr.id=ucr.role_id AND cr.is_active=1 JOIN custom_role_permissions crp ON crp.role_id=cr.id WHERE ucr.user_id=? AND ucr.organisation_id=? AND (ucr.valid_from IS NULL OR datetime(ucr.valid_from)<=CURRENT_TIMESTAMP) AND (ucr.valid_until IS NULL OR datetime(ucr.valid_until)>CURRENT_TIMESTAMP) AND (ucr.branch_id IS NULL OR ucr.branch_id=?)`).bind(session.user_id,session.organisation_id,session.active_branch_id||session.home_branch_id||'').all();
   const rows=assignments.results||[];
   if(rows.some(r=>r.permission_key===key&&r.effect==='deny')) return false;
@@ -1206,3 +1221,51 @@ async function updateNotificationState(db,session,id,action){
   return json({ok:true});
 }
 async function markAllNotificationsRead(db,session){if(!requirePlatform(session))return forbidden();await db.batch([db.prepare('UPDATE notifications SET read_at=COALESCE(read_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE archived_at IS NULL'),auditStatement(db,session.organisation_id,session.user_id,'platform.notifications_mark_all_read','notification','all',{})]);return json({ok:true});}
+
+
+const MODULE_PERMISSION_MAP = {
+  dashboard:'dashboard.view', operations:'operations.view', clients:'clients.view', staff:'staff.view',
+  family:'family_portal.manage', care:'care_plans.view', medication:'medication.view', visits:'visits.view',
+  rota:'rota.view', tasks:'tasks.view', incidents:'incidents.view', finance:'finance.view', reports:'reports.view',
+  settings:'organisation.settings.view'
+};
+async function buildAccessProfile(db,session){
+  const catalog=await db.prepare('SELECT permission_key FROM permission_catalog ORDER BY permission_key').all();
+  const permissions=[];
+  for(const row of catalog.results||[]) if(await userHasPermission(db,session,row.permission_key)) permissions.push(row.permission_key);
+  const moduleRows=await db.prepare('SELECT module_key,enabled FROM organisation_modules WHERE organisation_id=?').bind(session.organisation_id).all();
+  const configured=Object.fromEntries((moduleRows.results||[]).map(x=>[x.module_key,Boolean(x.enabled)]));
+  const modules={};
+  for(const [module,key] of Object.entries(MODULE_PERMISSION_MAP)) modules[module]=(configured[module]!==false)&&permissions.includes(key);
+  if(session.is_platform_user) for(const module of Object.keys(MODULE_PERMISSION_MAP)) modules[module]=configured[module]!==false;
+  return {permissions,modules};
+}
+async function listOrganisationModules(db,session){
+  if(!canManageSecurity(session)&&!await userHasPermission(db,session,'organisation.settings.view'))return forbidden();
+  const rows=await db.prepare('SELECT module_key,enabled,updated_at FROM organisation_modules WHERE organisation_id=? ORDER BY module_key').bind(session.organisation_id).all();
+  return json({modules:rows.results||[]});
+}
+async function updateOrganisationModules(request,db,session){
+  if(!canManageSecurity(session)&&!await userHasPermission(db,session,'organisation.settings.manage'))return forbidden();
+  const input=await readJson(request), modules=input.modules&&typeof input.modules==='object'?input.modules:{};
+  const allowed=Object.keys(MODULE_PERMISSION_MAP), statements=[];
+  for(const key of allowed){if(!(key in modules))continue;statements.push(db.prepare(`INSERT INTO organisation_modules(organisation_id,module_key,enabled,updated_by,updated_at) VALUES(?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(organisation_id,module_key) DO UPDATE SET enabled=excluded.enabled,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,key,modules[key]?1:0,session.user_id));}
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,'security.modules_updated','organisation',session.organisation_id,{modules}));
+  await db.batch(statements);return json({ok:true});
+}
+async function getUserPermissionOverrides(db,session,userId){
+  if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.users.manage'))return forbidden();
+  const user=await db.prepare('SELECT id,display_name,email,access_level FROM users WHERE id=? AND organisation_id=?').bind(userId,session.organisation_id).first();
+  if(!user)return notFound('User');
+  const rows=await db.prepare('SELECT permission_key,effect FROM user_permission_overrides WHERE organisation_id=? AND user_id=? ORDER BY permission_key').bind(session.organisation_id,userId).all();
+  return json({user,overrides:rows.results||[]});
+}
+async function updateUserPermissionOverrides(request,db,session,userId){
+  if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.users.manage'))return forbidden();
+  const user=await db.prepare('SELECT id FROM users WHERE id=? AND organisation_id=?').bind(userId,session.organisation_id).first();if(!user)return notFound('User');
+  const input=await readJson(request),allow=Array.isArray(input.allow)?[...new Set(input.allow.map(clean).filter(Boolean))]:[],deny=Array.isArray(input.deny)?[...new Set(input.deny.map(clean).filter(Boolean))]:[];
+  const statements=[db.prepare('DELETE FROM user_permission_overrides WHERE organisation_id=? AND user_id=?').bind(session.organisation_id,userId)];
+  for(const key of allow.filter(x=>!deny.includes(x)))statements.push(db.prepare(`INSERT INTO user_permission_overrides(organisation_id,user_id,permission_key,effect,assigned_by) SELECT ?,?,permission_key,'allow',? FROM permission_catalog WHERE permission_key=?`).bind(session.organisation_id,userId,session.user_id,key));
+  for(const key of deny)statements.push(db.prepare(`INSERT INTO user_permission_overrides(organisation_id,user_id,permission_key,effect,assigned_by) SELECT ?,?,permission_key,'deny',? FROM permission_catalog WHERE permission_key=?`).bind(session.organisation_id,userId,session.user_id,key));
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,'security.user_permissions_updated','user',userId,{allow,deny}));await db.batch(statements);return json({ok:true});
+}
