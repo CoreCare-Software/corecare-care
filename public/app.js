@@ -1,5 +1,6 @@
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
+function setText(selector, value) { const node = $(selector); if (node) node.textContent = value; }
 
 const loginView = $('#login-view');
 const appView = $('#app-view');
@@ -116,7 +117,7 @@ function updateIdentity() {
   document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
-const CORECARE_FALLBACK_VERSION = '1.4.0';
+const CORECARE_FALLBACK_VERSION = '1.4.1';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -413,7 +414,6 @@ function showCustomerSuccessDetail(id){const o=(customerSuccessData?.organisatio
 async function loadPlatformNotifications(){const p=await api('/api/platform/notifications');const rows=p.notifications||[];$('#platform-notification-count').textContent=rows.length;$('#platform-notifications').innerHTML=rows.slice(0,8).map(n=>`<div class="platform-result ${escapeHtml(n.type||'')}"><div><strong>${escapeHtml(n.title)}</strong><small>${escapeHtml(n.message||'')}</small></div></div>`).join('')||'<p class="muted">No platform alerts.</p>';}
 async function loadPlatformHealth(){
   const h=await api('/api/platform/system-health');
-  const setText=(selector,value)=>{const node=$(selector);if(node)node.textContent=value;};
   const tone=status=>status==='critical'||status==='failed'?'danger':status==='warning'||status==='Monitoring'?'warning':'success';
   const fmtDate=value=>value?new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(new Date(`${value}${String(value).endsWith('Z')?'':'Z'}`)):'Never';
   setText('#platform-health-badge',h.overall||'Healthy');

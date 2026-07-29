@@ -11,6 +11,3 @@
 ## 0.4.0 — Sprint 4A
 
 - Added the Cloudflare D1 foundation, organisations, users, clients and audit logging.
-
-## 1.4.0
-- Added Live Operations Board with tasks, incidents, handovers and live compliance signals.
