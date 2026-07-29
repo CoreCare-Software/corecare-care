@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.12.0 — Advanced Planner */
-const VERSION = "1.12.0";
+/** CoreCare Enterprise 1.13.0 — Intelligent Template & Recurrence Engine */
+const VERSION = "1.13.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.12.0 — Advanced Planner" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.13.0 — Intelligent Template & Recurrence Engine" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -27,6 +27,13 @@ export default {
         if (url.pathname === "/api/operations/board" && request.method === "GET") return operationsBoard(env.DB, session);
         if (url.pathname === "/api/rota" && request.method === "GET") return rotaBoard(env.DB, session, url);
         if (url.pathname === "/api/rota" && request.method === "POST") return createRotaVisit(request, env, session);
+        if (url.pathname === "/api/rota/templates" && request.method === "GET") return listRotaTemplates(env.DB, session);
+        if (url.pathname === "/api/rota/templates/visit" && request.method === "POST") return saveRotaVisitTemplate(request, env.DB, session);
+        if (url.pathname === "/api/rota/templates/working-pattern" && request.method === "POST") return saveWorkingPattern(request, env.DB, session);
+        if (url.pathname === "/api/rota/templates/exception" && request.method === "POST") return saveRotaException(request, env.DB, session);
+        if (url.pathname === "/api/rota/templates/generate" && request.method === "POST") return generateRotaFromTemplates(request, env, session);
+        const templateDeleteMatch=url.pathname.match(/^\/api\/rota\/templates\/(visit|working-pattern|exception)\/([^/]+)$/);
+        if(templateDeleteMatch&&request.method === "DELETE") return deleteRotaTemplateItem(env.DB,session,templateDeleteMatch[1],decodeURIComponent(templateDeleteMatch[2]));
         if (url.pathname === "/api/routing/settings") {
           if (request.method === "GET") return getRoutingSettings(env, session);
           if (request.method === "PUT") return updateRoutingSettings(request, env, session);
@@ -498,6 +505,63 @@ async function rotaBoard(db, session, url) {
   const stats={total:rows.length,unallocated:rows.filter(x=>!x.staff_id).length,late:rows.filter(x=>x.live_status==='late').length,inProgress:rows.filter(x=>x.status==='in_progress').length,completed:rows.filter(x=>x.status==='completed').length};
   return json({from,to,visits:rows,clients:clients.results||[],staff:staff.results||[],stats});
 }
+
+async function listRotaTemplates(db,session){
+  if(!await userHasPermission(db,session,'rota.templates.view')&&!hasRole(session,['owner','manager','scheduler','organisation_owner','organisation_admin','branch_manager']))return forbidden();
+  const org=session.organisation_id;
+  const [visitTemplates,patterns,exceptions,runs,clients,staff]=await Promise.all([
+    db.prepare(`SELECT t.*,c.first_name||' '||c.last_name client_name,p.first_name||' '||p.last_name preferred_staff_name,b.first_name||' '||b.last_name backup_staff_name FROM rota_visit_templates t LEFT JOIN clients c ON c.id=t.client_id AND c.organisation_id=t.organisation_id LEFT JOIN staff p ON p.id=t.preferred_staff_id AND p.organisation_id=t.organisation_id LEFT JOIN staff b ON b.id=t.backup_staff_id AND b.organisation_id=t.organisation_id WHERE t.organisation_id=? ORDER BY t.day_of_week,t.preferred_time,c.last_name`).bind(org).all(),
+    db.prepare(`SELECT w.*,s.first_name||' '||s.last_name staff_name FROM staff_working_patterns w LEFT JOIN staff s ON s.id=w.staff_id AND s.organisation_id=w.organisation_id WHERE w.organisation_id=? ORDER BY s.last_name,w.week_number,w.day_of_week,w.start_time`).bind(org).all(),
+    db.prepare(`SELECT e.*,s.first_name||' '||s.last_name staff_name,c.first_name||' '||c.last_name client_name,r.first_name||' '||r.last_name replacement_staff_name FROM rota_template_exceptions e LEFT JOIN staff s ON s.id=e.staff_id AND s.organisation_id=e.organisation_id LEFT JOIN clients c ON c.id=e.client_id AND c.organisation_id=e.organisation_id LEFT JOIN staff r ON r.id=e.replacement_staff_id AND r.organisation_id=e.organisation_id WHERE e.organisation_id=? AND datetime(COALESCE(e.end_at,e.start_at))>=datetime('now','-30 day') ORDER BY e.start_at DESC`).bind(org).all(),
+    db.prepare(`SELECT * FROM rota_generation_runs WHERE organisation_id=? ORDER BY generated_at DESC LIMIT 12`).bind(org).all(),
+    db.prepare(`SELECT id,first_name,last_name,preferred_name FROM clients WHERE organisation_id=? AND archived_at IS NULL ORDER BY first_name,last_name`).bind(org).all(),
+    db.prepare(`SELECT id,first_name,last_name,preferred_name,job_title FROM staff WHERE organisation_id=? AND status='Active' ORDER BY first_name,last_name`).bind(org).all()
+  ]);
+  return json({visitTemplates:visitTemplates.results||[],workingPatterns:patterns.results||[],exceptions:exceptions.results||[],runs:runs.results||[],clients:clients.results||[],staff:staff.results||[]});
+}
+async function saveRotaVisitTemplate(request,db,session){
+  if(!await userHasPermission(db,session,'rota.templates.manage')&&!hasRole(session,['owner','manager','scheduler','organisation_owner','organisation_admin','branch_manager']))return forbidden();
+  const i=await readJson(request),clientId=clean(i.clientId),time=clean(i.preferredTime),day=Number(i.dayOfWeek),duration=Math.max(15,Number(i.durationMinutes)||30);
+  if(!clientId||!time||day<1||day>7)return json({error:{code:'VALIDATION_ERROR',message:'Select a client, day and preferred time.'}},400);
+  const id=clean(i.id)||crypto.randomUUID();
+  await db.batch([db.prepare(`INSERT INTO rota_visit_templates(id,organisation_id,client_id,name,visit_type,day_of_week,preferred_time,duration_minutes,carers_required,preferred_staff_id,backup_staff_id,window_minutes,effective_from,effective_to,status,notes,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET client_id=excluded.client_id,name=excluded.name,visit_type=excluded.visit_type,day_of_week=excluded.day_of_week,preferred_time=excluded.preferred_time,duration_minutes=excluded.duration_minutes,carers_required=excluded.carers_required,preferred_staff_id=excluded.preferred_staff_id,backup_staff_id=excluded.backup_staff_id,window_minutes=excluded.window_minutes,effective_from=excluded.effective_from,effective_to=excluded.effective_to,status=excluded.status,notes=excluded.notes,updated_at=CURRENT_TIMESTAMP`).bind(id,session.organisation_id,clientId,clean(i.name)||'Recurring care visit',clean(i.visitType)||'Care visit',day,time,duration,Math.max(1,Number(i.carersRequired)||1),clean(i.preferredStaffId)||null,clean(i.backupStaffId)||null,Math.max(0,Number(i.windowMinutes)||15),clean(i.effectiveFrom)||null,clean(i.effectiveTo)||null,clean(i.status)||'active',clean(i.notes),session.user_id),auditStatement(db,session.organisation_id,session.user_id,'rota.template_saved','rota_visit_template',id,{clientId,day,time})]);return json({ok:true,id});
+}
+async function saveWorkingPattern(request,db,session){
+  if(!await userHasPermission(db,session,'rota.templates.manage')&&!hasRole(session,['owner','manager','scheduler','organisation_owner','organisation_admin','branch_manager']))return forbidden();
+  const i=await readJson(request),staffId=clean(i.staffId),day=Number(i.dayOfWeek),start=clean(i.startTime),end=clean(i.endTime),cycle=Math.min(8,Math.max(1,Number(i.cycleWeeks)||1)),week=Math.min(cycle,Math.max(1,Number(i.weekNumber)||1));
+  if(!staffId||day<1||day>7||!start||!end||end<=start)return json({error:{code:'VALIDATION_ERROR',message:'Select a carer, day and valid start/end times.'}},400);
+  const id=clean(i.id)||crypto.randomUUID();await db.batch([db.prepare(`INSERT INTO staff_working_patterns(id,organisation_id,staff_id,name,cycle_weeks,week_number,day_of_week,start_time,end_time,status,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET staff_id=excluded.staff_id,name=excluded.name,cycle_weeks=excluded.cycle_weeks,week_number=excluded.week_number,day_of_week=excluded.day_of_week,start_time=excluded.start_time,end_time=excluded.end_time,status=excluded.status,updated_at=CURRENT_TIMESTAMP`).bind(id,session.organisation_id,staffId,clean(i.name)||'Normal working pattern',cycle,week,day,start,end,clean(i.status)||'active',session.user_id),auditStatement(db,session.organisation_id,session.user_id,'rota.working_pattern_saved','staff_working_pattern',id,{staffId,day,start,end})]);return json({ok:true,id});
+}
+async function saveRotaException(request,db,session){
+  if(!await userHasPermission(db,session,'rota.templates.manage')&&!hasRole(session,['owner','manager','scheduler','organisation_owner','organisation_admin','branch_manager']))return forbidden();
+  const i=await readJson(request),start=clean(i.startAt),type=clean(i.exceptionType)||'other';if(!start)return json({error:{code:'VALIDATION_ERROR',message:'Enter the exception start date and time.'}},400);
+  const id=clean(i.id)||crypto.randomUUID();await db.batch([db.prepare(`INSERT INTO rota_template_exceptions(id,organisation_id,exception_type,staff_id,client_id,template_id,start_at,end_at,action,replacement_staff_id,reason,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET exception_type=excluded.exception_type,staff_id=excluded.staff_id,client_id=excluded.client_id,template_id=excluded.template_id,start_at=excluded.start_at,end_at=excluded.end_at,action=excluded.action,replacement_staff_id=excluded.replacement_staff_id,reason=excluded.reason`).bind(id,session.organisation_id,type,clean(i.staffId)||null,clean(i.clientId)||null,clean(i.templateId)||null,start,clean(i.endAt)||null,clean(i.action)||'exclude',clean(i.replacementStaffId)||null,clean(i.reason),session.user_id),auditStatement(db,session.organisation_id,session.user_id,'rota.exception_saved','rota_exception',id,{type,start})]);return json({ok:true,id});
+}
+async function deleteRotaTemplateItem(db,session,type,id){
+  if(!await userHasPermission(db,session,'rota.templates.manage')&&!hasRole(session,['owner','manager','scheduler','organisation_owner','organisation_admin','branch_manager']))return forbidden();
+  const table=type==='visit'?'rota_visit_templates':type==='working-pattern'?'staff_working_patterns':'rota_template_exceptions';await db.batch([db.prepare(`DELETE FROM ${table} WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'rota.template_deleted',type,id,{})]);return json({ok:true});
+}
+function mondayOf(value){const d=new Date(`${value}T00:00:00`);const shift=(d.getDay()+6)%7;d.setDate(d.getDate()-shift);return d;}
+async function generateRotaFromTemplates(request,env,session){
+  const db=env.DB;if(!await userHasPermission(db,session,'rota.templates.generate')&&!hasRole(session,['owner','manager','scheduler','organisation_owner','organisation_admin','branch_manager']))return forbidden();
+  const i=await readJson(request),weekValue=clean(i.weekCommencing);if(!weekValue)return json({error:{code:'VALIDATION_ERROR',message:'Select a week to generate.'}},400);const week=mondayOf(weekValue),weekEnd=new Date(week);weekEnd.setDate(weekEnd.getDate()+7);const mode=['fill','regenerate'].includes(clean(i.mode))?clean(i.mode):'fill';
+  if(mode==='regenerate')await db.prepare(`DELETE FROM care_visits WHERE organisation_id=? AND rota_source='template' AND status='scheduled' AND datetime(scheduled_start)>=datetime(?) AND datetime(scheduled_start)<datetime(?) AND COALESCE(manually_overridden,0)=0`).bind(session.organisation_id,week.toISOString(),weekEnd.toISOString()).run();
+  const templates=(await db.prepare(`SELECT * FROM rota_visit_templates WHERE organisation_id=? AND status='active' ORDER BY day_of_week,preferred_time`).bind(session.organisation_id).all()).results||[];let created=0,skipped=0,unallocated=0;const warnings=[],statements=[];
+  for(const t of templates){const day=new Date(week);day.setDate(day.getDate()+Number(t.day_of_week)-1);const date=day.toISOString().slice(0,10);if(t.effective_from&&date<t.effective_from){skipped++;continue}if(t.effective_to&&date>t.effective_to){skipped++;continue}
+    const start=new Date(`${date}T${t.preferred_time}:00`),end=new Date(start.getTime()+Number(t.duration_minutes)*60000);
+    const duplicate=await db.prepare(`SELECT id FROM care_visits WHERE organisation_id=? AND template_id=? AND date(scheduled_start)=date(?) AND status!='cancelled' LIMIT 1`).bind(session.organisation_id,t.id,start.toISOString()).first();if(duplicate){skipped++;continue}
+    const ex=await db.prepare(`SELECT * FROM rota_template_exceptions WHERE organisation_id=? AND (template_id=? OR client_id=? OR staff_id IN (?,?)) AND datetime(start_at)<=datetime(?) AND datetime(COALESCE(end_at,start_at,'9999-12-31'))>=datetime(?) ORDER BY created_at DESC LIMIT 1`).bind(session.organisation_id,t.id,t.client_id,t.preferred_staff_id||'',t.backup_staff_id||'',end.toISOString(),start.toISOString()).first();if(ex&&ex.action==='exclude'){skipped++;warnings.push(`${t.name}: skipped due to ${ex.exception_type}`);continue}
+    let staffId=ex?.replacement_staff_id||t.preferred_staff_id||null;
+    async function available(candidate){if(!candidate)return false;const clash=await db.prepare(`SELECT id FROM care_visits WHERE organisation_id=? AND staff_id=? AND status!='cancelled' AND datetime(scheduled_start)<datetime(?) AND datetime(COALESCE(scheduled_end,scheduled_start))>datetime(?) LIMIT 1`).bind(session.organisation_id,candidate,end.toISOString(),start.toISOString()).first();if(clash)return false;const pattern=await db.prepare(`SELECT id FROM staff_working_patterns WHERE organisation_id=? AND staff_id=? AND status='active' AND day_of_week=? AND time(start_time)<=time(?) AND time(end_time)>=time(?) LIMIT 1`).bind(session.organisation_id,candidate,t.day_of_week,t.preferred_time,end.toISOString().slice(11,16)).first();return Boolean(pattern)}
+    if(staffId&&!await available(staffId))staffId=t.backup_staff_id&&await available(t.backup_staff_id)?t.backup_staff_id:null;
+    if(!staffId){unallocated++;warnings.push(`${t.name}: left in allocation queue`)}
+    const id=crypto.randomUUID();statements.push(db.prepare(`INSERT INTO care_visits(id,organisation_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,template_id,published_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)`).bind(id,session.organisation_id,t.client_id,staffId,t.visit_type,start.toISOString(),end.toISOString(),'scheduled','template','draft',t.id,'weekly_template',t.id,session.user_id));created++;
+  }
+  const runId=crypto.randomUUID();statements.push(db.prepare(`INSERT INTO rota_generation_runs(id,organisation_id,week_commencing,templates_considered,visits_created,visits_skipped,visits_unallocated,warnings_json,generated_by) VALUES(?,?,?,?,?,?,?,?,?)`).bind(runId,session.organisation_id,week.toISOString().slice(0,10),templates.length,created,skipped,unallocated,JSON.stringify(warnings),session.user_id));statements.push(auditStatement(db,session.organisation_id,session.user_id,'rota.week_generated','rota_generation',runId,{week:weekValue,created,skipped,unallocated,mode}));if(statements.length)await db.batch(statements);
+  const staffDays=(await db.prepare(`SELECT DISTINCT staff_id,date(scheduled_start) day FROM care_visits WHERE organisation_id=? AND staff_id IS NOT NULL AND datetime(scheduled_start)>=datetime(?) AND datetime(scheduled_start)<datetime(?)`).bind(session.organisation_id,week.toISOString(),weekEnd.toISOString()).all()).results||[];for(const x of staffDays)await recalculateStaffTravel(env,session,x.staff_id,x.day);
+  return json({ok:true,runId,templates:templates.length,created,skipped,unallocated,warnings});
+}
+
 async function createRotaVisit(request,env,session){
   const db=env.DB;
   const i=await readJson(request),clientId=clean(i.clientId),start=clean(i.scheduledStart);
