@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.13.4 — Planner UX Polish */
-const VERSION = "1.13.4";
+/** CoreCare Enterprise 1.14.0 — Planner Intelligence */
+const VERSION = "1.14.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.13.4 — Planner UX Polish" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.14.0 — Planner Intelligence" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -493,7 +493,7 @@ async function rotaBoard(db, session, url) {
   const org=session.organisation_id;
   const from=clean(url.searchParams.get('from'))||new Date().toISOString().slice(0,10);
   const to=clean(url.searchParams.get('to'))||new Date(Date.now()+6*86400000).toISOString().slice(0,10);
-  const [visits,clients,staff]=await Promise.all([
+  const [visits,clients,staff,patterns,requirements,assignments]=await Promise.all([
     db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,s.first_name||' '||s.last_name staff_name,
       (SELECT rt.status FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_status,
       (SELECT rt.interval_weeks FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_interval_weeks,
@@ -506,12 +506,15 @@ async function rotaBoard(db, session, url) {
       WHERE v.organisation_id=? AND date(v.scheduled_start) BETWEEN date(?) AND date(?) AND v.rota_status!='cancelled'
       ORDER BY v.scheduled_start`).bind(org,from,to).all(),
     db.prepare(`SELECT id,first_name,last_name,preferred_name FROM clients WHERE organisation_id=? AND archived_at IS NULL ORDER BY first_name,last_name`).bind(org).all(),
-    db.prepare(`SELECT id,first_name,last_name,preferred_name,job_title FROM staff WHERE organisation_id=? AND status='Active' ORDER BY first_name,last_name`).bind(org).all()
+    db.prepare(`SELECT id,first_name,last_name,preferred_name,job_title FROM staff WHERE organisation_id=? AND status='Active' ORDER BY first_name,last_name`).bind(org).all(),
+    db.prepare(`SELECT * FROM staff_working_patterns WHERE organisation_id=? AND status='active' ORDER BY staff_id,week_number,day_of_week,start_time`).bind(org).all(),
+    db.prepare(`SELECT * FROM client_visit_requirements WHERE organisation_id=? AND status='active'`).bind(org).all(),
+    db.prepare(`SELECT client_id,staff_id FROM client_staff_assignments WHERE organisation_id=?`).bind(org).all()
   ]);
   const rows=visits.results||[], now=Date.now();
   rows.forEach(v=>{const start=new Date(v.scheduled_start).getTime(),end=v.scheduled_end?new Date(v.scheduled_end).getTime():start+3600000;v.live_status=v.status==='scheduled'&&start<now?'late':v.status==='in_progress'&&end<now?'overrunning':v.status;});
   const stats={total:rows.length,unallocated:rows.filter(x=>!x.staff_id).length,late:rows.filter(x=>x.live_status==='late').length,inProgress:rows.filter(x=>x.status==='in_progress').length,completed:rows.filter(x=>x.status==='completed').length};
-  return json({from,to,visits:rows,clients:clients.results||[],staff:staff.results||[],stats});
+  return json({from,to,visits:rows,clients:clients.results||[],staff:staff.results||[],workingPatterns:patterns.results||[],requirements:requirements.results||[],preferredAssignments:assignments.results||[],stats});
 }
 
 async function listRotaTemplates(db,session){
