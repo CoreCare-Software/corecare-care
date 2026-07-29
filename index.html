@@ -3,157 +3,463 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#173f3a">
-  <meta name="description" content="Project Forget Me Not care management platform demonstration">
-  <title>Forget Me Not Care</title>
+  <meta name="theme-color" content="#0f766e">
+  <meta name="description" content="CoreCare care management platform">
+  <title>CoreCare</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div id="login-view" class="login-shell">
     <section class="login-panel" aria-labelledby="login-title">
-      <div class="brand-mark" aria-hidden="true">FMN</div>
-      <p class="eyebrow">Project Forget Me Not</p>
-      <h1 id="login-title">Care management, made clearer.</h1>
-      <p class="intro">This is the first working demonstration of the Forget Me Not platform.</p>
-
+      <div class="brand lockup">
+        <div class="brand-symbol" aria-hidden="true"><span></span><span></span></div>
+        <div><strong>CoreCare</strong><small>Care management platform</small></div>
+      </div>
+      <div class="login-copy">
+        <p class="eyebrow">Secure workspace</p>
+        <h1 id="login-title">Care at the centre of everything.</h1>
+        <p>One clear place for people, visits, medication, quality and compliance.</p>
+      </div>
       <form id="login-form" novalidate>
         <label for="email">Email address</label>
-        <input id="email" name="email" type="email" value="admin@demo.fmn" autocomplete="username" required>
-
-        <label for="password">Password</label>
-        <input id="password" name="password" type="password" value="ChangeMe!2026" autocomplete="current-password" required>
-
+        <input id="email" name="email" type="email"  autocomplete="username" required>
+        <div class="password-label"><label for="password">Password</label><button id="toggle-password" type="button">Show</button></div>
+        <input id="password" name="password" type="password"  autocomplete="current-password" required>
+        <div class="form-options"><label class="checkbox"><input type="checkbox" checked> Remember me</label><button class="link-button" type="button">Forgot password?</button></div>
         <p id="login-error" class="form-error" role="alert" hidden></p>
-        <button class="primary-button" type="submit">Sign in to demonstration</button>
+        <button class="primary-button" type="submit">Sign in to CoreCare</button>
       </form>
-
-      <div class="demo-note">
-        <strong>Demonstration login</strong>
-        <span>admin@demo.fmn</span>
-        <span>ChangeMe!2026</span>
-      </div>
+      <p class="legal-copy">Development version. Do not enter real personal or care information.</p>
     </section>
-
-    <aside class="login-art" aria-label="Platform highlights">
-      <div>
-        <p class="eyebrow light">One connected platform</p>
-        <h2>People, care, visits and compliance in one place.</h2>
-        <ul>
-          <li>Live operational dashboard</li>
-          <li>Client and staff records</li>
-          <li>Care planning and medication</li>
-          <li>Scheduling, incidents and audit history</li>
-        </ul>
+    <aside class="login-art" aria-label="CoreCare platform highlights">
+      <div class="art-orbit orbit-one"></div><div class="art-orbit orbit-two"></div>
+      <div class="art-content">
+        <span class="status-pill"><i></i> Platform online</span>
+        <p class="eyebrow light">Connected care operations</p>
+        <h2>See what matters. Act before it becomes urgent.</h2>
+        <div class="feature-grid">
+          <article><strong>46</strong><span>Visits today</span></article>
+          <article><strong>94%</strong><span>Compliance</span></article>
+          <article><strong>3</strong><span>Medication alerts</span></article>
+          <article><strong>15</strong><span>Team members</span></article>
+        </div>
       </div>
     </aside>
   </div>
 
   <div id="app-view" class="app-shell" hidden>
     <aside class="sidebar">
-      <div class="sidebar-brand">
-        <div class="brand-mark small" aria-hidden="true">FMN</div>
-        <div><strong>Forget Me Not</strong><span>Care platform</span></div>
+      <div class="brand sidebar-brand">
+        <div class="brand-symbol small" aria-hidden="true"><span></span><span></span></div>
+        <div><strong>CoreCare</strong><small>Management platform</small></div>
       </div>
-
       <nav aria-label="Primary navigation">
-        <button class="nav-item active" data-page="dashboard">Dashboard</button>
-        <button class="nav-item" data-page="clients">Clients</button>
-        <button class="nav-item" data-page="staff">Staff</button>
-        <button class="nav-item" data-page="schedule">Schedule</button>
-        <button class="nav-item" data-page="care">Care planning</button>
-        <button class="nav-item" data-page="medication">Medication</button>
-        <button class="nav-item" data-page="incidents">Incidents</button>
-        <button class="nav-item" data-page="documents">Documents</button>
-        <button class="nav-item" data-page="reports">Reports</button>
-        <button class="nav-item" data-page="administration">Administration</button>
+        <div id="platform-navigation" class="platform-navigation" hidden>
+          <p id="platform-nav-section" class="nav-section">Platform</p>
+          <button id="platform-nav" class="nav-item active" data-page="platform" data-platform-target="platform-page"><span>⌂</span>Command centre</button>
+          <p class="nav-section">Commercial</p>
+          <button class="nav-item platform-subnav" data-platform-target="revenue-centre"><span>£</span>Revenue centre</button>
+          <button class="nav-item platform-subnav" data-platform-target="customer-success-centre"><span>♡</span>Customer success</button>
+          <p class="nav-section">Customers</p>
+          <button class="nav-item platform-subnav" data-platform-target="organisation-portfolio"><span>◆</span>Organisations</button>
+          <button class="nav-item platform-subnav" data-platform-target="platform-global-search-panel"><span>⌕</span>Global search</button>
+          <button class="nav-item platform-subnav" data-platform-target="platform-ai-assistant"><span>✦</span>AI executive</button>
+          <button class="nav-item platform-subnav" data-platform-target="platform-workflow-engine"><span>⤢</span>Workflow engine</button>
+          <p class="nav-section">Governance</p>
+          <button class="nav-item platform-subnav" data-platform-target="platform-operations-panel"><span>◉</span>Operations</button>
+          <button class="nav-item platform-subnav" data-platform-target="platform-admin-drawer"><span>▤</span>Security & audit</button>
+        </div>
+        <p class="nav-section organisation-workspace-nav">Overview</p>
+        <button class="nav-item active organisation-workspace-nav" data-page="dashboard"><span>⌂</span>Organisation dashboard</button>
+        <p class="nav-section organisation-workspace-nav">People</p>
+        <button class="nav-item organisation-workspace-nav" data-page="clients"><span>◉</span>Clients</button>
+        <button class="nav-item organisation-workspace-nav" data-page="staff"><span>◎</span>Staff</button>
+        <button class="nav-item organisation-workspace-nav" data-page="family"><span>◇</span>Family portal</button>
+        <p class="nav-section organisation-workspace-nav">Care delivery</p>
+        <button class="nav-item organisation-workspace-nav" data-page="care"><span>▤</span>Care plans</button>
+        <button class="nav-item organisation-workspace-nav" data-page="medication"><span>✚</span>Medication</button>
+        <button class="nav-item organisation-workspace-nav" data-page="visits"><span>◷</span>Visits</button>
+        <p class="nav-section organisation-workspace-nav">Operations</p>
+        <button class="nav-item organisation-workspace-nav" data-page="rota"><span>▦</span>Rota</button>
+        <button class="nav-item organisation-workspace-nav" data-page="tasks"><span>✓</span>Tasks</button>
+        <button class="nav-item organisation-workspace-nav" data-page="incidents"><span>!</span>Incidents</button>
+        <button class="nav-item organisation-workspace-nav" data-page="finance"><span>£</span>Finance</button>
+        <button class="nav-item organisation-workspace-nav" data-page="reports"><span>▥</span>Reports</button>
+        <button class="nav-item organisation-workspace-nav" data-page="settings"><span>⚙</span>Settings</button>
       </nav>
-
-      <div class="sidebar-footer">
-        <span class="status-dot"></span> Development demonstration
-      </div>
+      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>Development</strong><small>CoreCare <span id="dev-version">v1.3.1</span></small></div></div>
     </aside>
 
     <div class="workspace">
       <header class="topbar">
         <button id="menu-button" class="icon-button" aria-label="Open navigation" aria-expanded="false">☰</button>
-        <div>
-          <p id="page-kicker" class="eyebrow">Monday, 28 July 2026</p>
-          <h1 id="page-title">Good afternoon, Chris</h1>
-        </div>
-        <div class="user-menu">
-          <div class="avatar" aria-hidden="true">CW</div>
-          <div><strong>Chris Warman</strong><span>Organisation administrator</span></div>
-          <button id="sign-out" class="text-button">Sign out</button>
-        </div>
+        <div class="page-heading"><p id="page-kicker" class="eyebrow"></p><h1 id="page-title">Good afternoon, Chris</h1></div>
+        <div class="top-actions"><button id="quick-add" class="quick-action organisation-workspace-action">+ Quick add</button><button class="notification-button" aria-label="Notifications">●<span>3</span></button></div>
+        <div class="user-menu"><div id="user-avatar" class="avatar">CC</div><div><strong id="user-name">CoreCare user</strong><span id="user-role">Authenticated user</span></div><button id="sign-out" class="text-button">Sign out</button></div>
       </header>
 
+      <div id="support-mode-banner" class="support-mode-banner" hidden>
+        <div class="support-mode-main"><strong>Support Mode</strong><span>You are securely viewing <b id="support-mode-org">an organisation</b>. Organisation switching and platform-wide records are locked until you leave Support Mode.</span></div>
+        <div class="support-mode-meta"><span><b>Entered by:</b> <span id="support-mode-user">Platform user</span></span><span><b>Started:</b> <span id="support-mode-started">Now</span></span><span><b>Access:</b> <span id="support-mode-access">Full support</span></span><span><b>Reason:</b> <span id="support-mode-reason">Support request</span></span></div>
+        <button id="exit-support-mode" class="secondary-button compact">Leave Support Mode</button>
+      </div>
       <main id="main-content" tabindex="-1">
-        <section id="dashboard-page" class="page active-page">
-          <div class="notice-banner">
+        <section id="platform-page" class="page">
+          <div class="executive-hero">
             <div>
-              <strong>Sprint 1 demonstration</strong>
-              <span>This version uses fictional information and does not store real care data.</span>
+              <p class="eyebrow">CoreCare Enterprise <span data-app-version>1.3.1</span></p>
+              <h2 id="executive-greeting">Executive Command Centre</h2>
+              <p id="executive-briefing">Preparing your live platform briefing…</p>
+              <div class="executive-actions"><button id="platform-add-organisation" class="primary-button compact">+ New organisation</button><button id="open-revenue-centre" class="secondary-button compact">Revenue centre</button><button id="executive-refresh" class="secondary-button compact">Refresh command centre</button></div>
             </div>
-            <span class="badge">Development</span>
+            <div class="executive-health-card"><span>Platform status</span><strong id="executive-health-score">Checking</strong><small id="executive-health-copy">Reviewing live services</small><div class="health-pulse"></div></div>
           </div>
 
+          <section class="executive-kpis" aria-label="Executive key performance indicators">
+            <article class="executive-kpi revenue"><span>Monthly recurring revenue</span><strong id="executive-mrr">£0</strong><small id="executive-mrr-note">Across active subscriptions</small></article>
+            <article class="executive-kpi"><span>Annual recurring revenue</span><strong id="executive-arr">£0</strong><small>Current run rate</small></article>
+            <article class="executive-kpi"><span>Active organisations</span><strong id="platform-active-orgs">0</strong><small><span id="platform-org-count">0</span> total · <span id="platform-suspended-orgs">0</span> suspended</small></article>
+            <article class="executive-kpi"><span>Licensed users</span><strong id="platform-user-count">0</strong><small><span id="executive-active-users">0</span> recently active</small></article>
+            <article class="executive-kpi"><span>Customer health</span><strong id="executive-customer-health">0%</strong><small><span id="executive-attention-count">0</span> need attention</small></article>
+            <article class="executive-kpi"><span>Renewals approaching</span><strong id="executive-renewals-count">0</strong><small>Within the next 30 days</small></article>
+          </section>
+
+          <section class="executive-grid">
+            <article id="organisation-portfolio" class="panel executive-span-two">
+              <div class="panel-heading"><div><p class="eyebrow">Customer portfolio</p><h2>Organisation health</h2><p>Commercial status, adoption and risk in one view.</p></div><div class="executive-filters"><input id="platform-org-search" type="search" placeholder="Search organisations"><select id="platform-org-status"><option value="all">All statuses</option><option value="active">Active</option><option value="suspended">Suspended</option></select></div></div>
+              <div class="table-wrap"><table class="client-table executive-table"><thead><tr><th>Organisation</th><th>Plan</th><th>MRR</th><th>Health</th><th>Users</th><th>Clients</th><th>Last activity</th><th></th></tr></thead><tbody id="platform-org-table"></tbody></table></div>
+              <div id="platform-org-empty" class="empty-state" hidden><strong>No organisations found</strong><span>Change the search or create an organisation.</span></div>
+            </article>
+            <article class="panel executive-brief-panel"><div class="panel-heading"><div><p class="eyebrow">Today</p><h2>Executive briefing</h2></div><span class="badge success">Live</span></div><div id="executive-brief-list" class="brief-list"><p class="muted">Loading briefing…</p></div></article>
+
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Customer success</p><h2>Needs attention</h2></div><span id="executive-risk-badge" class="badge neutral">0</span></div><div id="executive-risk-list" class="platform-result-list padded"><p class="muted">Loading…</p></div></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Renewals</p><h2>Upcoming decisions</h2></div></div><div id="executive-renewals" class="platform-result-list padded"><p class="muted">Loading…</p></div></article>
+            <section id="platform-operations-panel" class="operations-centre panel">
+  <div class="panel-heading operations-heading">
+    <div><p class="eyebrow">CoreCare Enterprise <span data-app-version>1.3.1</span></p><h2>Platform Operations Centre</h2><p>Live service health, user activity, errors, support access, scheduled jobs and operational alerts.</p></div>
+    <div class="operations-actions"><span id="platform-health-badge" class="badge success">Checking</span><button id="operations-refresh" class="secondary-button compact">Refresh operations</button></div>
+  </div>
+  <div class="operations-kpis">
+    <article><span>Overall status</span><strong id="ops-overall">Checking</strong><small id="ops-checked">Awaiting live check</small></article>
+    <article><span>Active sessions</span><strong id="ops-sessions">0</strong><small id="ops-users-online">0 users recently active</small></article>
+    <article><span>Errors (24h)</span><strong id="ops-errors">0</strong><small id="ops-error-rate">No failures recorded</small></article>
+    <article><span>Audit events (24h)</span><strong id="ops-audit">0</strong><small id="ops-audit-rate">Platform activity</small></article>
+    <article><span>Support sessions</span><strong id="ops-support">0</strong><small id="ops-support-active">0 currently active</small></article>
+    <article><span>Job health</span><strong id="ops-job-health">0/0</strong><small id="ops-job-note">Scheduled automation</small></article>
+  </div>
+  <div class="operations-grid">
+    <article class="operations-card span-two"><div class="subheading"><div><h3>Service health</h3><p>Current state of the Worker, D1 database, authentication and audit services.</p></div></div><div id="platform-health" class="service-status-grid"></div></article>
+    <article class="operations-card"><div class="subheading"><div><h3>Operational alerts</h3><p>Items requiring platform-owner attention.</p></div><span id="ops-alert-count" class="badge neutral">0</span></div><div id="ops-alerts" class="operations-list"></div></article>
+    <article class="operations-card span-two"><div class="subheading"><div><h3>Scheduled jobs</h3><p>Automation schedule, latest outcome and next expected run.</p></div></div><div class="table-wrap"><table class="client-table"><thead><tr><th>Job</th><th>Schedule</th><th>Status</th><th>Last run</th><th>Next run</th><th>Duration</th></tr></thead><tbody id="ops-jobs"></tbody></table></div></article>
+    <article class="operations-card"><div class="subheading"><div><h3>Recent errors</h3><p>Latest API failures captured by the platform.</p></div></div><div id="ops-error-list" class="operations-list"></div></article>
+    <article class="operations-card"><div class="subheading"><div><h3>Support activity</h3><p>Recent platform access into customer organisations.</p></div></div><div id="ops-support-list" class="operations-list"></div></article>
+    <article class="operations-card span-two"><div class="subheading"><div><h3>24-hour activity</h3><p>Hourly audit-event and error volume across the platform.</p></div></div><div id="ops-activity-chart" class="operations-chart"></div></article>
+  </div>
+</section>
+
+
+            <section id="platform-ai-assistant" class="ai-executive panel">
+              <div class="panel-heading ai-heading">
+                <div><p class="eyebrow">CoreCare Enterprise <span data-app-version>1.3.1</span></p><h2>AI Executive Assistant</h2><p>Ask plain-English questions about revenue, customers, risk, adoption and platform operations.</p></div>
+                <button id="ai-new-conversation" class="secondary-button compact">New conversation</button>
+              </div>
+              <div class="ai-layout">
+                <aside class="ai-briefing-card">
+                  <span class="ai-status"><i></i> Live platform intelligence</span>
+                  <h3>Suggested questions</h3>
+                  <div class="ai-suggestions">
+                    <button data-ai-question="Which organisations need attention?">Which organisations need attention?</button>
+                    <button data-ai-question="Give me the revenue summary">Give me the revenue summary</button>
+                    <button data-ai-question="Are there any platform errors?">Are there any platform errors?</button>
+                    <button data-ai-question="What renewals are approaching?">What renewals are approaching?</button>
+                    <button data-ai-question="Generate my executive briefing">Generate my executive briefing</button>
+                  </div>
+                  <small>Answers are generated from live CoreCare records and never leave this Worker.</small>
+                </aside>
+                <div class="ai-chat-shell">
+                  <div id="ai-chat" class="ai-chat" aria-live="polite">
+                    <div class="ai-message assistant"><div class="ai-avatar">✦</div><div><strong>CoreCare Assistant</strong><p>Good evening. I can analyse your live platform data, customer health, revenue, renewals and operational risks. What would you like to know?</p></div></div>
+                  </div>
+                  <form id="ai-form" class="ai-composer">
+                    <textarea id="ai-question" rows="2" maxlength="500" placeholder="Ask a question about your CoreCare platform…" required></textarea>
+                    <button id="ai-send" class="primary-button" type="submit">Ask CoreCare</button>
+                  </form>
+                  <p id="ai-disclaimer" class="ai-disclaimer">Decision support only. Verify critical care, safeguarding and commercial decisions against the underlying records.</p>
+                </div>
+              </div>
+            </section>
+
+
+            <section id="platform-workflow-engine" class="workflow-engine panel">
+              <div class="panel-heading"><div><p class="eyebrow">CoreCare Enterprise <span data-app-version>1.3.1</span></p><h2>Workflow Engine</h2><p>Build, test and monitor automated actions across CoreCare.</p></div><button id="workflow-new" class="primary-button compact">+ New workflow</button></div>
+              <div class="workflow-kpis"><article><span>Total workflows</span><strong id="workflow-total">0</strong></article><article><span>Active</span><strong id="workflow-active">0</strong></article><article><span>Runs today</span><strong id="workflow-runs-today">0</strong></article><article><span>Failed runs</span><strong id="workflow-failed">0</strong></article></div>
+              <div class="workflow-layout">
+                <section class="workflow-list-panel"><div class="subheading"><div><h3>Automations</h3><p>Platform-wide and organisation-specific workflows.</p></div><select id="workflow-status-filter"><option value="all">All statuses</option><option value="active">Active</option><option value="draft">Draft</option><option value="paused">Paused</option></select></div><div id="workflow-list" class="workflow-list"><p class="muted">Loading workflows…</p></div></section>
+                <section class="workflow-builder-panel"><div class="subheading"><div><h3 id="workflow-builder-title">Create workflow</h3><p>Configure a trigger, optional conditions and one or more actions.</p></div></div>
+                  <form id="workflow-form"><input type="hidden" name="id"><div class="form-grid"><label class="wide"><span>Name *</span><input name="name" required placeholder="e.g. Care plan review escalation"></label><label class="wide"><span>Description</span><textarea name="description" rows="2"></textarea></label><label><span>Scope</span><select name="scope"><option value="platform">Platform-wide</option><option value="organisation">Organisation</option></select></label><label><span>Status</span><select name="status"><option value="draft">Draft</option><option value="active">Active</option><option value="paused">Paused</option></select></label><label class="wide"><span>Trigger</span><select name="triggerType"><option value="care_plan_review_due">Care plan review due</option><option value="risk_review_overdue">Risk assessment overdue</option><option value="document_expiring">Document expiry approaching</option><option value="staff_training_expiring">Staff training expiring</option><option value="subscription_renewal_approaching">Subscription renewal approaching</option><option value="failed_login_threshold">Failed login threshold reached</option><option value="organisation_inactive">Organisation inactive</option><option value="manual">Manual test trigger</option></select></label></div>
+                  <div class="workflow-step"><span class="workflow-step-number">1</span><div><strong>Condition</strong><div class="workflow-inline"><select id="workflow-condition-field"><option value="">No condition</option><option value="daysUntilReview">Days until review</option><option value="riskLevel">Risk level</option><option value="daysInactive">Days inactive</option><option value="daysUntilExpiry">Days until expiry</option></select><select id="workflow-condition-operator"><option value="less_than">is less than</option><option value="greater_than">is greater than</option><option value="equals">equals</option></select><input id="workflow-condition-value" placeholder="Value"></div></div></div>
+                  <div class="workflow-step"><span class="workflow-step-number">2</span><div><strong>Actions</strong><div class="workflow-action-options"><label><input type="checkbox" name="actions" value="create_task"> Create task</label><label><input type="checkbox" name="actions" value="notify_manager"> Notify manager</label><label><input type="checkbox" name="actions" value="executive_alert"> Executive alert</label><label><input type="checkbox" name="actions" value="audit_entry" checked> Add audit entry</label></div></div></div>
+                  <p id="workflow-form-message" class="form-message" hidden></p><div class="dialog-actions"><button id="workflow-reset" type="button" class="secondary-button">Clear</button><button class="primary-button compact" type="submit">Save workflow</button></div></form>
+                </section>
+              </div>
+              <section class="workflow-runs-panel"><div class="subheading"><div><h3>Recent runs</h3><p>Execution status, duration and completed actions.</p></div><button id="workflow-refresh" class="secondary-button compact">Refresh</button></div><div class="table-wrap"><table class="client-table"><thead><tr><th>Workflow</th><th>Scope</th><th>Status</th><th>Started</th><th>Duration</th><th>Actions</th></tr></thead><tbody id="workflow-runs"></tbody></table></div></section>
+            </section>
+
+            <article class="panel executive-span-two"><div class="panel-heading"><div><p class="eyebrow">Live platform feed</p><h2>Latest activity</h2></div></div><div id="platform-activity" class="timeline executive-timeline"><div><p>Loading activity…</p></div></div></article>
+            <article id="platform-global-search-panel" class="panel"><div class="panel-heading"><div><p class="eyebrow">Global search</p><h2>Find anything</h2></div></div><div class="padded"><label class="search-field"><span>Organisations, users, clients or staff</span><input id="platform-global-search" type="search" placeholder="Enter at least 2 characters"></label><div id="platform-search-results" class="platform-result-list"><p class="muted">No search performed.</p></div></div></article>
+          </section>
+
+          <section id="revenue-centre" class="revenue-centre panel">
+            <div class="panel-heading revenue-heading"><div><p class="eyebrow">CoreCare Enterprise <span data-app-version>1.3.1</span></p><h2>Revenue Centre</h2><p>Live subscription run-rate, plan mix, renewal exposure and customer value.</p></div><div class="revenue-actions"><button id="revenue-refresh" class="secondary-button compact">Refresh</button><button id="revenue-export" class="primary-button compact">Export CSV</button></div></div>
+            <div class="revenue-kpis">
+              <div><span>MRR</span><strong id="revenue-mrr">£0</strong><small>Current billable run-rate</small></div>
+              <div><span>ARR</span><strong id="revenue-arr">£0</strong><small>MRR × 12</small></div>
+              <div><span>New MRR</span><strong id="revenue-new-mrr">£0</strong><small>Organisations added this month</small></div>
+              <div><span>MRR at risk/lost</span><strong id="revenue-lost-mrr">£0</strong><small>Suspended or cancelled accounts</small></div>
+              <div><span>Average account</span><strong id="revenue-arpo">£0</strong><small>Per billable organisation</small></div>
+              <div><span>90-day renewals</span><strong id="revenue-renewal-value">£0</strong><small>Monthly value approaching renewal</small></div>
+            </div>
+            <div class="revenue-grid">
+              <article class="revenue-card span-two"><div class="subheading"><div><h3>12-month portfolio run-rate</h3><p>Reconstructed from organisation start dates and current plan prices.</p></div></div><div id="revenue-trend" class="revenue-chart"></div></article>
+              <article class="revenue-card"><div class="subheading"><div><h3>Revenue by plan</h3><p>Current active subscription mix.</p></div></div><div id="revenue-plan-mix" class="plan-mix"></div></article>
+              <article class="revenue-card span-two"><div class="subheading"><div><h3>Renewal forecast</h3><p>Upcoming customer decisions and monthly revenue exposure.</p></div></div><div class="table-wrap"><table class="client-table"><thead><tr><th>Organisation</th><th>Plan</th><th>Renewal</th><th>Days</th><th>MRR</th></tr></thead><tbody id="revenue-renewals"></tbody></table></div></article>
+              <article class="revenue-card"><div class="subheading"><div><h3>Commercial position</h3><p>Immediate subscription indicators.</p></div></div><div id="revenue-commercial-summary" class="health-list"></div></article>
+            </div>
+            <p class="revenue-data-note">Historical figures are an estimated portfolio run-rate until recurring billing events are connected. Current MRR and ARR use live subscription-plan values.</p>
+          </section>
+
+
+          <section id="customer-success-centre" class="customer-success-centre panel">
+            <div class="panel-heading revenue-heading"><div><p class="eyebrow">CoreCare Enterprise <span data-app-version>1.3.1</span></p><h2>Customer Success Centre</h2><p>Live customer health, adoption, renewal risk and recommended actions.</p></div><div class="revenue-actions"><select id="success-filter"><option value="all">All customers</option><option value="risk">At risk</option><option value="attention">Needs attention</option><option value="healthy">Healthy</option></select><button id="success-refresh" class="secondary-button compact">Refresh</button></div></div>
+            <div class="success-kpis"><div><span>Average health</span><strong id="success-average">0%</strong></div><div><span>Healthy</span><strong id="success-healthy">0</strong></div><div><span>Needs attention</span><strong id="success-attention">0</strong></div><div><span>At risk</span><strong id="success-risk">0</strong></div><div><span>Average adoption</span><strong id="success-adoption">0%</strong></div></div>
+            <div class="success-layout"><article class="success-card span-two"><div class="subheading"><div><h3>Customer portfolio</h3><p>Prioritised by risk and engagement.</p></div></div><div class="table-wrap"><table class="client-table"><thead><tr><th>Organisation</th><th>Health</th><th>Trend</th><th>Adoption</th><th>Activity</th><th>Support</th><th></th></tr></thead><tbody id="success-table"></tbody></table></div></article><article class="success-card"><div class="subheading"><div><h3>Recommended actions</h3><p>Select a customer to see the success plan.</p></div></div><div id="success-detail" class="success-detail"><p class="muted">No customer selected.</p></div></article></div>
+          </section>
+          <details id="platform-admin-drawer" class="executive-admin-drawer"><summary>Platform administration and audit</summary><section class="platform-tools-grid">
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Notifications</p><h2>Platform attention</h2></div><span id="platform-notification-count" class="badge neutral">0</span></div><div id="platform-notifications" class="platform-result-list padded"><p class="muted">Loading…</p></div></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Subscription plans</p><h2>Plans and licensing</h2></div></div><div id="platform-plans" class="plan-list padded"><p class="muted">Loading…</p></div></article>
+            <article class="panel span-two"><div class="panel-heading"><div><p class="eyebrow">Platform audit</p><h2>Security and support history</h2></div></div><div class="table-wrap"><table class="client-table"><thead><tr><th>Time</th><th>Organisation</th><th>User</th><th>Action</th><th>Entity</th></tr></thead><tbody id="platform-audit-table"></tbody></table></div></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Platform users</p><h2>CoreCare administrators</h2></div></div><div id="platform-users" class="platform-result-list padded"><p class="muted">Loading…</p></div></article>
+          </section></details>
+        </section>
+
+        <section id="dashboard-page" class="page active-page">
+          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release adds organisation branding, terminology, configurable dashboards and a redesigned platform workspace. Continue using fictional information during development.</span></div><span class="badge">Sprint 10</span></div>
+          <section class="dev-status panel" aria-label="Development status">
+            <div class="panel-heading"><div><p class="eyebrow">Development mode</p><h2>Platform status</h2></div><span id="organisation-name" class="badge neutral">Organisation</span></div>
+            <div class="dev-status-grid">
+              <div><span>Database</span><strong id="dev-db">Checking…</strong></div>
+              <div><span>Authentication</span><strong id="dev-auth">Checking…</strong></div>
+              <div><span>Signed-in user</span><strong id="dev-user">Checking…</strong></div>
+              <div><span>Organisation</span><strong id="dev-org">Checking…</strong></div>
+              <div><span>Last health check</span><strong id="dev-checked">Checking…</strong></div>
+            </div>
+          </section>
+
           <section class="metrics" aria-label="Key figures">
-            <article class="metric-card"><span>Active clients</span><strong>20</strong><small>2 awaiting review</small></article>
-            <article class="metric-card"><span>Care workers</span><strong>15</strong><small>13 available today</small></article>
-            <article class="metric-card"><span>Visits today</span><strong>46</strong><small>31 completed</small></article>
-            <article class="metric-card warning"><span>Open actions</span><strong>7</strong><small>2 high priority</small></article>
+            <article class="metric-card"><div class="metric-icon">◉</div><div><span>Active clients</span><strong id="dash-active-clients">0</strong><small><span id="dash-reviews-due">0</span> reviews due</small></div><em id="dash-high-risk">0 high risk</em></article>
+            <article class="metric-card"><div class="metric-icon">◎</div><div><span>Active staff</span><strong id="dash-active-staff">0</strong><small>of <span id="dash-total-staff">0</span> team members</small></div><em><span id="dash-compliance-due">0</span> compliance due</em></article>
+            <article class="metric-card"><div class="metric-icon">▤</div><div><span>Care plans due</span><strong id="dash-care-plans-due">0</strong><small>due or within 30 days</small></div><em>Review workload</em></article>
+            <article class="metric-card alert"><div class="metric-icon">!</div><div><span>High risks</span><strong id="dash-active-risks">0</strong><small>active risk assessments</small></div><em>Needs attention</em></article>
           </section>
 
           <section class="content-grid">
             <article class="panel span-two">
-              <div class="panel-heading"><div><p class="eyebrow">Today</p><h2>Visit progress</h2></div><button class="secondary-button">View schedule</button></div>
-              <div class="progress-row"><div><strong>Completed</strong><span>31 visits</span></div><progress value="31" max="46">31 of 46</progress><strong>67%</strong></div>
+              <div class="panel-heading"><div><p class="eyebrow">Live operations</p><h2>Today's visit progress</h2></div><button class="secondary-button">Open rota</button></div>
+              <div class="progress-summary"><div><strong>31 of 46 visits completed</strong><span>15 visits remaining today</span></div><strong>67%</strong></div>
+              <progress value="31" max="46">31 of 46</progress>
               <div class="visit-list">
-                <div class="visit"><time>14:00</time><div><strong>Margaret Ellis</strong><span>Personal care · East Kirkby</span></div><span class="badge success">Completed</span></div>
-                <div class="visit"><time>15:00</time><div><strong>Arthur Bennett</strong><span>Medication and meal support · Spilsby</span></div><span class="badge">In progress</span></div>
-                <div class="visit"><time>16:30</time><div><strong>Jean Parker</strong><span>Wellbeing visit · Horncastle</span></div><span class="badge neutral">Scheduled</span></div>
+                <div class="visit"><time>14:00</time><div class="person-avatar">ME</div><div><strong>Margaret Ellis</strong><span>Personal care · East Kirkby</span></div><span class="badge success">Completed</span></div>
+                <div class="visit"><time>15:00</time><div class="person-avatar">AB</div><div><strong>Arthur Bennett</strong><span>Medication and meal support · Spilsby</span></div><span class="badge active">In progress</span></div>
+                <div class="visit"><time>16:30</time><div class="person-avatar">JP</div><div><strong>Jean Parker</strong><span>Wellbeing visit · Horncastle</span></div><span class="badge neutral">Scheduled</span></div>
               </div>
             </article>
 
-            <article class="panel">
-              <div class="panel-heading"><div><p class="eyebrow">Attention</p><h2>Priority actions</h2></div></div>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Attention</p><h2>Priority actions</h2></div><button class="icon-more">•••</button></div>
               <ul class="action-list">
-                <li><span class="priority high"></span><div><strong>Care plan review overdue</strong><span>Margaret Ellis · 2 days</span></div></li>
-                <li><span class="priority medium"></span><div><strong>DBS renewal due</strong><span>Helen Foster · 14 days</span></div></li>
-                <li><span class="priority medium"></span><div><strong>Medication audit</strong><span>East Kirkby branch</span></div></li>
+                <li><span class="priority high"></span><div><strong>Care plan review overdue</strong><span>Margaret Ellis · 2 days</span></div><b>›</b></li>
+                <li><span class="priority medium"></span><div><strong>DBS renewal due</strong><span>Helen Foster · 14 days</span></div><b>›</b></li>
+                <li><span class="priority medium"></span><div><strong>Medication audit</strong><span>East Kirkby branch</span></div><b>›</b></li>
               </ul>
             </article>
 
-            <article class="panel">
-              <div class="panel-heading"><div><p class="eyebrow">Quality</p><h2>Compliance overview</h2></div></div>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Quality</p><h2>Compliance score</h2></div><span class="trend">↑ 2.1%</span></div>
               <div class="ring" aria-label="94 percent compliant"><strong>94%</strong><span>Compliant</span></div>
-              <div class="key-row"><span>Training</span><strong>96%</strong></div>
-              <div class="key-row"><span>Care plan reviews</span><strong>91%</strong></div>
-              <div class="key-row"><span>Staff checks</span><strong>95%</strong></div>
+              <div class="key-row"><span>Training</span><strong>96%</strong></div><div class="key-row"><span>Care plan reviews</span><strong>91%</strong></div><div class="key-row"><span>Staff checks</span><strong>95%</strong></div>
             </article>
 
-            <article class="panel span-two">
-              <div class="panel-heading"><div><p class="eyebrow">Recent activity</p><h2>Operational updates</h2></div><button class="text-button">View audit history</button></div>
-              <div class="timeline">
-                <div><span>14:42</span><p><strong>Visit completed</strong> for Margaret Ellis by Helen Foster.</p></div>
-                <div><span>14:18</span><p><strong>Medication administered</strong> and recorded without exception.</p></div>
-                <div><span>13:55</span><p><strong>Care plan updated</strong> by Sarah Mitchell.</p></div>
-                <div><span>12:30</span><p><strong>New incident assigned</strong> to the registered manager.</p></div>
-              </div>
-            </article>
+            <article class="panel span-two"><div class="panel-heading"><div><p class="eyebrow">Recent activity</p><h2>Operational updates</h2></div><button class="text-button" data-page-link="settings">View audit history</button></div><div id="dashboard-activity" class="timeline"><div><p>Loading recent activity…</p></div></div></article>
           </section>
         </section>
 
+
+        <section id="clients-page" class="page">
+          <div class="module-toolbar">
+            <div><p class="eyebrow">People</p><h2>Clients</h2><p>Manage client profiles, contacts, care status and review dates.</p></div>
+            <button id="add-client" class="primary-button compact">+ Add client</button>
+          </div>
+          <section class="client-stats" aria-label="Client statistics">
+            <article><span>Active clients</span><strong id="client-active-count">0</strong></article>
+            <article><span>Reviews due</span><strong id="client-review-count">0</strong></article>
+            <article><span>High-risk alerts</span><strong id="client-risk-count">0</strong></article>
+          </section>
+          <section class="panel client-panel">
+            <div class="client-controls">
+              <label class="search-field"><span>Search</span><input id="client-search" type="search" placeholder="Search name, town, postcode or NHS number"></label>
+              <label><span>Status</span><select id="client-status-filter"><option value="all">All current clients</option><option value="Active">Active</option><option value="Paused">Paused</option><option value="Archived">Archived</option></select></label>
+            </div>
+            <div class="table-wrap"><table class="client-table"><thead><tr><th>Client</th><th>Location</th><th>Care package</th><th>Next review</th><th>Status</th><th></th></tr></thead><tbody id="client-table-body"></tbody></table></div>
+            <div id="client-empty" class="empty-state" hidden><strong>No clients found</strong><span>Change the search or add a new client.</span></div>
+          </section>
+        </section>
+
+
+        <section id="staff-page" class="page">
+          <div class="module-toolbar"><div><p class="eyebrow">Workforce</p><h2>Staff</h2><p>Manage employment, contact and compliance information.</p></div><button id="add-staff" class="primary-button compact">+ Add staff</button></div>
+          <section class="client-stats"><article><span>Active staff</span><strong id="staff-active-count">0</strong></article><article><span>DBS overdue</span><strong id="staff-dbs-count">0</strong></article><article><span>Training overdue</span><strong id="staff-training-count">0</strong></article></section>
+          <section class="panel client-panel"><div class="client-controls"><label class="search-field"><span>Search</span><input id="staff-search" type="search" placeholder="Search name, role, phone or email"></label><label><span>Status</span><select id="staff-status-filter"><option value="all">All staff</option><option value="Active">Active</option><option value="Inactive">Inactive</option></select></label></div><div class="table-wrap"><table class="client-table"><thead><tr><th>Staff member</th><th>Role</th><th>Contact</th><th>DBS expiry</th><th>Training expiry</th><th>Status</th><th></th></tr></thead><tbody id="staff-table-body"></tbody></table></div><div id="staff-empty" class="empty-state" hidden><strong>No staff found</strong><span>Change the search or add a staff member.</span></div></section>
+        </section>
+
+
+        <section id="care-page" class="page">
+          <div class="module-toolbar">
+            <div><p class="eyebrow">Care delivery</p><h2>Care plans</h2><p>Review every client care plan, monitor review dates and open the full client workspace.</p></div>
+            <button id="care-open-clients" class="primary-button compact">+ Create care plan</button>
+          </div>
+          <section class="client-stats" aria-label="Care-plan statistics">
+            <article><span>Active plans</span><strong id="care-active-count">0</strong></article>
+            <article><span>Due within 30 days</span><strong id="care-due-count">0</strong></article>
+            <article><span>Overdue reviews</span><strong id="care-overdue-count">0</strong></article>
+          </section>
+          <section class="panel client-panel">
+            <div class="client-controls">
+              <label class="search-field"><span>Search</span><input id="care-search" type="search" placeholder="Search client, care plan or author"></label>
+              <label><span>Status</span><select id="care-status-filter"><option value="all">All plans</option><option value="Active">Active</option><option value="Draft">Draft</option><option value="Archived">Archived</option></select></label>
+            </div>
+            <div id="care-overview-list" class="care-overview-list"></div>
+            <div id="care-overview-empty" class="empty-state" hidden><strong>No care plans found</strong><span>Create a care plan from a client's record.</span></div>
+          </section>
+        </section>
+
+        <section id="client-profile-page" class="page">
+          <div class="profile-toolbar">
+            <button id="back-to-clients" class="secondary-button">← Back to clients</button>
+            <div class="profile-actions"><button id="edit-profile-client" class="secondary-button">Edit record</button><button id="archive-profile-client" class="danger-button">Archive client</button></div>
+          </div>
+          <section class="profile-hero panel">
+            <div id="profile-avatar" class="profile-avatar">CC</div>
+            <div class="profile-title"><p class="eyebrow">Client record</p><h2 id="profile-name">Client</h2><p id="profile-subtitle"></p><div id="profile-badges" class="profile-badges"></div></div>
+            <div class="profile-summary"><div><span>Next review</span><strong id="profile-review">—</strong></div><div><span>Risk level</span><strong id="profile-risk">—</strong></div></div>
+          </section>
+          <nav class="profile-tabs" aria-label="Client record sections"><button class="active" data-client-tab="overview">Overview</button><button data-client-tab="care-plans">Care plans</button><button data-client-tab="risks">Risks</button><button data-client-tab="documents">Documents</button><button disabled>Visits</button><button disabled>Medication</button></nav>
+          <section id="client-tab-overview" class="client-tab-panel profile-grid active-tab-panel">
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Personal</p><h2>Personal details</h2></div></div><dl id="profile-personal" class="detail-list"></dl></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Contact</p><h2>Address and contact</h2></div></div><dl id="profile-contact" class="detail-list"></dl></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Key people</p><h2>Contacts and GP</h2></div></div><dl id="profile-people" class="detail-list"></dl></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Care overview</p><h2>Needs and important information</h2></div></div><div id="profile-care" class="care-notes"></div></article>
+          </section>
+          <section id="client-tab-care-plans" class="client-tab-panel"><div class="module-toolbar compact-toolbar"><div><p class="eyebrow">Person-centred planning</p><h2>Care plans</h2><p>Create, review and version the client's support plans.</p></div><button id="add-care-plan" class="primary-button compact">+ Add care plan</button></div><div id="care-plan-list" class="record-card-grid"></div></section>
+          <section id="client-tab-risks" class="client-tab-panel"><div class="module-toolbar compact-toolbar"><div><p class="eyebrow">Safety and wellbeing</p><h2>Risk assessments</h2><p>Record hazards, controls, actions and review dates.</p></div><button id="add-risk" class="primary-button compact">+ Add risk</button></div><div id="risk-list" class="record-card-grid"></div></section>
+          <section id="client-tab-documents" class="client-tab-panel"><div class="module-toolbar compact-toolbar"><div><p class="eyebrow">Client file</p><h2>Documents</h2><p>Register consent forms, DNACPR records, assessments and supporting files.</p></div><button id="add-document" class="primary-button compact">+ Add document</button></div><div class="notice-banner small-notice"><div><strong>Document storage</strong><span>This sprint records document details and secure reference links. Direct file upload will be enabled when Cloudflare R2 storage is connected.</span></div></div><div id="document-list" class="record-card-grid"></div></section>
+        </section>
+
+        <section id="settings-page" class="page">
+          <div class="module-toolbar"><div><p class="eyebrow">Administration</p><h2>Organisation settings</h2><p>Manage organisations, branches, user access, family links and audit history.</p></div><button id="add-user" class="primary-button compact">+ Add user</button></div>
+          <section class="settings-grid">
+            <article class="panel span-two branding-studio"><div class="panel-heading"><div><p class="eyebrow">Organisation experience</p><h2>Branding & portal studio</h2><p>Customise how this organisation sees CoreCare. Changes are previewed before saving.</p></div><span class="badge active">Live preview</span></div>
+<form id="organisation-form" class="branding-layout"><div class="branding-fields form-grid compact-form">
+<label><span>Organisation name</span><input id="organisation-input" name="name" required></label><label><span>Short name</span><input id="organisation-short-name" name="shortName" maxlength="24"></label>
+<label class="wide"><span>Logo URL</span><input id="organisation-logo" name="logoUrl" type="url" placeholder="https://..."></label>
+<label><span>Primary colour</span><input id="organisation-colour" name="primaryColour" type="color" value="#1f6f5f"></label><label><span>Secondary colour</span><input id="organisation-secondary-colour" name="secondaryColour" type="color" value="#0f172a"></label>
+<label><span>Contact email</span><input id="organisation-contact-email" name="contactEmail" type="email"></label><label><span>Contact phone</span><input id="organisation-contact-phone" name="contactPhone"></label><label class="wide"><span>Website</span><input id="organisation-website" name="website" type="url"></label>
+<label class="wide"><span>Dashboard welcome message</span><input id="organisation-welcome" name="dashboardWelcome" placeholder="Welcome to your care operations workspace"></label>
+<label><span>Client terminology</span><select id="term-client" name="termClient"><option>Client</option><option>Service user</option><option>Resident</option><option>Person</option></select></label><label><span>Carer terminology</span><select id="term-carer" name="termCarer"><option>Carer</option><option>Support worker</option><option>Care professional</option></select></label><label><span>Branch terminology</span><select id="term-branch" name="termBranch"><option>Branch</option><option>Office</option><option>Location</option></select></label>
+<label><span>Time zone</span><select id="organisation-timezone" name="timezone"><option value="Europe/London">Europe/London</option><option value="UTC">UTC</option></select></label><label><span>Week starts</span><select id="organisation-week-start" name="weekStart"><option value="monday">Monday</option><option value="sunday">Sunday</option></select></label><label><span>Time format</span><select id="organisation-time-format" name="timeFormat"><option value="24h">24 hour</option><option value="12h">12 hour</option></select></label>
+<fieldset class="wide widget-picker"><legend>Organisation dashboard widgets</legend><label><input type="checkbox" name="dashboardWidget" value="metrics" checked> Key metrics</label><label><input type="checkbox" name="dashboardWidget" value="attention" checked> Priority attention</label><label><input type="checkbox" name="dashboardWidget" value="activity" checked> Recent activity</label><label><input type="checkbox" name="dashboardWidget" value="compliance" checked> Compliance</label></fieldset>
+<label class="wide"><span>Document footer</span><textarea id="organisation-document-footer" name="documentFooter" rows="2"></textarea></label><label class="wide"><span>Invoice footer</span><textarea id="organisation-invoice-footer" name="invoiceFooter" rows="2"></textarea></label>
+<div class="wide"><button class="primary-button compact" type="submit">Save portal customisation</button></div><p id="organisation-message" class="form-message wide" hidden></p></div>
+<aside id="branding-preview" class="branding-preview"><div class="preview-sidebar"><div id="preview-logo" class="preview-logo">CC</div><strong id="preview-name">Organisation</strong><small id="preview-short">Care management</small><nav><span>Dashboard</span><span id="preview-clients">Clients</span><span id="preview-staff">Carers</span><span>Care plans</span><span>Reports</span></nav></div><div class="preview-workspace"><div class="preview-topbar"><span id="preview-welcome">Welcome to your care operations workspace</span><i></i></div><div class="preview-cards"><b></b><b></b><b></b></div><div class="preview-panel"></div></div></aside></form></article>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Security</p><h2>Your password</h2></div></div><button id="open-password" class="secondary-button">Change my password</button></article>
+          </section>
+
+          <section id="platform-admin-panel" class="panel admin-panel" hidden><div class="panel-heading padded"><div><p class="eyebrow">Platform owner</p><h2>Organisations</h2><p>Create organisations, switch support context and suspend access.</p></div><button id="add-organisation" class="primary-button compact">+ Add organisation</button></div><div id="organisation-admin-list" class="record-card-grid padded-grid"></div></section>
+          <section class="panel admin-panel"><div class="panel-heading padded"><div><p class="eyebrow">Locations</p><h2>Branches</h2><p>Users and care records can be assigned to branch locations.</p></div><button id="add-branch" class="primary-button compact">+ Add branch</button></div><div id="branch-list" class="record-card-grid padded-grid"></div></section>
+          <section class="panel enterprise-security-panel"><div class="panel-heading padded"><div><p class="eyebrow">Enterprise identity</p><h2>Security command centre</h2><p>Build precise roles, inspect active sessions and control organisation-wide security policy.</p></div><button id="add-custom-role" class="primary-button compact">+ Create role</button></div><div class="security-metrics"><div><span>Custom roles</span><strong id="security-role-count">0</strong></div><div><span>Active users</span><strong id="security-user-count">0</strong></div><div><span>Active sessions</span><strong id="security-session-count">0</strong></div><div><span>Audit events · 24h</span><strong id="security-event-count">0</strong></div></div><div class="security-command-grid"><section><div class="subheading"><div><h3>Custom roles</h3><p>Every permission is enforced by the same central access engine.</p></div></div><div id="custom-role-list" class="role-card-list"><p class="muted">Loading roles…</p></div></section><section><div class="subheading"><div><h3>Security policy</h3><p>Organisation-wide controls prepared for MFA and trusted devices.</p></div></div><form id="security-policy-form" class="security-policy-form"><label><span>Session duration</span><select name="sessionHours"><option value="4">4 hours</option><option value="8">8 hours</option><option value="12">12 hours</option><option value="24">24 hours</option></select></label><label><span>Idle timeout</span><select name="idleTimeoutMinutes"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option><option value="120">2 hours</option></select></label><label class="security-toggle"><input type="checkbox" name="requireMfa"><span><b>Require multi-factor authentication</b><small>Policy-ready; enrolment arrives with authenticator support.</small></span></label><label class="security-toggle"><input type="checkbox" name="requireTrustedDevice"><span><b>Require trusted devices</b><small>Block unknown devices after device approval is enabled.</small></span></label><label class="security-toggle"><input type="checkbox" name="allowPasswordLogin" checked><span><b>Allow password sign-in</b><small>Keep enabled until SSO or passkeys are configured.</small></span></label><button class="secondary-button" type="submit">Save security policy</button><p id="security-policy-message" class="form-message" hidden></p></form></section></div><section class="security-completion-grid">
+<section class="security-tool-card"><div class="subheading"><div><h3>Effective access tester</h3><p>Check exactly what a user can access before assigning work.</p></div></div><label><span>User</span><select id="effective-access-user"><option value="">Select a user</option></select></label><button id="test-effective-access" class="secondary-button compact">Test access</button><div id="effective-access-result" class="effective-access-result"><p class="muted">Choose a user to inspect their effective permissions.</p></div></section>
+<section class="security-tool-card emergency-card"><div class="subheading"><div><h3>Emergency mode</h3><p>Freeze high-risk activity and apply enhanced auditing during an incident.</p></div><span id="emergency-mode-badge" class="badge neutral">Off</span></div><label><span>Incident reason</span><textarea id="emergency-mode-reason" rows="3" placeholder="Describe the safeguarding or security incident"></textarea></label><button id="toggle-emergency-mode" class="secondary-button danger-text">Enable emergency mode</button></section>
+</section>
+<section class="active-session-section"><div class="subheading"><div><h3>Login history</h3><p>Review successful and failed sign-in activity across the organisation.</p></div><button id="refresh-login-history" class="secondary-button compact">Refresh</button></div><div id="login-history-list" class="session-list"></div></section>
+<section class="active-session-section"><div class="subheading"><div><h3>Active sessions</h3><p>Revoke access immediately from lost or untrusted devices.</p></div><button id="refresh-sessions" class="secondary-button compact">Refresh</button></div><div id="active-session-list" class="session-list"></div></section></section>
+          <section class="panel client-panel admin-panel"><div class="panel-heading padded"><div><p class="eyebrow">Access control</p><h2>User accounts</h2><p>Assign a standard access level and optionally a precise custom role.</p></div></div><div class="table-wrap"><table class="client-table"><thead><tr><th>User</th><th>Access</th><th>Custom role</th><th>Status</th><th>Last login</th><th></th></tr></thead><tbody id="user-table-body"></tbody></table></div><div id="user-empty" class="empty-state" hidden><strong>No users found</strong></div></section>
+          <section class="panel audit-panel"><div class="panel-heading"><div><p class="eyebrow">Accountability</p><h2>Recent audit history</h2></div><button id="refresh-audit" class="secondary-button">Refresh</button></div><div id="audit-list" class="audit-list"></div></section>
+        </section>
+
         <section id="placeholder-page" class="page placeholder-page">
-          <p class="eyebrow">Coming in the next sprint</p>
-          <h2 id="placeholder-title">Module</h2>
-          <p id="placeholder-copy">This area is connected to the permanent navigation and will receive its working records and forms in future sprints.</p>
-          <button class="primary-button" data-return-dashboard>Return to dashboard</button>
+          <div class="placeholder-icon">CC</div><p class="eyebrow">CoreCare module</p><h2 id="placeholder-title">Module</h2><p id="placeholder-copy"></p><div class="module-status"><span></span>Planned for a future build</div><button class="primary-button compact" data-return-dashboard>Return to dashboard</button>
         </section>
       </main>
     </div>
   </div>
 
-  <script src="app.js" defer></script>
+  <dialog id="client-dialog" class="client-dialog wide-dialog">
+    <form id="client-form" method="dialog">
+      <div class="dialog-heading"><div><p class="eyebrow">Client record</p><h2 id="client-dialog-title">Add client</h2></div><button id="close-client-dialog" class="icon-button always" type="button" aria-label="Close">×</button></div>
+      <input id="client-id" name="id" type="hidden">
+      <div class="form-section"><h3>Personal details</h3><div class="form-grid">
+        <label><span>First name *</span><input name="firstName" required></label><label><span>Last name *</span><input name="lastName" required></label>
+        <label><span>Preferred name</span><input name="preferredName"></label><label><span>Date of birth *</span><input name="dateOfBirth" type="date" required></label>
+        <label><span>NHS number</span><input name="nhsNumber" placeholder="000 000 0000"></label><label><span>Phone</span><input name="phone" type="tel"></label>
+        <label class="wide"><span>Email</span><input name="email" type="email"></label>
+      </div></div>
+      <div class="form-section"><h3>Address and care status</h3><div class="form-grid">
+        <label class="wide"><span>Address line 1</span><input name="addressLine1"></label><label class="wide"><span>Address line 2</span><input name="addressLine2"></label>
+        <label><span>Town *</span><input name="town" required></label><label><span>Postcode</span><input name="postcode"></label>
+        <label class="wide"><span>Care package</span><input name="carePackage" placeholder="e.g. Personal care · 4 visits daily"></label>
+        <label><span>Next review *</span><input name="nextReview" type="date" required></label><label><span>Status</span><select name="status"><option>Active</option><option>Paused</option><option>Archived</option></select></label>
+        <label class="wide"><span>Risk level</span><select name="risk"><option>Standard</option><option>Medium</option><option>High</option></select></label>
+      </div></div>
+      <div class="form-section"><h3>Key people</h3><div class="form-grid">
+        <label><span>GP name</span><input name="gpName"></label><label><span>GP practice</span><input name="gpPractice"></label><label class="wide"><span>GP phone</span><input name="gpPhone" type="tel"></label>
+        <label><span>Next of kin</span><input name="nextOfKinName"></label><label><span>Relationship</span><input name="nextOfKinRelationship"></label><label class="wide"><span>Next of kin phone</span><input name="nextOfKinPhone" type="tel"></label>
+        <label><span>Emergency contact</span><input name="emergencyContactName"></label><label><span>Emergency contact phone</span><input name="emergencyContactPhone" type="tel"></label>
+      </div></div>
+      <div class="form-section"><h3>Care information</h3><div class="form-grid">
+        <label class="wide"><span>Allergies</span><textarea name="allergies" rows="2"></textarea></label><label class="wide"><span>Communication needs</span><textarea name="communicationNeeds" rows="2"></textarea></label>
+        <label class="wide"><span>Capacity notes</span><textarea name="capacityNotes" rows="2"></textarea></label><label class="wide"><span>Important notes</span><textarea name="importantNotes" rows="3"></textarea></label>
+      </div></div>
+      <p id="client-form-error" class="form-error" hidden></p>
+      <div class="dialog-actions"><button id="cancel-client" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save client</button></div>
+    </form>
+  </dialog>
+
+
+  <dialog id="quick-add-dialog" class="client-dialog quick-add-dialog"><div class="quick-add-sheet"><div class="dialog-heading"><div><p class="eyebrow">Create record</p><h2>Quick add</h2></div><button id="close-quick-add" class="icon-button always" type="button">×</button></div><div class="quick-add-grid"><button type="button" data-quick="client"><strong>New client</strong><span>Create a full client profile</span></button><button type="button" data-quick="staff"><strong>New staff member</strong><span>Add workforce and compliance details</span></button></div></div></dialog>
+  <dialog id="staff-dialog" class="client-dialog wide-dialog"><form id="staff-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Staff record</p><h2 id="staff-dialog-title">Add staff</h2></div><button id="close-staff-dialog" class="icon-button always" type="button">×</button></div><input name="id" type="hidden"><div class="form-grid"><label><span>First name</span><input name="firstName" required></label><label><span>Last name</span><input name="lastName" required></label><label><span>Preferred name</span><input name="preferredName"></label><label><span>Job title</span><input name="jobTitle" value="Carer" required></label><label><span>Employment type</span><select name="employmentType"><option>Employee</option><option>Bank</option><option>Agency</option><option>Volunteer</option></select></label><label><span>Status</span><select name="status"><option>Active</option><option>Inactive</option></select></label><label><span>Phone</span><input name="phone" type="tel"></label><label><span>Email</span><input name="email" type="email"></label><label><span>Start date</span><input name="startDate" type="date"></label><label><span>DBS expiry</span><input name="dbsExpiry" type="date"></label><label><span>Training expiry</span><input name="trainingExpiry" type="date"></label><label class="wide"><span>Notes</span><textarea name="notes" rows="4"></textarea></label></div><p id="staff-form-error" class="form-error" hidden></p><div class="dialog-actions"><button id="cancel-staff" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save staff member</button></div></form></dialog>
+
+  <dialog id="care-plan-dialog" class="client-dialog wide-dialog"><form id="care-plan-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Care planning</p><h2 id="care-plan-dialog-title">Add care plan</h2></div><button id="close-care-plan-dialog" class="icon-button always" type="button">×</button></div><input name="id" type="hidden"><div class="form-grid"><label class="wide"><span>Plan title *</span><input name="title" required placeholder="e.g. Personal care and daily living"></label><label><span>Status</span><select name="status"><option>Draft</option><option>Active</option><option>Archived</option></select></label><label><span>Version</span><input name="version" value="1" disabled></label><label><span>Effective date</span><input name="effectiveDate" type="date"></label><label><span>Review date *</span><input name="reviewDate" type="date" required></label><label class="wide"><span>Author / lead reviewer</span><input name="authorName"></label></div><div class="form-section"><h3>Care plan sections</h3><div class="form-grid"><label class="wide"><span>Personal details and what matters</span><textarea name="personalDetails" rows="3"></textarea></label><label class="wide"><span>Medical conditions</span><textarea name="medicalConditions" rows="3"></textarea></label><label class="wide"><span>Communication</span><textarea name="communication" rows="3"></textarea></label><label class="wide"><span>Mobility and manual handling</span><textarea name="mobility" rows="3"></textarea></label><label class="wide"><span>Nutrition and hydration</span><textarea name="nutritionHydration" rows="3"></textarea></label><label class="wide"><span>Medication support</span><textarea name="medicationSupport" rows="3"></textarea></label><label class="wide"><span>Continence</span><textarea name="continence" rows="3"></textarea></label><label class="wide"><span>Skin integrity and pressure care</span><textarea name="skinIntegrity" rows="3"></textarea></label><label class="wide"><span>Mental capacity and decision making</span><textarea name="mentalCapacity" rows="3"></textarea></label><label class="wide"><span>Risks and controls</span><textarea name="risks" rows="3"></textarea></label><label class="wide"><span>Desired outcomes</span><textarea name="desiredOutcomes" rows="3"></textarea></label></div></div><p id="care-plan-error" class="form-error" hidden></p><div class="dialog-actions"><button id="cancel-care-plan" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save care plan</button></div></form></dialog>
+
+  <dialog id="risk-dialog" class="client-dialog"><form id="risk-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Risk assessment</p><h2 id="risk-dialog-title">Add risk</h2></div><button id="close-risk-dialog" class="icon-button always" type="button">×</button></div><input name="id" type="hidden"><div class="form-grid"><label><span>Category</span><select name="category"><option>Falls</option><option>Medication</option><option>Fire</option><option>Manual Handling</option><option>Nutrition</option><option>Pressure Care</option><option>Behaviour</option><option>General Risk</option></select></label><label><span>Title *</span><input name="title" required></label><label><span>Severity</span><select name="severity"><option>Low</option><option selected>Medium</option><option>High</option></select></label><label><span>Likelihood</span><select name="likelihood"><option>Unlikely</option><option selected>Possible</option><option>Likely</option></select></label><label><span>Status</span><select name="status"><option>Active</option><option>Controlled</option><option>Archived</option></select></label><label><span>Review date *</span><input name="reviewDate" type="date" required></label><label class="wide"><span>Controls in place</span><textarea name="controls" rows="4"></textarea></label><label class="wide"><span>Further actions</span><textarea name="actions" rows="3"></textarea></label></div><p id="risk-error" class="form-error" hidden></p><div class="dialog-actions"><button id="cancel-risk" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save risk</button></div></form></dialog>
+
+  <dialog id="document-dialog" class="client-dialog"><form id="document-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Client document</p><h2>Add document record</h2></div><button id="close-document-dialog" class="icon-button always" type="button">×</button></div><div class="form-grid"><label class="wide"><span>Document name *</span><input name="name" required></label><label><span>Type</span><select name="documentType"><option>Consent form</option><option>DNACPR</option><option>Assessment</option><option>MAR sheet</option><option>Hospital letter</option><option>Other</option></select></label><label><span>Status</span><select name="status"><option>Current</option><option>Superseded</option><option>Archived</option></select></label><label><span>Document date</span><input name="documentDate" type="date"></label><label><span>Review date</span><input name="reviewDate" type="date"></label><label class="wide"><span>Secure reference link</span><input name="referenceUrl" type="url" placeholder="https://..."></label><label class="wide"><span>Notes</span><textarea name="notes" rows="3"></textarea></label></div><p id="document-error" class="form-error" hidden></p><div class="dialog-actions"><button id="cancel-document" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save document</button></div></form></dialog>
+
+  <dialog id="care-client-picker-dialog" class="client-dialog wide-dialog">
+    <div class="client-picker-sheet">
+      <div class="dialog-heading"><div><p class="eyebrow">Create care plan</p><h2>Select a client</h2><p>Choose the person this care plan belongs to.</p></div><button id="close-care-client-picker" class="icon-button always" type="button" aria-label="Close">×</button></div>
+      <label class="search-field client-picker-search"><span>Search clients</span><input id="care-client-picker-search" type="search" placeholder="Search name, NHS number or date of birth" autocomplete="off"></label>
+      <div id="care-client-picker-list" class="client-picker-list"></div>
+      <div id="care-client-picker-empty" class="empty-state" hidden><strong>No active clients found</strong><span>Try another search or add a client first.</span></div>
+      <div class="dialog-actions"><button id="cancel-care-client-picker" class="secondary-button" type="button">Cancel</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="password-dialog" class="client-dialog"><form id="password-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Account security</p><h2>Change password</h2></div></div><div class="form-grid"><label class="wide"><span>Current password</span><input name="currentPassword" type="password" autocomplete="current-password" required></label><label><span>New password</span><input name="newPassword" type="password" autocomplete="new-password" required></label><label><span>Confirm password</span><input name="confirmPassword" type="password" autocomplete="new-password" required></label></div><p class="password-help">At least 12 characters, including upper-case, lower-case and a number.</p><p id="password-error" class="form-error" hidden></p><div class="dialog-actions"><button id="cancel-password" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Update password</button></div></form></dialog>
+  <dialog id="user-dialog" class="client-dialog"><form id="user-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">User account</p><h2 id="user-dialog-title">Add user</h2></div><button id="close-user-dialog" class="icon-button always" type="button">×</button></div><input name="id" type="hidden"><div class="form-grid"><label><span>Display name</span><input name="displayName" required></label><label><span>Email address</span><input name="email" type="email" required></label><label><span>Access level</span><select name="accessLevel"><option value="organisation_owner">Organisation owner</option><option value="organisation_admin">Organisation admin</option><option value="branch_manager">Branch manager</option><option value="senior_carer">Senior carer</option><option value="carer">Carer</option><option value="office_staff">Office staff</option><option value="auditor">Read-only auditor</option><option value="family">Family member</option></select></label><label><span>Home branch</span><select name="branchId" id="user-branch-select"><option value="">Organisation-wide</option></select></label><label><span>Custom role</span><select name="customRoleId" id="user-custom-role-select"><option value="">Use standard access level</option></select></label><label><span>Status</span><select name="status"><option value="active">Active</option><option value="disabled">Disabled</option></select></label><label id="temporary-password-label" class="wide"><span>Temporary password</span><input name="temporaryPassword" type="password"><small>At least 12 characters. The user must change it after signing in.</small></label></div><p id="user-form-error" class="form-error" hidden></p><div class="dialog-actions"><button id="cancel-user" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save user</button></div></form></dialog>
+
+
+  <dialog id="role-dialog" class="client-dialog wide-dialog"><form id="role-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Enterprise permission engine</p><h2 id="role-dialog-title">Create custom role</h2><p>Choose exactly what this role can see and do.</p></div><button id="close-role-dialog" class="icon-button always" type="button">×</button></div><input name="id" type="hidden"><div class="form-grid"><label><span>Role name</span><input name="name" required placeholder="e.g. Medication Lead"></label><label><span>Role colour</span><input name="colour" type="color" value="#0f766e"></label><label class="wide"><span>Description</span><textarea name="description" rows="2" placeholder="Explain who should receive this role"></textarea></label></div><div class="permission-toolbar"><label class="search-field"><span>Find permission</span><input id="permission-search" type="search" placeholder="Search permissions"></label><div><button id="select-safe-permissions" class="secondary-button compact" type="button">Select standard</button><button id="clear-permissions" class="secondary-button compact" type="button">Clear</button></div></div><div id="permission-groups" class="permission-groups"></div><p id="role-form-error" class="form-error" hidden></p><div class="dialog-actions"><button id="delete-role" class="danger-button" type="button" hidden>Delete role</button><button id="cancel-role" class="secondary-button" type="button">Cancel</button><button class="primary-button compact" type="submit">Save role</button></div></form></dialog>
+
+  <dialog id="branch-dialog" class="client-dialog"><form id="branch-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Branch location</p><h2>Add branch</h2></div><button id="close-branch-dialog" class="icon-button always" type="button">×</button></div><div class="form-grid"><label><span>Branch name</span><input name="name" required></label><label><span>Code</span><input name="code"></label><label class="wide"><span>Address</span><textarea name="address"></textarea></label><label><span>Phone</span><input name="phone"></label><label><span>Email</span><input name="email" type="email"></label></div><p id="branch-form-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" id="cancel-branch">Cancel</button><button class="primary-button compact" type="submit">Create branch</button></div></form></dialog>
+  <dialog id="platform-organisation-dialog" class="client-dialog wide-dialog"><form method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Organisation 360</p><h2 id="platform-org-profile-name">Organisation</h2></div><button id="close-platform-org-profile" class="icon-button always" type="button">×</button></div><div id="platform-org-profile-content" class="organisation-profile-grid"><p>Loading…</p></div><div class="dialog-actions"><button id="platform-org-support-readonly" class="secondary-button" type="button">Enter read-only support</button><button id="platform-org-support-full" class="primary-button compact" type="button">Enter support mode</button></div></form></dialog>
+  <dialog id="organisation-dialog" class="client-dialog"><form id="organisation-admin-form" method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Platform administration</p><h2>Create organisation</h2></div><button id="close-organisation-dialog" class="icon-button always" type="button">×</button></div><div class="form-grid"><label class="wide"><span>Organisation name</span><input name="name" required></label><label><span>Subscription plan</span><select name="subscriptionPlan"><option value="development">Development</option><option value="starter">Starter</option><option value="professional">Professional</option><option value="enterprise">Enterprise</option></select></label></div><p id="organisation-admin-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" id="cancel-organisation">Cancel</button><button class="primary-button compact" type="submit">Create organisation</button></div></form></dialog>
+  <script src="app.js"></script>
 </body>
 </html>
