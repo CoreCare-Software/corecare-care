@@ -117,7 +117,7 @@ function updateIdentity() {
   document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
-const CORECARE_FALLBACK_VERSION = '1.4.1';
+const CORECARE_FALLBACK_VERSION = '1.4.2';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -1246,4 +1246,29 @@ function renderOperationsBoard(){const s=operationsData.stats||{};setText('#op-o
   $$('[data-op-complete]').forEach(b=>b.onclick=async()=>{await api(`/api/operations/tasks/${encodeURIComponent(b.dataset.opComplete)}/complete`,{method:'POST',body:'{}'});await loadOperationsBoard();});$$('[data-op-escalate]').forEach(b=>b.onclick=async()=>{await api(`/api/operations/tasks/${encodeURIComponent(b.dataset.opEscalate)}/escalate`,{method:'POST',body:'{}'});await loadOperationsBoard();});$$('[data-op-review]').forEach(b=>b.onclick=async()=>{const review=prompt('Manager review note:','Reviewed and closed.');if(review===null)return;await api(`/api/operations/incidents/${encodeURIComponent(b.dataset.opReview)}/review`,{method:'POST',body:JSON.stringify({review})});await loadOperationsBoard();});$$('[data-op-ack]').forEach(b=>b.onclick=async()=>{await api(`/api/operations/handovers/${encodeURIComponent(b.dataset.opAck)}/acknowledge`,{method:'POST',body:'{}'});await loadOperationsBoard();});
 }
 $('#operations-refresh-board')?.addEventListener('click',loadOperationsBoard);$('#operations-task-filter')?.addEventListener('change',renderOperationsBoard);$('#operations-new-task')?.addEventListener('click',()=>$('#operations-task-dialog')?.showModal());$('#operations-record-incident')?.addEventListener('click',()=>$('#operations-incident-dialog')?.showModal());$('#operations-add-handover')?.addEventListener('click',()=>$('#operations-handover-dialog')?.showModal());$$('[data-close-dialog]').forEach(b=>b.addEventListener('click',()=>document.getElementById(b.dataset.closeDialog)?.close()));
-$('#operations-task-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);await api('/api/operations/tasks',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});e.currentTarget.reset();$('#operations-task-dialog').close();await loadOperationsBoard();});$('#operations-incident-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);await api('/api/operations/incidents',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});e.currentTarget.reset();$('#operations-incident-dialog').close();await loadOperationsBoard();});$('#operations-handover-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);await api('/api/operations/handovers',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});e.currentTarget.reset();$('#operations-handover-dialog').close();await loadOperationsBoard();});
+async function submitOperationsForm(form, endpoint, dialogId, submitButtonId) {
+  const errorNode = form.querySelector('.form-error');
+  const submitButton = document.getElementById(submitButtonId);
+  if (errorNode) { errorNode.hidden = true; errorNode.textContent = ''; }
+  if (submitButton) { submitButton.disabled = true; submitButton.textContent = 'Saving…'; }
+  try {
+    const values = Object.fromEntries(new FormData(form).entries());
+    await api(endpoint, { method: 'POST', body: JSON.stringify(values) });
+    form.reset();
+    document.getElementById(dialogId)?.close();
+    await loadOperationsBoard();
+  } catch (error) {
+    console.error(`CoreCare ${dialogId} submit failed`, error);
+    if (errorNode) { errorNode.textContent = error.message || 'CoreCare could not save this record.'; errorNode.hidden = false; }
+    showErrorToast?.(error.message || 'CoreCare could not save this record.');
+  } finally {
+    if (submitButton) { submitButton.disabled = false; submitButton.textContent = 'Create task'; }
+  }
+}
+
+$('#operations-task-form')?.addEventListener('submit', e => {
+  e.preventDefault();
+  e.stopPropagation();
+  submitOperationsForm(e.currentTarget, '/api/operations/tasks', 'operations-task-dialog', 'operations-task-submit');
+});
+$('#operations-incident-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);await api('/api/operations/incidents',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});e.currentTarget.reset();$('#operations-incident-dialog').close();await loadOperationsBoard();});$('#operations-handover-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(e.currentTarget);await api('/api/operations/handovers',{method:'POST',body:JSON.stringify(Object.fromEntries(f))});e.currentTarget.reset();$('#operations-handover-dialog').close();await loadOperationsBoard();});
