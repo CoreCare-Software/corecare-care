@@ -116,7 +116,7 @@ function updateIdentity() {
   document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
-const CORECARE_FALLBACK_VERSION = '1.3.2';
+const CORECARE_FALLBACK_VERSION = '1.3.3';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
