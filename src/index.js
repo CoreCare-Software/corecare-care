@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.10.0 — Automated Client Onboarding */
-const VERSION = "1.10.0";
+/** CoreCare Enterprise 1.11.0 — Low-Cost Travel-Aware Scheduling */
+const VERSION = "1.11.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.10.0 — Automated Client Onboarding" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.11.0 — Low-Cost Travel-Aware Scheduling" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -26,11 +26,16 @@ export default {
         if (url.pathname === "/api/dashboard" && request.method === "GET") return dashboardSummary(env.DB, session);
         if (url.pathname === "/api/operations/board" && request.method === "GET") return operationsBoard(env.DB, session);
         if (url.pathname === "/api/rota" && request.method === "GET") return rotaBoard(env.DB, session, url);
-        if (url.pathname === "/api/rota" && request.method === "POST") return createRotaVisit(request, env.DB, session);
+        if (url.pathname === "/api/rota" && request.method === "POST") return createRotaVisit(request, env, session);
+        if (url.pathname === "/api/routing/settings") {
+          if (request.method === "GET") return getRoutingSettings(env, session);
+          if (request.method === "PUT") return updateRoutingSettings(request, env, session);
+        }
+        if (url.pathname === "/api/routing/recalculate" && request.method === "POST") return recalculateRouting(request, env, session);
         const requirementMatch = url.pathname.match(/^\/api\/clients\/([^/]+)\/visit-requirements$/);
         if (requirementMatch && request.method === "GET") return listVisitRequirements(env.DB, session, decodeURIComponent(requirementMatch[1]));
         if (requirementMatch && request.method === "POST") return saveVisitRequirements(request, env.DB, session, decodeURIComponent(requirementMatch[1]));
-        if (/^\/api\/rota\/[^/]+$/.test(url.pathname) && request.method === "PATCH") return updateRotaVisit(request, env.DB, session, url.pathname.split("/").pop());
+        if (/^\/api\/rota\/[^/]+$/.test(url.pathname) && request.method === "PATCH") return updateRotaVisit(request, env, session, url.pathname.split("/").pop());
         if (/^\/api\/rota\/[^/]+\/cancel$/.test(url.pathname) && request.method === "POST") return cancelRotaVisit(request, env.DB, session, url.pathname.split("/")[3]);
         if (url.pathname === "/api/visits/board" && request.method === "GET") return visitsBoard(env.DB, session);
         if (url.pathname === "/api/visits" && request.method === "POST") return createVisit(request, env.DB, session);
@@ -493,7 +498,8 @@ async function rotaBoard(db, session, url) {
   const stats={total:rows.length,unallocated:rows.filter(x=>!x.staff_id).length,late:rows.filter(x=>x.live_status==='late').length,inProgress:rows.filter(x=>x.status==='in_progress').length,completed:rows.filter(x=>x.status==='completed').length};
   return json({from,to,visits:rows,clients:clients.results||[],staff:staff.results||[],stats});
 }
-async function createRotaVisit(request,db,session){
+async function createRotaVisit(request,env,session){
+  const db=env.DB;
   const i=await readJson(request),clientId=clean(i.clientId),start=clean(i.scheduledStart);
   if(!clientId||!start)return json({error:{code:'VALIDATION_ERROR',message:'Select a client and start time.'}},400);
   const staffId=clean(i.staffId)||null,end=clean(i.scheduledEnd)||null;
@@ -504,15 +510,25 @@ async function createRotaVisit(request,db,session){
   occurrences.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_published','visit',id,{clientId,staffId,recurrence,count}));
   await db.batch(occurrences);return json({ok:true,id,created:count});
 }
-async function updateRotaVisit(request,db,session,id){
+async function updateRotaVisit(request,env,session,id){
+  const db=env.DB;
   const i=await readJson(request),row=await db.prepare(`SELECT * FROM care_visits WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id).first();if(!row)return notFound('Rota visit');
   if(['in_progress','completed'].includes(row.status))return json({error:{code:'VISIT_STARTED',message:'A started or completed visit cannot be rescheduled from the rota.'}},409);
   const staffId=clean(i.staffId)||null,start=clean(i.scheduledStart)||row.scheduled_start,end=clean(i.scheduledEnd)||row.scheduled_end,scope=['single','future','series'].includes(clean(i.scope))?clean(i.scope):'single',reason=clean(i.reason)||'Planner adjustment';
   if(staffId){const clash=await db.prepare(`SELECT id FROM care_visits WHERE organisation_id=? AND staff_id=? AND id!=? AND rota_status!='cancelled' AND datetime(scheduled_start)<datetime(COALESCE(?,?,'9999-12-31')) AND datetime(COALESCE(scheduled_end,scheduled_start,'9999-12-31'))>datetime(?) LIMIT 1`).bind(session.organisation_id,staffId,id,end,start,start).first();if(clash)return json({error:{code:'ROTA_CLASH',message:'This staff member already has an overlapping visit.'}},409);}
+  let travelAssessment=null;
+  const overrideReason=clean(i.travelOverrideReason);
+  if(staffId){
+    travelAssessment=await assessTravelPlacement(env,session,{id,client_id:clean(i.clientId)||row.client_id,staff_id:staffId,scheduled_start:start,scheduled_end:end});
+    if(travelAssessment.conflict){
+      const permitted=overrideReason && await userHasPermission(db,session,'rota.travel.override');
+      if(!permitted)return json({error:{code:'TRAVEL_CONFLICT',message:`Travel time requires ${travelAssessment.required} minutes but only ${travelAssessment.available} minutes is available. A permitted planner or manager must enter an override reason.`},travel:travelAssessment},409);
+    }
+  }
   const before=JSON.stringify({staffId:row.staff_id,start:row.scheduled_start,end:row.scheduled_end,visitType:row.visit_type});
   const after=JSON.stringify({staffId,start,end,visitType:clean(i.visitType)||row.visit_type});
   const statements=[];
-  if(scope==='single'||!row.requirement_id){statements.push(db.prepare(`UPDATE care_visits SET client_id=?,staff_id=?,visit_type=?,scheduled_start=?,scheduled_end=?,rota_source='planner',rota_status='draft',change_reason=?,manually_overridden=1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.clientId)||row.client_id,staffId,clean(i.visitType)||row.visit_type,start,end,reason,id,session.organisation_id));}
+  if(scope==='single'||!row.requirement_id){statements.push(db.prepare(`UPDATE care_visits SET client_id=?,staff_id=?,visit_type=?,scheduled_start=?,scheduled_end=?,rota_source='planner',rota_status='draft',change_reason=?,manually_overridden=1,travel_override=?,travel_override_reason=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.clientId)||row.client_id,staffId,clean(i.visitType)||row.visit_type,start,end,reason,travelAssessment?.conflict?1:0,overrideReason,id,session.organisation_id));}
   else {
     const time=new Date(start).toISOString().slice(11,16),duration=Math.max(15,Math.round((new Date(end)-new Date(start))/60000));
     statements.push(db.prepare(`UPDATE client_visit_requirements SET visit_type=?,preferred_time=?,duration_minutes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.visitType)||row.visit_type,time,duration,row.requirement_id,session.organisation_id));
@@ -522,9 +538,72 @@ async function updateRotaVisit(request,db,session,id){
   }
   statements.push(db.prepare(`INSERT INTO visit_change_history(id,organisation_id,visit_id,requirement_id,change_scope,reason,before_json,after_json,changed_by) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,id,row.requirement_id,scope,reason,before,after,session.user_id));
   statements.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_updated','visit',id,{staffId,start,end,scope,reason}));
-  await db.batch(statements);return json({ok:true,scope});
+  if(travelAssessment?.conflict){statements.push(db.prepare(`INSERT INTO travel_override_history(id,organisation_id,visit_id,calculated_minutes,available_minutes,shortfall_minutes,reason,overridden_by) VALUES(?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,id,travelAssessment.required,travelAssessment.available,travelAssessment.shortfall,overrideReason,session.user_id));}
+  await db.batch(statements);
+  const affectedDays=new Set([String(start).slice(0,10),String(row.scheduled_start).slice(0,10)]);
+  for(const day of affectedDays){if(staffId)await recalculateStaffTravel(env,session,staffId,day);if(row.staff_id&&row.staff_id!==staffId)await recalculateStaffTravel(env,session,row.staff_id,day);}
+  return json({ok:true,scope,travel:travelAssessment});
 }
 async function cancelRotaVisit(request,db,session,id){const i=await readJson(request);const row=await db.prepare(`SELECT status FROM care_visits WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id).first();if(!row)return notFound('Rota visit');if(row.status==='completed')return json({error:{code:'VISIT_COMPLETED',message:'A completed visit cannot be cancelled.'}},409);await db.batch([db.prepare(`UPDATE care_visits SET status='cancelled',rota_status='cancelled',cancelled_at=CURRENT_TIMESTAMP,cancellation_reason=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.reason)||'Cancelled from rota',id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'rota.visit_cancelled','visit',id,{reason:i.reason})]);return json({ok:true});}
+
+
+async function routingSettings(db,organisationId){
+  await db.prepare(`INSERT OR IGNORE INTO organisation_routing_settings(organisation_id) VALUES(?)`).bind(organisationId).run();
+  return db.prepare(`SELECT * FROM organisation_routing_settings WHERE organisation_id=?`).bind(organisationId).first();
+}
+async function getRoutingSettings(env,session){
+  if(!await userHasPermission(env.DB,session,'rota.travel.settings')&&!canManageSecurity(session))return forbidden();
+  const settings=await routingSettings(env.DB,session.organisation_id);
+  return json({settings,mapboxConfigured:Boolean(env.MAPBOX_ACCESS_TOKEN)});
+}
+async function updateRoutingSettings(request,env,session){
+  if(!await userHasPermission(env.DB,session,'rota.travel.settings')&&!canManageSecurity(session))return forbidden();
+  const i=await readJson(request),provider=['manual','mapbox'].includes(clean(i.provider))?clean(i.provider):'manual';
+  const fallback=Math.max(0,Math.min(180,Number(i.defaultTravelMinutes)||15)),buffer=Math.max(0,Math.min(60,Number(i.parkingBufferMinutes)||5)),cacheDays=Math.max(1,Math.min(365,Number(i.cacheDays)||90));
+  if(provider==='mapbox'&&!env.MAPBOX_ACCESS_TOKEN)return json({error:{code:'MAPBOX_NOT_CONFIGURED',message:'Add the MAPBOX_ACCESS_TOKEN Cloudflare secret before enabling Mapbox routing.'}},400);
+  await env.DB.batch([env.DB.prepare(`INSERT INTO organisation_routing_settings(organisation_id,provider,default_travel_minutes,parking_buffer_minutes,cache_days,block_conflicts,updated_by,updated_at) VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(organisation_id) DO UPDATE SET provider=excluded.provider,default_travel_minutes=excluded.default_travel_minutes,parking_buffer_minutes=excluded.parking_buffer_minutes,cache_days=excluded.cache_days,block_conflicts=excluded.block_conflicts,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,provider,fallback,buffer,cacheDays,i.blockConflicts===false?0:1,session.user_id),auditStatement(env.DB,session.organisation_id,session.user_id,'routing.settings_updated','organisation',session.organisation_id,{provider,fallback,buffer,cacheDays})]);
+  return getRoutingSettings(env,session);
+}
+function fullClientAddress(row){return [row.address_line_1,row.address_line_2,row.town,row.postcode,'United Kingdom'].map(clean).filter(Boolean).join(', ');}
+async function clientRouteLocation(env,session,clientId){
+  const c=await env.DB.prepare(`SELECT id,address_line_1,address_line_2,town,postcode FROM clients WHERE id=? AND organisation_id=?`).bind(clientId,session.organisation_id).first();
+  if(!c)return null;const address=fullClientAddress(c);if(!address)return null;const hash=await sha256Base64(address.toLowerCase());
+  let cached=await env.DB.prepare(`SELECT * FROM routing_location_cache WHERE organisation_id=? AND entity_type='client' AND entity_id=? AND address_hash=? ORDER BY geocoded_at DESC LIMIT 1`).bind(session.organisation_id,clientId,hash).first();
+  if(cached?.longitude!=null&&cached?.latitude!=null)return {hash,address,longitude:Number(cached.longitude),latitude:Number(cached.latitude)};
+  if(!env.MAPBOX_ACCESS_TOKEN)return {hash,address};
+  const url=`https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json?country=gb&limit=1&access_token=${encodeURIComponent(env.MAPBOX_ACCESS_TOKEN)}`;
+  const response=await fetch(url);if(!response.ok)return {hash,address};const data=await response.json(),centre=data.features?.[0]?.center;if(!centre)return {hash,address};
+  await env.DB.prepare(`INSERT OR REPLACE INTO routing_location_cache(id,organisation_id,entity_type,entity_id,address_hash,formatted_address,longitude,latitude,provider,geocoded_at) VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(crypto.randomUUID(),session.organisation_id,'client',clientId,hash,address,centre[0],centre[1],'mapbox').run();
+  return {hash,address,longitude:centre[0],latitude:centre[1]};
+}
+async function routeBetweenClients(env,session,originClientId,destinationClientId){
+  const settings=await routingSettings(env.DB,session.organisation_id);const fallback={minutes:Number(settings.default_travel_minutes)||15,miles:0,source:'manual'};
+  if(!originClientId||!destinationClientId||originClientId===destinationClientId)return {...fallback,minutes:Math.max(0,Number(settings.parking_buffer_minutes)||0)};
+  if(settings.provider!=='mapbox'||!env.MAPBOX_ACCESS_TOKEN)return {...fallback,minutes:fallback.minutes+(Number(settings.parking_buffer_minutes)||0)};
+  const [a,b]=await Promise.all([clientRouteLocation(env,session,originClientId),clientRouteLocation(env,session,destinationClientId)]);if(a?.longitude==null||b?.longitude==null)return {...fallback,minutes:fallback.minutes+(Number(settings.parking_buffer_minutes)||0)};
+  const cached=await env.DB.prepare(`SELECT * FROM routing_route_cache WHERE organisation_id=? AND origin_hash=? AND destination_hash=? AND provider='mapbox' AND datetime(expires_at)>CURRENT_TIMESTAMP`).bind(session.organisation_id,a.hash,b.hash).first();
+  if(cached)return {minutes:Math.ceil(Number(cached.duration_seconds)/60)+(Number(settings.parking_buffer_minutes)||0),miles:Number(cached.distance_metres)/1609.344,source:'mapbox-cache'};
+  const url=`https://api.mapbox.com/directions/v5/mapbox/driving/${a.longitude},${a.latitude};${b.longitude},${b.latitude}?overview=false&steps=false&access_token=${encodeURIComponent(env.MAPBOX_ACCESS_TOKEN)}`;
+  const response=await fetch(url);if(!response.ok)return {...fallback,minutes:fallback.minutes+(Number(settings.parking_buffer_minutes)||0)};const data=await response.json(),route=data.routes?.[0];if(!route)return {...fallback,minutes:fallback.minutes+(Number(settings.parking_buffer_minutes)||0)};
+  const expires=new Date(Date.now()+(Number(settings.cache_days)||90)*86400000).toISOString();
+  await env.DB.prepare(`INSERT INTO routing_route_cache(id,organisation_id,origin_hash,destination_hash,provider,distance_metres,duration_seconds,expires_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(organisation_id,origin_hash,destination_hash,provider) DO UPDATE SET distance_metres=excluded.distance_metres,duration_seconds=excluded.duration_seconds,calculated_at=CURRENT_TIMESTAMP,expires_at=excluded.expires_at`).bind(crypto.randomUUID(),session.organisation_id,a.hash,b.hash,'mapbox',Math.round(route.distance),Math.round(route.duration),expires).run();
+  return {minutes:Math.ceil(route.duration/60)+(Number(settings.parking_buffer_minutes)||0),miles:route.distance/1609.344,source:'mapbox'};
+}
+async function assessTravelPlacement(env,session,proposed){
+  const day=String(proposed.scheduled_start).slice(0,10),rows=await env.DB.prepare(`SELECT id,client_id,scheduled_start,scheduled_end FROM care_visits WHERE organisation_id=? AND staff_id=? AND id!=? AND date(scheduled_start)=date(?) AND rota_status!='cancelled' AND status!='cancelled' ORDER BY scheduled_start`).bind(session.organisation_id,proposed.staff_id,proposed.id||'',day).all();
+  const start=new Date(proposed.scheduled_start),end=new Date(proposed.scheduled_end||proposed.scheduled_start);let previous=null,next=null;for(const r of rows.results||[]){if(new Date(r.scheduled_end||r.scheduled_start)<=start)previous=r;else if(new Date(r.scheduled_start)>=end){next=r;break;}}
+  const checks=[];if(previous){const route=await routeBetweenClients(env,session,previous.client_id,proposed.client_id),available=Math.floor((start-new Date(previous.scheduled_end||previous.scheduled_start))/60000);checks.push({side:'before',required:route.minutes,available,route});}
+  if(next){const route=await routeBetweenClients(env,session,proposed.client_id,next.client_id),available=Math.floor((new Date(next.scheduled_start)-end)/60000);checks.push({side:'after',required:route.minutes,available,route});}
+  const failed=checks.filter(x=>x.available<x.required),worst=failed.sort((a,b)=>(b.required-b.available)-(a.required-a.available))[0];return {conflict:Boolean(worst),required:worst?.required||0,available:worst?.available||0,shortfall:worst?worst.required-worst.available:0,checks};
+}
+async function recalculateStaffTravel(env,session,staffId,day){
+  if(!staffId||!day)return;const result=await env.DB.prepare(`SELECT id,client_id,scheduled_start,scheduled_end FROM care_visits WHERE organisation_id=? AND staff_id=? AND date(scheduled_start)=date(?) AND rota_status!='cancelled' AND status!='cancelled' ORDER BY scheduled_start`).bind(session.organisation_id,staffId,day).all(),visits=result.results||[];const statements=[];
+  for(let index=0;index<visits.length;index++){const visit=visits[index],prev=visits[index-1],next=visits[index+1];const before=prev?await routeBetweenClients(env,session,prev.client_id,visit.client_id):{minutes:0,miles:0,source:'start'},after=next?await routeBetweenClients(env,session,visit.client_id,next.client_id):{minutes:0,miles:0,source:'finish'};const available=prev?Math.floor((new Date(visit.scheduled_start)-new Date(prev.scheduled_end||prev.scheduled_start))/60000):9999,conflict=prev&&available<before.minutes?1:0;statements.push(env.DB.prepare(`UPDATE care_visits SET travel_before_minutes=?,travel_after_minutes=?,travel_before_miles=?,travel_after_miles=?,travel_source=?,travel_calculated_at=CURRENT_TIMESTAMP,travel_conflict=?,travel_conflict_minutes=? WHERE id=? AND organisation_id=?`).bind(before.minutes,after.minutes,Number(before.miles||0).toFixed(2),Number(after.miles||0).toFixed(2),before.source,conflict,conflict?before.minutes-available:0,visit.id,session.organisation_id));}
+  if(statements.length)await env.DB.batch(statements);
+}
+async function recalculateRouting(request,env,session){
+  if(!await userHasPermission(env.DB,session,'rota.edit')&&!canManageSecurity(session))return forbidden();const i=await readJson(request),staffId=clean(i.staffId),day=clean(i.day);if(!staffId||!day)return json({error:{code:'VALIDATION_ERROR',message:'Choose a care worker and day.'}},400);await recalculateStaffTravel(env,session,staffId,day);return json({ok:true});
+}
 
 async function visitsBoard(db, session) {
   const org=session.organisation_id;
