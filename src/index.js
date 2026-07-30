@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.20.2 — Carer Workspace Isolation */
-const VERSION = "1.20.2";
+/** CoreCare Enterprise 1.20.4 — Carer Dashboard Reliability */
+const VERSION = "1.20.4";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.20.2 — Carer Workspace Isolation" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.20.4 — Carer Dashboard Reliability" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -886,18 +886,50 @@ async function carerDashboard(db,session){
   const isCarer=['carer','senior_carer'].includes(session.access_level);
   if(!isCarer)return forbidden();
   if(!session.staff_id)return json({linked:false,staffId:null,visits:[],history:[],metrics:{today:0,completed:0,inProgress:0,late:0},message:'Your CoreCare login is not linked to a staff record. Ask a manager to open your staff profile and link this login.'});
-  const base=`SELECT v.*,c.first_name||' '||c.last_name client_name,c.preferred_name client_preferred_name,c.address_line_1,c.address_line_2,c.town,c.county,c.postcode,
-    EXISTS(SELECT 1 FROM visit_care_records r WHERE r.organisation_id=v.organisation_id AND r.visit_id=v.id) has_care_record
+
+  // CoreCare service days run from 06:00 to 06:00. Build UTC boundaries in
+  // application code rather than relying on SQLite localtime behaviour in D1.
+  const now=new Date();
+  const serviceStart=new Date(now);
+  serviceStart.setHours(6,0,0,0);
+  if(now<serviceStart)serviceStart.setDate(serviceStart.getDate()-1);
+  const serviceEnd=new Date(serviceStart);serviceEnd.setDate(serviceEnd.getDate()+1);
+
+  const base=`SELECT v.*,c.first_name||' '||c.last_name client_name,c.preferred_name client_preferred_name,c.address_line_1,c.address_line_2,c.town,c.county,c.postcode
     FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id
     WHERE v.organisation_id=? AND v.staff_id=?`;
   const [todayRows,historyRows]=await Promise.all([
-    db.prepare(`${base} AND date(v.scheduled_start)=date('now','localtime') AND COALESCE(v.rota_status,'')!='cancelled' AND v.status!='cancelled' ORDER BY v.scheduled_start`).bind(session.organisation_id,session.staff_id).all(),
-    db.prepare(`${base} AND v.status='completed' AND date(v.scheduled_start)<date('now','localtime') ORDER BY COALESCE(v.actual_end,v.scheduled_end,v.scheduled_start) DESC LIMIT 20`).bind(session.organisation_id,session.staff_id).all()
+    db.prepare(`${base} AND datetime(v.scheduled_start)>=datetime(?) AND datetime(v.scheduled_start)<datetime(?) AND COALESCE(v.rota_status,'')!='cancelled' AND v.status!='cancelled' ORDER BY datetime(v.scheduled_start)`).bind(session.organisation_id,session.staff_id,serviceStart.toISOString(),serviceEnd.toISOString()).all(),
+    db.prepare(`${base} AND v.status='completed' AND datetime(v.scheduled_start)<datetime(?) ORDER BY datetime(COALESCE(v.actual_end,v.scheduled_end,v.scheduled_start)) DESC LIMIT 20`).bind(session.organisation_id,session.staff_id,serviceStart.toISOString()).all()
   ]);
-  const now=Date.now(),visits=todayRows.results||[];
-  for(const v of visits){const start=new Date(v.scheduled_start).getTime(),end=v.scheduled_end?new Date(v.scheduled_end).getTime():start+3600000;if(v.status==='scheduled'&&start+15*60000<now)v.live_status='late';else if(v.status==='in_progress'&&end<now)v.live_status='overrunning';else if(v.status==='scheduled'&&Math.abs(start-now)<=15*60000)v.live_status='due';else v.live_status=v.status;v.address=[v.address_line_1,v.address_line_2,v.town,v.county,v.postcode].filter(Boolean).join(', ');}
+
+  const visits=todayRows.results||[],history=historyRows.results||[];
+  // Care records were introduced in a later migration. Keep the dashboard usable
+  // even on an organisation whose migration is still pending.
+  let recorded=new Set();
+  try{
+    const ids=[...visits,...history].map(v=>v.id);
+    if(ids.length){
+      const marks=ids.map(()=>'?').join(',');
+      const rows=await db.prepare(`SELECT DISTINCT visit_id FROM visit_care_records WHERE organisation_id=? AND visit_id IN (${marks})`).bind(session.organisation_id,...ids).all();
+      recorded=new Set((rows.results||[]).map(r=>r.visit_id));
+    }
+  }catch(error){console.warn('Carer dashboard care-record lookup skipped',String(error));}
+
+  const clock=Date.now();
+  for(const v of [...visits,...history]){
+    v.has_care_record=recorded.has(v.id)?1:0;
+    v.address=[v.address_line_1,v.address_line_2,v.town,v.county,v.postcode].filter(Boolean).join(', ');
+  }
+  for(const v of visits){
+    const start=new Date(v.scheduled_start).getTime(),end=v.scheduled_end?new Date(v.scheduled_end).getTime():start+3600000;
+    if(v.status==='scheduled'&&start+15*60000<clock)v.live_status='late';
+    else if(v.status==='in_progress'&&end<clock)v.live_status='overrunning';
+    else if(v.status==='scheduled'&&Math.abs(start-clock)<=15*60000)v.live_status='due';
+    else v.live_status=v.status;
+  }
   const active=visits.find(v=>v.status==='in_progress')||null,next=visits.find(v=>v.status==='scheduled')||null;
-  return json({linked:true,staffId:session.staff_id,visits,history:historyRows.results||[],activeVisitId:active?.id||null,nextVisitId:next?.id||null,metrics:{today:visits.length,completed:visits.filter(v=>v.status==='completed').length,inProgress:visits.filter(v=>v.status==='in_progress').length,late:visits.filter(v=>v.live_status==='late'||v.live_status==='overrunning').length}});
+  return json({linked:true,staffId:session.staff_id,serviceDay:{start:serviceStart.toISOString(),end:serviceEnd.toISOString()},visits,history,activeVisitId:active?.id||null,nextVisitId:next?.id||null,metrics:{today:visits.length,completed:visits.filter(v=>v.status==='completed').length,inProgress:visits.filter(v=>v.status==='in_progress').length,late:visits.filter(v=>v.live_status==='late'||v.live_status==='overrunning').length}});
 }
 
 async function dashboardSummary(db, session) {
