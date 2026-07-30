@@ -125,6 +125,66 @@ const WORKSPACE_CONFIG = {
     pages: ['dashboard','operations','clients','staff','care','medication','visits','rota','tasks','incidents','finance','reports']
   }
 };
+
+const WORKSPACE_NAVIGATION = {
+  manager: [
+    ['Overview', [['dashboard','⌂','Organisation dashboard'],['operations','◆','Live operations']]],
+    ['People', [['clients','◉','Clients'],['staff','◎','Staff'],['family','◇','Family portal']]],
+    ['Care delivery', [['care','▤','Care plans'],['medication','✚','Medication'],['visits','◷','Visits']]],
+    ['Operations', [['rota','▦','Rota'],['tasks','✓','Tasks'],['incidents','!','Incidents'],['finance','£','Finance'],['reports','▥','Reports'],['settings','⚙','Settings']]]
+  ],
+  coordinator: [
+    ['Overview', [['dashboard','⌂','Coordinator dashboard']]],
+    ['People', [['clients','◉','Clients'],['staff','◎','Staff']]],
+    ['Care delivery', [['care','▤','Care plans'],['visits','◷','Visits']]],
+    ['Planning', [['rota','▦','Rota'],['tasks','✓','Tasks'],['incidents','!','Incidents']]]
+  ],
+  senior: [
+    ['Overview', [['dashboard','⌂','Senior dashboard']]],
+    ['Care delivery', [['clients','◉','Clients'],['care','▤','Care plans'],['medication','✚','Medication'],['visits','◷','Visits']]],
+    ['Team responsibilities', [['tasks','✓','Tasks'],['incidents','!','Incidents']]]
+  ],
+  carer: [
+    ['Overview', [['dashboard','⌂','My visits']]]
+  ],
+  family: [
+    ['Overview', [['dashboard','⌂','My relative'],['family','◇','Shared updates']]]
+  ],
+  auditor: [
+    ['Overview', [['dashboard','⌂','Audit dashboard'],['operations','◆','Live operations']]],
+    ['Records', [['clients','◉','Clients'],['staff','◎','Staff'],['care','▤','Care plans'],['medication','✚','Medication'],['visits','◷','Visits'],['rota','▦','Rota'],['tasks','✓','Tasks'],['incidents','!','Incidents'],['finance','£','Finance'],['reports','▥','Reports']]]
+  ]
+};
+
+function moduleAllowsPage(page){
+  if(page==='dashboard') return true;
+  if(currentUser?.isPlatformUser && currentUser?.supportMode) return true;
+  return currentUser?.modules?.[page]===true;
+}
+
+function renderWorkspaceNavigation(){
+  const container=$('#organisation-navigation');
+  if(!container||!currentUser)return;
+  const platformWorkspace=isPlatformWorkspace();
+  container.hidden=platformWorkspace;
+  if(platformWorkspace){container.replaceChildren();return;}
+  const key=workspaceKey();
+  const groups=WORKSPACE_NAVIGATION[key]||WORKSPACE_NAVIGATION.manager;
+  const fragment=document.createDocumentFragment();
+  for(const [heading,items] of groups){
+    const allowed=items.filter(([page])=>workspaceAllowsPage(page)&&moduleAllowsPage(page));
+    if(!allowed.length)continue;
+    const section=document.createElement('p');section.className='nav-section';section.textContent=heading;fragment.appendChild(section);
+    for(const [page,icon,label] of allowed){
+      const button=document.createElement('button');button.type='button';button.className='nav-item';button.dataset.page=page;
+      button.innerHTML=`<span>${icon}</span>${escapeHtml(label)}`;
+      if(document.querySelector('.page.active-page')?.id===(page==='dashboard'?'dashboard-page':`${page}-page`))button.classList.add('active');
+      fragment.appendChild(button);
+    }
+  }
+  container.replaceChildren(fragment);
+}
+
 function workspaceKey(){
   if(isPlatformWorkspace()) return 'platform';
   const role=currentUser?.accessLevel||currentUser?.role;
@@ -145,8 +205,8 @@ function updateIdentity() {
   const platformWorkspace = platformUser && !currentUser?.supportMode;
   const platformNavigation = $('#platform-navigation');
   if (platformNavigation) platformNavigation.hidden = !platformWorkspace;
-  $$('.organisation-workspace-nav').forEach(item => item.hidden = platformWorkspace);
-  $$('.organisation-workspace-action').forEach(item => item.hidden = platformWorkspace);
+  renderWorkspaceNavigation();
+  $$('.organisation-workspace-action').forEach(item => item.hidden = platformWorkspace || !['manager','coordinator'].includes(workspaceKey()));
   const supportBanner=$('#support-mode-banner');
   if(supportBanner){
     const inSupport=platformUser&&currentUser?.supportMode;
@@ -164,7 +224,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.20.2';
+const CORECARE_FALLBACK_VERSION = '1.22.0';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -292,27 +352,9 @@ function isPlatformWorkspace(){
 
 function applyAccessVisibility(){
   if(!currentUser)return;
-  const modules=currentUser.modules||{};
+  renderWorkspaceNavigation();
   const platformWorkspace=isPlatformWorkspace();
-  $$('.organisation-workspace-nav').forEach(node=>{
-    const page=node.dataset?.page;
-    node.hidden=platformWorkspace || Boolean(page && (!workspaceAllowsPage(page) || (page!=='dashboard' && modules[page]!==true)));
-  });
-  // Carers use one protected workspace: their own dashboard and allocated visits only.
-  const type=dashboardType();
-  const dashboardNav=document.querySelector('.organisation-workspace-nav[data-page="dashboard"]');
-  if(dashboardNav){
-    dashboardNav.innerHTML=type==='carer'?'<span>⌂</span>My visits':type==='senior'?'<span>⌂</span>Senior carer dashboard':'<span>⌂</span>Organisation dashboard';
-  }
-  $$('.nav-section.organisation-workspace-nav').forEach(section=>{
-    let next=section.nextElementSibling,hasVisible=false;
-    while(next&&!next.classList.contains('nav-section')){
-      if(next.classList.contains('organisation-workspace-nav')&&!next.hidden){hasVisible=true;break;}
-      next=next.nextElementSibling;
-    }
-    section.hidden=platformWorkspace||!hasVisible;
-  });
-  $$('.organisation-workspace-action').forEach(node=>{node.hidden=platformWorkspace;});
+  $$('.organisation-workspace-action').forEach(node=>{node.hidden=platformWorkspace || !['manager','coordinator'].includes(workspaceKey());});
   const visibility={
     '#add-client':'clients.create','#add-staff':'staff.create','#edit-profile-client':'clients.edit','#archive-profile-client':'clients.archive'
   };
@@ -320,6 +362,7 @@ function applyAccessVisibility(){
   $$('.quick-action[data-quick="client"]').forEach(node=>node.hidden=!hasAccess('clients.create'));
   $$('.quick-action[data-quick="staff"]').forEach(node=>node.hidden=!hasAccess('staff.create'));
 }
+
 function hasAccess(permission){return Boolean(currentUser?.isPlatformUser||(currentUser?.permissions||[]).includes(permission));}
 function canOpenPage(page){
   if(currentUser?.isPlatformUser){
@@ -358,6 +401,10 @@ function activatePage(id) {
   page.classList.add('active-page');
 }
 
+function setActiveWorkspaceNavigation(page){
+  $$('#organisation-navigation .nav-item').forEach(item=>item.classList.toggle('active',item.dataset.page===page));
+}
+
 function showPage(page) {
   if(isPlatformWorkspace() && page!=='platform'){
     showToastError(new Error('Open an organisation through an authorised support session before accessing organisation records.'));
@@ -366,6 +413,7 @@ function showPage(page) {
   }
   if(page!=='platform'&&page!=='client-profile'&&!canOpenPage(page)){denyPage();return;}
   selectedClientId = page === 'client-profile' ? selectedClientId : null;
+  if(page!=='client-profile')setActiveWorkspaceNavigation(page);
   if (page === 'platform') {
     if (!currentUser?.isPlatformUser) return showPage('dashboard');
     activatePage('#platform-page');
@@ -1121,16 +1169,18 @@ menuButton.addEventListener('click', () => {
   menuButton.setAttribute('aria-expanded', String(open));
 });
 
-$$('.nav-item').forEach(button => button.addEventListener('click', () => {
+document.querySelector('.sidebar nav')?.addEventListener('click', event => {
+  const button=event.target.closest('.nav-item');
+  if(!button)return;
   $$('.nav-item').forEach(item => item.classList.remove('active'));
   button.classList.add('active');
   sidebar.classList.remove('open');
   menuButton.setAttribute('aria-expanded', 'false');
-  if (button.dataset.page) showPage(button.dataset.page);
-}));
+  if(button.dataset.page)showPage(button.dataset.page);
+});
 
-$$('[data-page-link]').forEach(button => button.addEventListener('click', () => $(`[data-page="${button.dataset.pageLink}"]`).click()));
-$('[data-return-dashboard]').addEventListener('click', () => $('[data-page="dashboard"]').click());
+$$('[data-page-link]').forEach(button => button.addEventListener('click', () => showPage(button.dataset.pageLink)));
+$('[data-return-dashboard]').addEventListener('click', () => showPage('dashboard'));
 $('#add-client')?.addEventListener('click', () => openClientDialog());
 $('#add-staff')?.addEventListener('click', () => openStaffDialog());
 $('#close-staff-dialog').addEventListener('click', () => staffDialog.close());
