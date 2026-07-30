@@ -164,7 +164,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.20.0';
+const CORECARE_FALLBACK_VERSION = '1.20.1';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -307,7 +307,13 @@ function applyAccessVisibility(){
   $$('.quick-action[data-quick="staff"]').forEach(node=>node.hidden=!hasAccess('staff.create'));
 }
 function hasAccess(permission){return Boolean(currentUser?.isPlatformUser||(currentUser?.permissions||[]).includes(permission));}
-function canOpenPage(page){return Boolean((currentUser?.isPlatformUser&&page==='platform')||(!isPlatformWorkspace()&&workspaceAllowsPage(page)&&(currentUser?.modules||{})[page]===true));}
+function canOpenPage(page){
+  if(currentUser?.isPlatformUser){
+    if(isPlatformWorkspace()) return page==='platform';
+    if(currentUser?.supportMode) return workspaceAllowsPage(page);
+  }
+  return Boolean(!isPlatformWorkspace()&&workspaceAllowsPage(page)&&(currentUser?.modules||{})[page]===true);
+}
 function denyPage(){showToastError(new Error('You do not have permission to view this area.'));}
 
 function showLogin(message = '') {
@@ -878,13 +884,12 @@ function addVisitRequirement(value={}){
 }
 function collectVisitRequirements(){return [...document.querySelectorAll('.visit-requirement-row')].map(row=>({visitType:row.querySelector('[data-requirement="visitType"]').value,preferredTime:row.querySelector('[data-requirement="preferredTime"]').value,windowMinutes:Number(row.querySelector('[data-requirement="windowMinutes"]').value),durationMinutes:Number(row.querySelector('[data-requirement="durationMinutes"]').value),carersRequired:Number(row.querySelector('[data-requirement="carersRequired"]').value),notes:row.querySelector('[data-requirement="notes"]').value,schedulingRule:row.querySelector('[data-requirement="schedulingRule"]').value,timeCriticalReason:row.querySelector('[data-requirement="timeCriticalReason"]').value,days:[...row.querySelectorAll('[data-requirement-day]:checked')].map(x=>Number(x.value))})).filter(r=>r.preferredTime&&r.days.length);}
 
-function openClientDialog(id = '') {
+async function openClientDialog(id = '') {
   if(!hasAccess(id?'clients.edit':'clients.create')){denyPage();return;}
   clientForm.reset();
   $('#client-form-error').hidden = true;
   const requirementsList=$('#client-visit-requirements');if(requirementsList)requirementsList.innerHTML='';
   const startField=$('#client-visit-start-date');if(startField)startField.value=new Date().toISOString().slice(0,10);
-  if(!id)addVisitRequirement();
   $('#client-id').value = '';
   $('#client-dialog-title').textContent = id ? 'Edit client' : 'Add client';
   if (id) {
@@ -895,7 +900,15 @@ function openClientDialog(id = '') {
         if (field) field.value = value ?? '';
       });
     }
-  }
+    try {
+      const payload=await api(`/api/clients/${encodeURIComponent(id)}/visit-requirements`);
+      const requirements=payload.requirements||[];
+      requirements.forEach(r=>addVisitRequirement({visitType:r.visit_type,preferredTime:r.preferred_time,windowMinutes:r.window_minutes,durationMinutes:r.duration_minutes,carersRequired:r.carers_required,notes:r.notes,schedulingRule:r.scheduling_rule,timeCriticalReason:r.time_critical_reason,days:r.days}));
+      if(startField&&requirements[0]?.start_date)startField.value=requirements[0].start_date;
+    } catch(error) {
+      console.warn('Visit requirements could not be loaded',error);
+    }
+  } else addVisitRequirement();
   clientDialog.showModal();
 }
 
@@ -914,7 +927,8 @@ async function saveClient(event) {
   submit.textContent = 'Saving…';
   try {
     const id = data.id;
-    if(!id){data.visitRequirements=collectVisitRequirements();if(!data.visitRequirements.length){throw new Error('Add at least one visit requirement so CoreCare can create the allocation queue.');}}
+    data.visitRequirements=collectVisitRequirements();
+    if(!id&&!data.visitRequirements.length){throw new Error('Add at least one visit requirement so CoreCare can create the allocation queue.');}
     const payload = await api(id ? `/api/clients/${encodeURIComponent(id)}` : '/api/clients', {
       method: id ? 'PUT' : 'POST',
       body: JSON.stringify(data)
@@ -1674,7 +1688,7 @@ function wireRotaResize(){document.querySelectorAll('[data-rota-resize]').forEac
 function setRotaView(view){rotaView=view;document.querySelectorAll('[data-rota-view]').forEach(b=>b.classList.toggle('active',b.dataset.rotaView===view));$('#rota-board-view').hidden=view!=='board';$('#rota-week-view').hidden=view!=='week';$('#rota-list-view').hidden=view!=='list';$('#rota-day-label').hidden=view!=='board';}
 $('#rota-new')?.addEventListener('click',async()=>{if(!rotaData.clients?.length)await loadRotaBoard();$('#rota-form')?.reset();$('#rota-dialog')?.showModal();});$('#rota-refresh')?.addEventListener('click',loadRotaBoard);$('#rota-week')?.addEventListener('change',loadRotaBoard);$('#rota-day')?.addEventListener('change',()=>{renderRotaVisualBoard();renderRotaIntelligence();renderPlannerCommandCentre();});$('#rota-status-filter')?.addEventListener('change',renderRotaBoard);$('#rota-staff-filter')?.addEventListener('change',renderRotaVisualBoard);$('#rota-prev-day')?.addEventListener('click',()=>changeRotaDay(-1));$('#rota-next-day')?.addEventListener('click',()=>changeRotaDay(1));$('#rota-today')?.addEventListener('click',()=>{const today=new Date(),m=new Date(today),d=(m.getDay()+6)%7;m.setDate(m.getDate()-d);$('#rota-week').value=m.toISOString().slice(0,10);loadRotaBoard().then(()=>{$('#rota-day').value=today.toISOString().slice(0,10);renderRotaVisualBoard();});});document.querySelectorAll('[data-rota-view]').forEach(b=>b.addEventListener('click',()=>setRotaView(b.dataset.rotaView)));
 $('#rota-optimise')?.addEventListener('click',openRotaOptimiser);$('#rota-optimise-apply')?.addEventListener('click',applyRotaOptimiser);
-$('#rota-form')?.addEventListener('submit',async e=>{e.preventDefault();const err=$('#rota-form-error');if(err)err.hidden=true;try{const r=await api('/api/rota',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(e.currentTarget)))});e.currentTarget.reset();$('#rota-dialog')?.close();await loadRotaBoard();await loadVisitsBoardNoSync();if(r.created>1)alert(`${r.created} weekly visits published.`);}catch(ex){if(err){err.textContent=ex.message;err.hidden=false;}}});
+$('#rota-form')?.addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,err=$('#rota-form-error');if(err)err.hidden=true;try{const r=await api('/api/rota',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(form)))});form.reset();$('#rota-dialog')?.close();await loadRotaBoard();await loadVisitsBoardNoSync();if(r.created>1)alert(`${r.created} weekly visits published.`);}catch(ex){if(err){err.textContent=ex.message;err.hidden=false;}}});
 
 document.addEventListener('click',e=>{const card=e.target.closest?.('[data-rota-open]');if(card&&!e.target.closest('[data-rota-resize]'))selectRotaVisit(card.dataset.rotaOpen,e.ctrlKey||e.metaKey);if(!e.target.closest?.('#rota-context-menu'))hideRotaContextMenu();});
 document.addEventListener('dblclick',e=>{const card=e.target.closest?.('[data-rota-open]');if(card)openRotaEdit(card.dataset.rotaOpen);});

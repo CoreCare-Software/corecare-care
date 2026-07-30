@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.20.0 — Role-Based Workspaces */
-const VERSION = "1.20.0";
+/** CoreCare Enterprise 1.20.1 — Role-Based Workspaces */
+const VERSION = "1.20.1";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.20.0 — Role-Based Workspaces" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.20.1 — Role-Based Workspaces" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -424,15 +424,29 @@ async function saveVisitRequirements(request,db,session,clientId){
 
 async function updateClient(request, db, session, id) {
   if (!hasRole(session, ["owner", "manager", "carer"])) return forbidden();
-  const input = normaliseClient(await readJson(request));
+  const raw = await readJson(request);
+  const input = normaliseClient(raw);
   const validation = validateClient(input);
   if (validation) return json({ error: { code: "VALIDATION_ERROR", message: validation } }, 400);
   const fields = clientFields(input);
   const assignments = fields.names.map(name => `${name}=?`).join(",");
-  const result = await db.prepare(`UPDATE clients SET ${assignments},archived_at=CASE WHEN ?='Archived' THEN COALESCE(archived_at,CURRENT_TIMESTAMP) ELSE NULL END,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(...fields.values, input.status, id, session.organisation_id).run();
-  if (!result.meta.changes) return json({ error: { code: "CLIENT_NOT_FOUND", message: "Client record not found." } }, 404);
-  await audit(db, session.organisation_id, session.user_id, "client.updated", "client", id, { name: `${input.firstName} ${input.lastName}` });
-  return getClient(db, session, id);
+  const existing = await db.prepare(`SELECT id FROM clients WHERE id=? AND organisation_id=? LIMIT 1`).bind(id,session.organisation_id).first();
+  if (!existing) return json({ error: { code: "CLIENT_NOT_FOUND", message: "Client record not found." } }, 404);
+  const statements=[db.prepare(`UPDATE clients SET ${assignments},archived_at=CASE WHEN ?='Archived' THEN COALESCE(archived_at,CURRENT_TIMESTAMP) ELSE NULL END,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(...fields.values,input.status,id,session.organisation_id)];
+  let requirementsCreated=0,visitsGenerated=0;
+  if(Array.isArray(raw.visitRequirements)){
+    const requirements=normaliseVisitRequirements(raw.visitRequirements,raw.visitStartDate);
+    statements.push(db.prepare(`DELETE FROM care_visits WHERE organisation_id=? AND client_id=? AND requirement_id IS NOT NULL AND status='scheduled' AND staff_id IS NULL AND datetime(scheduled_start)>=datetime('now')`).bind(session.organisation_id,id));
+    statements.push(db.prepare(`UPDATE client_visit_requirements SET status='replaced',updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND client_id=? AND status='active'`).bind(session.organisation_id,id));
+    for(const requirement of requirements)statements.push(...visitRequirementStatements(db,session,id,requirement));
+    requirementsCreated=requirements.length;
+    visitsGenerated=requirements.reduce((n,r)=>n+generatedOccurrenceCount(r),0);
+    statements.push(auditStatement(db,session.organisation_id,session.user_id,'client.visit_requirements_replaced','client',id,{count:requirementsCreated,visitsGenerated}));
+  }
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,"client.updated","client",id,{name:`${input.firstName} ${input.lastName}`}));
+  await db.batch(statements);
+  const response=await db.prepare(`SELECT ${CLIENT_COLUMNS} FROM clients WHERE id=? AND organisation_id=? LIMIT 1`).bind(id,session.organisation_id).first();
+  return json({client:toClient(response),requirementsCreated,visitsGenerated});
 }
 
 async function archiveClient(db, session, id) {
