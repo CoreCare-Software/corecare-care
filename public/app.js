@@ -740,12 +740,11 @@ function addVisitRequirement(value={}){
 }
 function collectVisitRequirements(){return [...document.querySelectorAll('.visit-requirement-row')].map(row=>({visitType:row.querySelector('[data-requirement="visitType"]').value,preferredTime:row.querySelector('[data-requirement="preferredTime"]').value,windowMinutes:Number(row.querySelector('[data-requirement="windowMinutes"]').value),durationMinutes:Number(row.querySelector('[data-requirement="durationMinutes"]').value),carersRequired:Number(row.querySelector('[data-requirement="carersRequired"]').value),notes:row.querySelector('[data-requirement="notes"]').value,schedulingRule:row.querySelector('[data-requirement="schedulingRule"]').value,timeCriticalReason:row.querySelector('[data-requirement="timeCriticalReason"]').value,days:[...row.querySelectorAll('[data-requirement-day]:checked')].map(x=>Number(x.value))})).filter(r=>r.preferredTime&&r.days.length);}
 
-function openClientDialog(id = '') {
+async function openClientDialog(id = '') {
   clientForm.reset();
   $('#client-form-error').hidden = true;
   const requirementsList=$('#client-visit-requirements');if(requirementsList)requirementsList.innerHTML='';
   const startField=$('#client-visit-start-date');if(startField)startField.value=new Date().toISOString().slice(0,10);
-  if(!id)addVisitRequirement();
   $('#client-id').value = '';
   $('#client-dialog-title').textContent = id ? 'Edit client' : 'Add client';
   if (id) {
@@ -756,7 +755,17 @@ function openClientDialog(id = '') {
         if (field) field.value = value ?? '';
       });
     }
-  }
+    try {
+      const payload=await api(`/api/clients/${encodeURIComponent(id)}/visit-requirements`);
+      const requirements=payload.requirements||[];
+      requirements.forEach(r=>addVisitRequirement({visitType:r.visit_type,preferredTime:r.preferred_time,windowMinutes:r.window_minutes,durationMinutes:r.duration_minutes,carersRequired:r.carers_required,notes:r.notes,schedulingRule:r.scheduling_rule,timeCriticalReason:r.time_critical_reason,days:r.days}));
+      if(startField&&requirements[0]?.start_date)startField.value=requirements[0].start_date;
+      if(!requirements.length)addVisitRequirement();
+    } catch(error) {
+      addVisitRequirement();
+      console.warn('Visit requirements could not be loaded',error);
+    }
+  } else addVisitRequirement();
   clientDialog.showModal();
 }
 
@@ -775,11 +784,13 @@ async function saveClient(event) {
   submit.textContent = 'Saving…';
   try {
     const id = data.id;
-    if(!id){data.visitRequirements=collectVisitRequirements();if(!data.visitRequirements.length){throw new Error('Add at least one visit requirement so CoreCare can create the allocation queue.');}}
+    data.visitRequirements=collectVisitRequirements();
+    if(!data.visitRequirements.length){throw new Error('Add at least one visit requirement so CoreCare can create the allocation queue.');}
     const payload = await api(id ? `/api/clients/${encodeURIComponent(id)}` : '/api/clients', {
       method: id ? 'PUT' : 'POST',
       body: JSON.stringify(data)
     });
+    if(id){await api(`/api/clients/${encodeURIComponent(id)}/visit-requirements`,{method:'POST',body:JSON.stringify({requirements:data.visitRequirements,startDate:data.visitStartDate})});}
     await loadClients();
     renderClients();
     clientDialog.close();
@@ -1475,10 +1486,10 @@ async function loadOrganisationModules(){const el=$('#organisation-module-list')
 $('#save-organisation-modules')?.addEventListener('click',async()=>{const modules={};$$('[data-module-key]').forEach(x=>modules[x.dataset.moduleKey]=x.checked);const m=$('#module-save-message');try{await api('/api/security/modules',{method:'PUT',body:JSON.stringify({modules})});m.textContent='Organisation modules updated. Users will see the change next time they sign in.';m.hidden=false;}catch(e){m.textContent=e.message;m.hidden=false;}});
 $('#load-user-permissions')?.addEventListener('click',async()=>{const userId=$('#permission-user')?.value,el=$('#user-permission-editor');if(!userId){el.innerHTML='<p class="muted">Select a user first.</p>';return;}try{const p=await api(`/api/security/users/${encodeURIComponent(userId)}/permissions`),state=Object.fromEntries((p.overrides||[]).map(x=>[x.permission_key,x.effect]));el.innerHTML=`<div class="effective-access-heading"><strong>${escapeHtml(p.user.display_name)}</strong><span>Individual overrides</span></div><div class="permission-override-grid">${permissionCatalogue.map(x=>`<div class="permission-override-row"><span><b>${escapeHtml(x.name)}</b><small>${escapeHtml(x.category)} · ${escapeHtml(x.description||'')}</small></span><div class="permission-segment"><label class="permission-state"><input type="radio" name="override-${escapeHtml(x.permission_key)}" value="inherit" ${!state[x.permission_key]?'checked':''}><span>Inherit</span></label><label class="permission-state allow"><input type="radio" name="override-${escapeHtml(x.permission_key)}" value="allow" ${state[x.permission_key]==='allow'?'checked':''}><span>Allow</span></label><label class="permission-state deny"><input type="radio" name="override-${escapeHtml(x.permission_key)}" value="deny" ${state[x.permission_key]==='deny'?'checked':''}><span>Deny</span></label></div></div>`).join('')}</div><button id="save-user-permissions" class="primary-button compact" type="button">Save user access</button><p id="user-permission-message" class="form-message" hidden></p>`;$('#save-user-permissions').addEventListener('click',async()=>{const allow=[],deny=[];permissionCatalogue.forEach(x=>{const checked=el.querySelector(`input[name="override-${CSS.escape(x.permission_key)}"]:checked`);if(checked?.value==='allow')allow.push(x.permission_key);if(checked?.value==='deny')deny.push(x.permission_key);});const msg=$('#user-permission-message');try{await api(`/api/security/users/${encodeURIComponent(userId)}/permissions`,{method:'PUT',body:JSON.stringify({allow,deny})});msg.textContent='User-specific access saved.';msg.hidden=false;}catch(e){msg.textContent=e.message;msg.hidden=false;}});}catch(e){el.innerHTML=`<p class="muted">${escapeHtml(e.message)}</p>`;}});
 
-$('#add-visit-requirement')?.addEventListener('click',()=>addVisitRequirement());
+document.addEventListener('click',event=>{if(event.target.closest?.('#add-visit-requirement')){event.preventDefault();addVisitRequirement();}});
 
 
-// CoreCare 1.14.0 — Planner Intelligence
+// CoreCare 1.15.2 — Platform stabilisation
 let rotaTemplates={visitTemplates:[],workingPatterns:[],exceptions:[],runs:[],clients:[],staff:[]};
 const templateDays=['','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 function templateName(x){return x.preferred_name||[x.first_name,x.last_name].filter(Boolean).join(' ')}
