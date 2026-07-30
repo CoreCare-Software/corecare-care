@@ -530,7 +530,7 @@ async function rotaBoard(db, session, url) {
       CASE WHEN (SELECT rt.preferred_staff_id FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) IS NULL THEN 0 ELSE 1 END recurrence_keep_carer,
       COALESCE(v.protected_time_rule,'flexible') protected_time_rule, v.protected_time_reason, COALESCE(v.protected_window_minutes,0) protected_window_minutes
       FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN staff s ON s.id=v.staff_id AND s.organisation_id=v.organisation_id
-      WHERE v.organisation_id=? AND date(v.scheduled_start) BETWEEN date(?) AND date(?) AND v.rota_status!='cancelled'
+      WHERE v.organisation_id=? AND date(v.scheduled_start) BETWEEN date(?,'-1 day') AND date(?,'+1 day') AND v.rota_status!='cancelled'
       ORDER BY v.scheduled_start`).bind(org,from,to).all(),
     db.prepare(`SELECT id,first_name,last_name,preferred_name FROM clients WHERE organisation_id=? AND archived_at IS NULL ORDER BY first_name,last_name`).bind(org).all(),
     db.prepare(`SELECT id,first_name,last_name,preferred_name,job_title FROM staff WHERE organisation_id=? AND status='Active' ORDER BY first_name,last_name`).bind(org).all(),
