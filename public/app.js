@@ -1602,7 +1602,7 @@ $('#care-delivery-refresh')?.addEventListener('click',()=>Promise.all([loadAllCa
 })();
 
 
-// CoreCare 1.16.1 — Allocation Engine Repair.
+// CoreCare 1.16.2 — Rota Timeline Positioning Repair.
 (function initialisePlannerProfessional(){
  if(window.__corecarePlannerProfessional)return;window.__corecarePlannerProfessional=true;
  const savedKey='corecare_planner_saved_view';
