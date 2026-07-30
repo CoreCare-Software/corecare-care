@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.19.5 — Permission Enforcement */
-const VERSION = "1.19.6";
+/** CoreCare Enterprise 1.19.7 — Carer Dashboard and Visit Workflow */
+const VERSION = "1.19.7";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.19.5 — Permission Enforcement" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.19.7 — Carer Dashboard and Visit Workflow" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -24,6 +24,7 @@ export default {
         if (url.pathname === "/api/auth/change-password" && request.method === "POST") return changePassword(request, env.DB, session);
         if (url.pathname === "/api/development/status") return developmentStatus(env, session);
         if (url.pathname === "/api/dashboard" && request.method === "GET") return dashboardSummary(env.DB, session);
+        if (url.pathname === "/api/carer/dashboard" && request.method === "GET") return await permitted(env.DB, session, "visits.view", () => carerDashboard(env.DB, session));
         if (url.pathname === "/api/operations/board" && request.method === "GET") return operationsBoard(env.DB, session);
         if (url.pathname === "/api/rota" && request.method === "GET") return rotaBoard(env.DB, session, url);
         if (url.pathname === "/api/rota" && request.method === "POST") return createRotaVisit(request, env, session);
@@ -759,6 +760,7 @@ async function createVisit(request,db,session){const i=await readJson(request);i
 async function getVisitCareRecord(db,session,visitId){
   const visit=await db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,s.first_name||' '||s.last_name staff_name FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN staff s ON s.id=v.staff_id AND s.organisation_id=v.organisation_id WHERE v.id=? AND v.organisation_id=?`).bind(visitId,session.organisation_id).first();
   if(!visit)return notFound('Visit');
+  if(['carer','senior_carer'].includes(session.access_level)&&(!session.staff_id||visit.staff_id!==session.staff_id))return forbidden('This visit is allocated to another care worker.');
   const [record,tasks,medication]=await Promise.all([
     db.prepare(`SELECT * FROM visit_care_records WHERE organisation_id=? AND visit_id=?`).bind(session.organisation_id,visitId).first(),
     db.prepare(`SELECT * FROM visit_task_records WHERE organisation_id=? AND visit_id=? ORDER BY recorded_at`).bind(session.organisation_id,visitId).all(),
@@ -769,6 +771,7 @@ async function getVisitCareRecord(db,session,visitId){
 async function saveVisitCareRecord(request,db,session,visitId){
   const i=await readJson(request),visit=await db.prepare(`SELECT * FROM care_visits WHERE id=? AND organisation_id=?`).bind(visitId,session.organisation_id).first();
   if(!visit)return notFound('Visit');
+  if(['carer','senior_carer'].includes(session.access_level)&&(!session.staff_id||visit.staff_id!==session.staff_id))return forbidden('This visit is allocated to another care worker.');
   if(!['in_progress','completed'].includes(visit.status))return json({error:{code:'VISIT_NOT_STARTED',message:'Clock into the visit before recording care delivery.'}},409);
   const notes=clean(i.careNotes);if(!notes)return json({error:{code:'VALIDATION_ERROR',message:'Enter the care notes before completing the visit.'}},400);
   const recordId=crypto.randomUUID(),tasks=Array.isArray(i.tasks)?i.tasks:[],meds=Array.isArray(i.medication)?i.medication:[],statements=[];
@@ -864,6 +867,24 @@ async function carePlanAction(request,db,session,id,action){
   statements.push(db.prepare(`UPDATE care_plans SET visit_generation_status='generated',visits_generated_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id));statements.push(auditStatement(db,session.organisation_id,session.user_id,'care_plan.visits_generated','care_plan',id,{clientId:plan.client_id,attempted:count}));await db.batch(statements);return json({ok:true,visitsGenerated:count});
 }
 async function acknowledgeCareAlert(db,session,id){const result=await db.prepare(`UPDATE care_delivery_alerts SET status='acknowledged',acknowledged_by=?,acknowledged_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(session.user_id,id,session.organisation_id).run();if(!result.meta.changes)return notFound('Alert');return json({ok:true});}
+
+async function carerDashboard(db,session){
+  const isCarer=['carer','senior_carer'].includes(session.access_level);
+  if(!isCarer)return forbidden();
+  if(!session.staff_id)return json({linked:false,staffId:null,visits:[],history:[],metrics:{today:0,completed:0,inProgress:0,late:0},message:'Your CoreCare login is not linked to a staff record. Ask a manager to open your staff profile and link this login.'});
+  const base=`SELECT v.*,c.first_name||' '||c.last_name client_name,c.preferred_name client_preferred_name,c.address_line_1,c.address_line_2,c.town,c.county,c.postcode,
+    EXISTS(SELECT 1 FROM visit_care_records r WHERE r.organisation_id=v.organisation_id AND r.visit_id=v.id) has_care_record
+    FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id
+    WHERE v.organisation_id=? AND v.staff_id=?`;
+  const [todayRows,historyRows]=await Promise.all([
+    db.prepare(`${base} AND date(v.scheduled_start)=date('now','localtime') AND COALESCE(v.rota_status,'')!='cancelled' AND v.status!='cancelled' ORDER BY v.scheduled_start`).bind(session.organisation_id,session.staff_id).all(),
+    db.prepare(`${base} AND v.status='completed' AND date(v.scheduled_start)<date('now','localtime') ORDER BY COALESCE(v.actual_end,v.scheduled_end,v.scheduled_start) DESC LIMIT 20`).bind(session.organisation_id,session.staff_id).all()
+  ]);
+  const now=Date.now(),visits=todayRows.results||[];
+  for(const v of visits){const start=new Date(v.scheduled_start).getTime(),end=v.scheduled_end?new Date(v.scheduled_end).getTime():start+3600000;if(v.status==='scheduled'&&start+15*60000<now)v.live_status='late';else if(v.status==='in_progress'&&end<now)v.live_status='overrunning';else if(v.status==='scheduled'&&Math.abs(start-now)<=15*60000)v.live_status='due';else v.live_status=v.status;v.address=[v.address_line_1,v.address_line_2,v.town,v.county,v.postcode].filter(Boolean).join(', ');}
+  const active=visits.find(v=>v.status==='in_progress')||null,next=visits.find(v=>v.status==='scheduled')||null;
+  return json({linked:true,staffId:session.staff_id,visits,history:historyRows.results||[],activeVisitId:active?.id||null,nextVisitId:next?.id||null,metrics:{today:visits.length,completed:visits.filter(v=>v.status==='completed').length,inProgress:visits.filter(v=>v.status==='in_progress').length,late:visits.filter(v=>v.live_status==='late'||v.live_status==='overrunning').length}});
+}
 
 async function dashboardSummary(db, session) {
   const [clients, staff, plans, risks, auditRows] = await Promise.all([

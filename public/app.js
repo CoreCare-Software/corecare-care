@@ -223,12 +223,13 @@ async function showApplication(user) {
     showPage('platform');
     showPlatformView(location.hash && location.hash !== '#platform' ? location.hash.slice(1) : 'platform-page', false);
   } else {
-    const jobs=[loadDashboard()];
-    if(hasAccess('clients.view'))jobs.push(loadClients());
-    if(hasAccess('staff.view'))jobs.push(loadStaff());
+    const carerWorkspace=['carer','senior_carer'].includes(currentUser?.accessLevel);
+    const jobs=[carerWorkspace?loadCarerDashboard():loadDashboard()];
+    if(!carerWorkspace&&hasAccess('clients.view'))jobs.push(loadClients());
+    if(!carerWorkspace&&hasAccess('staff.view'))jobs.push(loadStaff());
     await Promise.all(jobs);
-    if(hasAccess('clients.view'))renderClients();
-    if(hasAccess('staff.view'))renderStaff();
+    if(!carerWorkspace&&hasAccess('clients.view'))renderClients();
+    if(!carerWorkspace&&hasAccess('staff.view'))renderStaff();
     await loadDevelopmentStatus();
     showPage(canOpenPage('dashboard')?'dashboard':Object.keys(currentUser.modules||{}).find(canOpenPage)||'dashboard');
   }
@@ -642,6 +643,22 @@ async function loadClients() {
   clients = Array.isArray(payload.clients) ? payload.clients : [];
 }
 
+
+
+function carerStatusLabel(status){return ({scheduled:'Upcoming',due:'Due now',late:'Late',in_progress:'In progress',overrunning:'Overrunning',completed:'Completed',missed:'Missed'})[status]||String(status||'').replaceAll('_',' ');}
+function carerStatusTone(status){return ['late','overrunning','missed'].includes(status)?'danger':status==='completed'?'success':status==='in_progress'?'active':status==='due'?'active':'neutral';}
+async function loadCarerDashboard(){
+  const section=$('#carer-dashboard');if(!section)return;section.hidden=false;
+  Array.from($('#dashboard-page').children).forEach(node=>{if(node!==section)node.hidden=true;});
+  const payload=await api('/api/carer/dashboard'),m=payload.metrics||{};
+  $('#carer-total').textContent=m.today??0;$('#carer-completed').textContent=m.completed??0;$('#carer-progress').textContent=m.inProgress??0;$('#carer-late').textContent=m.late??0;
+  const warning=$('#carer-link-warning');warning.hidden=payload.linked!==false;if(payload.linked===false)$('#carer-link-message').textContent=payload.message||'Ask a manager to link your login to your staff record.';
+  const visits=payload.visits||[];$('#carer-summary').textContent=payload.linked===false?'Your account needs manager attention.':visits.length?`${m.completed||0} of ${visits.length} visits completed today.`:'You have no allocated visits today.';
+  const list=$('#carer-visit-list');list.innerHTML=visits.map(v=>{const live=v.live_status||v.status,start=new Date(v.scheduled_start),end=v.scheduled_end?new Date(v.scheduled_end):null;const canRecord=v.status==='in_progress'||v.status==='completed';return `<article class="carer-visit-card ${escapeHtml(live)}"><div class="carer-visit-time"><strong>${start.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</strong><span>${end?end.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):''}</span></div><div class="carer-visit-copy"><div><span class="badge ${carerStatusTone(live)}">${escapeHtml(carerStatusLabel(live))}</span>${v.has_care_record?'<span class="badge success">Record saved</span>':''}</div><h3>${escapeHtml(v.client_preferred_name||v.client_name||'Client')}</h3><p>${escapeHtml(v.visit_type||'Care visit')}</p><small>${escapeHtml(v.address||'Address not recorded')}</small></div><div class="carer-visit-actions">${canRecord?`<button class="secondary-button compact" data-carer-record="${escapeHtml(v.id)}">${v.status==='completed'?'View record':'Record care'}</button>`:''}${v.status==='scheduled'?'<button class="primary-button compact" data-carer-clock>Clock in</button>':''}${v.status==='in_progress'?'<button class="primary-button compact" data-carer-clock>Clock out</button>':''}</div></article>`;}).join('')||'<div class="empty-state"><strong>No visits allocated today</strong><span>Your manager can allocate visits from the rota.</span></div>';
+  const history=$('#carer-history');history.innerHTML=(payload.history||[]).map(v=>`<button class="carer-history-row" data-carer-record="${escapeHtml(v.id)}"><span>${new Date(v.scheduled_start).toLocaleDateString('en-GB',{day:'2-digit',month:'short'})}</span><div><strong>${escapeHtml(v.client_preferred_name||v.client_name||'Client')}</strong><small>${escapeHtml(v.visit_type||'Care visit')}</small></div><em>View</em></button>`).join('')||'<p class="muted">No previous completed visits yet.</p>';
+  document.querySelectorAll('[data-carer-record]').forEach(b=>b.addEventListener('click',()=>openVisitCareRecord(b.dataset.carerRecord)));
+  document.querySelectorAll('[data-carer-clock]').forEach(b=>b.addEventListener('click',()=>$('#visit-clock-dialog')?.showModal()));
+}
 
 async function loadDashboard() {
   const payload = await api('/api/dashboard');
@@ -1754,4 +1771,6 @@ async function openVisitCareRecord(visitId){
  f.followUpRequired.checked=Boolean(r.follow_up_required);const done=new Set((data.tasks||[]).filter(x=>x.status==='completed').map(x=>x.task_key));f.querySelectorAll('input[name="task"]').forEach(x=>x.checked=done.has(x.value));const med=(data.medication||[])[0];if(med){f.medicationOutcome.value=med.outcome;f.medicationName.value=med.medication_name;f.medicationReason.value=med.reason;}
  $('#visit-record-error').hidden=true;$('#visit-record-dialog')?.showModal();
 }
-$('#visit-record-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=e.currentTarget,err=$('#visit-record-error');err.hidden=true;const fd=new FormData(f),tasks=[...f.querySelectorAll('input[name="task"]:checked')].map(x=>({key:x.value,label:x.dataset.label,status:'completed'}));const medication=[{name:fd.get('medicationName'),outcome:fd.get('medicationOutcome'),reason:fd.get('medicationReason')}];const payload=Object.fromEntries(fd);payload.tasks=tasks;payload.medication=medication;payload.followUpRequired=f.followUpRequired.checked;payload.incidentRequired=f.incidentRequired.checked;payload.completeVisit=true;try{await api(`/api/visits/${encodeURIComponent(fd.get('visitId'))}/care-record`,{method:'POST',body:JSON.stringify(payload)});$('#visit-record-dialog')?.close();await loadVisitsBoardNoSync();}catch(ex){err.textContent=ex.message;err.hidden=false;}});
+$('#visit-record-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=e.currentTarget,err=$('#visit-record-error');err.hidden=true;const fd=new FormData(f),tasks=[...f.querySelectorAll('input[name="task"]:checked')].map(x=>({key:x.value,label:x.dataset.label,status:'completed'}));const medication=[{name:fd.get('medicationName'),outcome:fd.get('medicationOutcome'),reason:fd.get('medicationReason')}];const payload=Object.fromEntries(fd);payload.tasks=tasks;payload.medication=medication;payload.followUpRequired=f.followUpRequired.checked;payload.incidentRequired=f.incidentRequired.checked;payload.completeVisit=true;try{await api(`/api/visits/${encodeURIComponent(fd.get('visitId'))}/care-record`,{method:'POST',body:JSON.stringify(payload)});$('#visit-record-dialog')?.close();if(['carer','senior_carer'].includes(currentUser?.accessLevel))await loadCarerDashboard();else await loadVisitsBoardNoSync();}catch(ex){err.textContent=ex.message;err.hidden=false;}});
+
+$('#carer-refresh')?.addEventListener('click',()=>loadCarerDashboard().catch(showToastError));$('#carer-open-clock')?.addEventListener('click',()=>$('#visit-clock-dialog')?.showModal());

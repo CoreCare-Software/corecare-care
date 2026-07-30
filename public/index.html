@@ -257,6 +257,12 @@
 </section>
 
         <section id="dashboard-page" class="page active-page">
+          <section id="carer-dashboard" class="carer-dashboard" hidden>
+            <div class="carer-hero"><div><p class="eyebrow">My working day</p><h2 id="carer-greeting">Today’s visits</h2><p id="carer-summary">Loading your allocated visits…</p></div><button id="carer-refresh" class="secondary-button compact" type="button">Refresh</button></div>
+            <div id="carer-link-warning" class="notice-banner" hidden><div><strong>Login not linked</strong><span id="carer-link-message"></span></div></div>
+            <section class="carer-metrics"><article><span>Visits today</span><strong id="carer-total">0</strong></article><article><span>Completed</span><strong id="carer-completed">0</strong></article><article><span>In progress</span><strong id="carer-progress">0</strong></article><article><span>Late / attention</span><strong id="carer-late">0</strong></article></section>
+            <section class="carer-layout"><article class="panel carer-main"><div class="panel-heading"><div><p class="eyebrow">Allocated to me</p><h2>Today’s schedule</h2></div><button id="carer-open-clock" class="primary-button compact" type="button">Scan client code</button></div><div id="carer-visit-list" class="carer-visit-list"></div></article><aside class="panel"><div class="panel-heading"><div><p class="eyebrow">Completed care</p><h2>Recent visits</h2></div></div><div id="carer-history" class="carer-history"></div></aside></section>
+          </section>
           <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release adds organisation branding, terminology, configurable dashboards and a redesigned platform workspace. Continue using fictional information during development.</span></div><span class="badge">Sprint 10</span></div>
           <section class="dev-status panel" aria-label="Development status">
             <div class="panel-heading"><div><p class="eyebrow">Development mode</p><h2>Platform status</h2></div><span id="organisation-name" class="badge neutral">Organisation</span></div>
