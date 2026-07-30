@@ -120,7 +120,7 @@ function updateIdentity() {
   document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
-const CORECARE_FALLBACK_VERSION = '1.15.7';
+const CORECARE_FALLBACK_VERSION = '1.19.5';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -223,11 +223,14 @@ async function showApplication(user) {
     showPage('platform');
     showPlatformView(location.hash && location.hash !== '#platform' ? location.hash.slice(1) : 'platform-page', false);
   } else {
-    await Promise.all([loadClients(), loadStaff(), loadDashboard()]);
-    renderClients();
-    renderStaff();
+    const jobs=[loadDashboard()];
+    if(hasAccess('clients.view'))jobs.push(loadClients());
+    if(hasAccess('staff.view'))jobs.push(loadStaff());
+    await Promise.all(jobs);
+    if(hasAccess('clients.view'))renderClients();
+    if(hasAccess('staff.view'))renderStaff();
     await loadDevelopmentStatus();
-    showPage('dashboard');
+    showPage(canOpenPage('dashboard')?'dashboard':Object.keys(currentUser.modules||{}).find(canOpenPage)||'dashboard');
   }
   $('#main-content').focus();
   if (currentUser?.mustChangePassword) setTimeout(() => openPasswordDialog(true), 100);
@@ -235,11 +238,19 @@ async function showApplication(user) {
 
 
 function applyAccessVisibility(){
-  if(!currentUser||currentUser.isPlatformUser)return;
+  if(!currentUser)return;
   const modules=currentUser.modules||{};
-  $$('.organisation-workspace-nav[data-page]').forEach(button=>{const page=button.dataset.page;button.hidden=modules[page]===false;});
+  $$('.organisation-workspace-nav[data-page]').forEach(button=>{const page=button.dataset.page;button.hidden=!currentUser.isPlatformUser&&modules[page]!==true;});
+  const visibility={
+    '#add-client':'clients.create','#add-staff':'staff.create','#edit-profile-client':'clients.edit','#archive-profile-client':'clients.archive'
+  };
+  Object.entries(visibility).forEach(([selector,permission])=>{const node=$(selector);if(node)node.hidden=!hasAccess(permission);});
+  $$('.quick-action[data-quick="client"]').forEach(node=>node.hidden=!hasAccess('clients.create'));
+  $$('.quick-action[data-quick="staff"]').forEach(node=>node.hidden=!hasAccess('staff.create'));
 }
-function hasAccess(permission){return currentUser?.isPlatformUser||currentUser?.accessLevel==='organisation_owner'||(currentUser?.permissions||[]).includes(permission);}
+function hasAccess(permission){return Boolean(currentUser?.isPlatformUser||(currentUser?.permissions||[]).includes(permission));}
+function canOpenPage(page){return Boolean(currentUser?.isPlatformUser||(currentUser?.modules||{})[page]===true);}
+function denyPage(){showToastError(new Error('You do not have permission to view this area.'));}
 
 function showLogin(message = '') {
   currentUser = null;
@@ -269,6 +280,7 @@ function activatePage(id) {
 }
 
 function showPage(page) {
+  if(page!=='platform'&&page!=='client-profile'&&!canOpenPage(page)){denyPage();return;}
   selectedClientId = page === 'client-profile' ? selectedClientId : null;
   if (page === 'platform') {
     if (!currentUser?.isPlatformUser) return showPage('dashboard');
@@ -649,7 +661,7 @@ function renderStaff() {
     const haystack = `${item.firstName} ${item.lastName} ${item.preferredName} ${item.jobTitle} ${item.phone} ${item.email}`.toLowerCase();
     return (!term || haystack.includes(term)) && (status === 'all' || item.status === status);
   });
-  $('#staff-table-body').innerHTML = filtered.map(item => `<tr><td><div class="client-person"><span class="person-avatar">${initialsFromName(staffName(item))}</span><div><strong>${escapeHtml(staffName(item))}</strong><span>${escapeHtml(item.preferredName ? `Known as ${item.preferredName}` : item.employmentType)}</span></div></div></td><td>${escapeHtml(item.jobTitle)}</td><td>${escapeHtml(item.phone || item.email || 'Not recorded')}</td><td class="${isPast(item.dbsExpiry) ? 'date-overdue' : ''}">${formatDate(item.dbsExpiry)}${isPast(item.dbsExpiry) ? ' · overdue' : ''}</td><td class="${isPast(item.trainingExpiry) ? 'date-overdue' : ''}">${formatDate(item.trainingExpiry)}${isPast(item.trainingExpiry) ? ' · overdue' : ''}</td><td><span class="badge ${item.status === 'Active' ? 'success' : 'neutral'}">${escapeHtml(item.status)}</span>${item.loginUserId?`<small class="table-subline">Login: ${escapeHtml(item.loginStatus||'active')}</small>`:'<small class="table-subline">No login</small>'}</td><td><button class="row-action" data-edit-staff="${escapeHtml(item.id)}">Edit</button></td></tr>`).join('');
+  $('#staff-table-body').innerHTML = filtered.map(item => `<tr><td><div class="client-person"><span class="person-avatar">${initialsFromName(staffName(item))}</span><div><strong>${escapeHtml(staffName(item))}</strong><span>${escapeHtml(item.preferredName ? `Known as ${item.preferredName}` : item.employmentType)}</span></div></div></td><td>${escapeHtml(item.jobTitle)}</td><td>${escapeHtml(item.phone || item.email || 'Not recorded')}</td><td class="${isPast(item.dbsExpiry) ? 'date-overdue' : ''}">${formatDate(item.dbsExpiry)}${isPast(item.dbsExpiry) ? ' · overdue' : ''}</td><td class="${isPast(item.trainingExpiry) ? 'date-overdue' : ''}">${formatDate(item.trainingExpiry)}${isPast(item.trainingExpiry) ? ' · overdue' : ''}</td><td><span class="badge ${item.status === 'Active' ? 'success' : 'neutral'}">${escapeHtml(item.status)}</span>${item.loginUserId?`<small class="table-subline">Login: ${escapeHtml(item.loginStatus||'active')}</small>`:'<small class="table-subline">No login</small>'}</td><td>${hasAccess('staff.edit')?`<button class="row-action" data-edit-staff="${escapeHtml(item.id)}">Edit</button>`:'<span class="muted">View only</span>'}</td></tr>`).join('');
   $('#staff-empty').hidden = filtered.length > 0;
   $('#staff-active-count').textContent = staff.filter(x => x.status === 'Active').length;
   $('#staff-dbs-count').textContent = staff.filter(x => x.status === 'Active' && isPast(x.dbsExpiry)).length;
@@ -658,6 +670,7 @@ function renderStaff() {
 }
 function toggleStaffLoginFields(){const checked=$('#staff-create-login')?.checked;const fields=$('#staff-login-fields');if(fields)fields.hidden=!checked;}
 function openStaffDialog(id = '') {
+  if(!hasAccess(id?'staff.edit':'staff.create')){denyPage();return;}
   staffForm.reset(); $('#staff-form-error').hidden = true; staffForm.elements.id.value = id;
   $('#staff-dialog-title').textContent = id ? 'Edit staff' : 'Add staff';
   const item = staff.find(x => x.id === id);
@@ -705,7 +718,7 @@ function renderClients() {
       <td>${escapeHtml(client.carePackage || 'Not set')}</td>
       <td><span class="review-date ${reviewDue(client) ? 'overdue' : ''}">${formatDate(client.nextReview)}${reviewDue(client) ? ' · overdue' : ''}</span></td>
       <td><span class="badge ${client.status === 'Active' ? 'success' : client.status === 'Paused' ? 'active' : 'neutral'}">${escapeHtml(client.status)}</span>${client.risk === 'High' ? '<span class="risk-tag">High risk</span>' : ''}</td>
-      <td><button class="row-action" data-edit-client="${escapeHtml(client.id)}">Edit</button></td>
+      <td>${hasAccess('clients.edit')?`<button class="row-action" data-edit-client="${escapeHtml(client.id)}">Edit</button>`:'<span class="muted">View only</span>'}</td>
     </tr>`).join('');
 
   clientEmpty.hidden = filtered.length > 0;
@@ -748,6 +761,7 @@ function addVisitRequirement(value={}){
 function collectVisitRequirements(){return [...document.querySelectorAll('.visit-requirement-row')].map(row=>({visitType:row.querySelector('[data-requirement="visitType"]').value,preferredTime:row.querySelector('[data-requirement="preferredTime"]').value,windowMinutes:Number(row.querySelector('[data-requirement="windowMinutes"]').value),durationMinutes:Number(row.querySelector('[data-requirement="durationMinutes"]').value),carersRequired:Number(row.querySelector('[data-requirement="carersRequired"]').value),notes:row.querySelector('[data-requirement="notes"]').value,schedulingRule:row.querySelector('[data-requirement="schedulingRule"]').value,timeCriticalReason:row.querySelector('[data-requirement="timeCriticalReason"]').value,days:[...row.querySelectorAll('[data-requirement-day]:checked')].map(x=>Number(x.value))})).filter(r=>r.preferredTime&&r.days.length);}
 
 function openClientDialog(id = '') {
+  if(!hasAccess(id?'clients.edit':'clients.create')){denyPage();return;}
   clientForm.reset();
   $('#client-form-error').hidden = true;
   const requirementsList=$('#client-visit-requirements');if(requirementsList)requirementsList.innerHTML='';
@@ -966,8 +980,8 @@ $$('.nav-item').forEach(button => button.addEventListener('click', () => {
 
 $$('[data-page-link]').forEach(button => button.addEventListener('click', () => $(`[data-page="${button.dataset.pageLink}"]`).click()));
 $('[data-return-dashboard]').addEventListener('click', () => $('[data-page="dashboard"]').click());
-$('#add-client').addEventListener('click', () => openClientDialog());
-$('#add-staff').addEventListener('click', () => openStaffDialog());
+$('#add-client')?.addEventListener('click', () => openClientDialog());
+$('#add-staff')?.addEventListener('click', () => openStaffDialog());
 $('#close-staff-dialog').addEventListener('click', () => staffDialog.close());
 $('#cancel-staff').addEventListener('click', () => staffDialog.close());
 $('#staff-search').addEventListener('input', renderStaff);

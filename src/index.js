@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.19.4 — Staff Login Onboarding */
-const VERSION = "1.19.4";
+/** CoreCare Enterprise 1.19.5 — Permission Enforcement */
+const VERSION = "1.19.5";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.19.4 — Staff Login Onboarding" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.19.5 — Permission Enforcement" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -61,8 +61,8 @@ export default {
         if (url.pathname === "/api/operations/handovers" && request.method === "POST") return createShiftHandover(request, env.DB, session);
         const handoverAckMatch = url.pathname.match(/^\/api\/operations\/handovers\/([^/]+)\/acknowledge$/);
         if (handoverAckMatch && request.method === "POST") return acknowledgeShiftHandover(env.DB, session, decodeURIComponent(handoverAckMatch[1]));
-        if (url.pathname === "/api/care-plans" && request.method === "GET") return listAllCarePlans(env.DB, session, url);
-        if (url.pathname === "/api/care-delivery/dashboard" && request.method === "GET") return careDeliveryDashboard(env.DB, session);
+        if (url.pathname === "/api/care-plans" && request.method === "GET") return await permitted(env.DB, session, "care_plans.view", () => listAllCarePlans(env.DB, session, url));
+        if (url.pathname === "/api/care-delivery/dashboard" && request.method === "GET") return await permitted(env.DB, session, "care_plans.view", () => careDeliveryDashboard(env.DB, session));
         const carePlanActionMatch = url.pathname.match(/^\/api\/care-plans\/([^/]+)\/(approve|generate-visits)$/);
         if (carePlanActionMatch && request.method === "POST") return carePlanAction(request, env.DB, session, decodeURIComponent(carePlanActionMatch[1]), carePlanActionMatch[2]);
         const careAlertMatch = url.pathname.match(/^\/api\/care-delivery\/alerts\/([^/]+)\/acknowledge$/);
@@ -146,14 +146,14 @@ export default {
           if (request.method === "POST") return saveFamilyAccess(request, env.DB, session);
         }
         if (url.pathname === "/api/staff") {
-          if (request.method === "GET") return listStaff(env.DB, session, url);
-          if (request.method === "POST") return createStaff(request, env.DB, session);
+          if (request.method === "GET") return await permitted(env.DB, session, "staff.view", () => listStaff(env.DB, session, url));
+          if (request.method === "POST") return await permitted(env.DB, session, "staff.create", () => createStaff(request, env.DB, session));
           return methodNotAllowed(["GET", "POST"]);
         }
         const staffMatch = url.pathname.match(/^\/api\/staff\/([^/]+)$/);
         if (staffMatch) {
           const id = decodeURIComponent(staffMatch[1]);
-          if (request.method === "PUT") return updateStaff(request, env.DB, session, id);
+          if (request.method === "PUT") return await permitted(env.DB, session, "staff.edit", () => updateStaff(request, env.DB, session, id));
           return methodNotAllowed(["PUT"]);
         }
         const clientCareMatch = url.pathname.match(/^\/api\/clients\/([^/]+)\/(care-plans|risks|documents)$/);
@@ -161,49 +161,49 @@ export default {
           const clientId = decodeURIComponent(clientCareMatch[1]);
           const module = clientCareMatch[2];
           if (module === "care-plans") {
-            if (request.method === "GET") return listCarePlans(env.DB, session, clientId);
-            if (request.method === "POST") return createCarePlan(request, env.DB, session, clientId);
+            if (request.method === "GET") return await permitted(env.DB, session, "care_plans.view", () => listCarePlans(env.DB, session, clientId));
+            if (request.method === "POST") return await permitted(env.DB, session, "care_plans.create", () => createCarePlan(request, env.DB, session, clientId));
           }
           if (module === "risks") {
-            if (request.method === "GET") return listRisks(env.DB, session, clientId);
-            if (request.method === "POST") return createRisk(request, env.DB, session, clientId);
+            if (request.method === "GET") return await permitted(env.DB, session, "risks.view", () => listRisks(env.DB, session, clientId));
+            if (request.method === "POST") return await permitted(env.DB, session, "risks.manage", () => createRisk(request, env.DB, session, clientId));
           }
           if (module === "documents") {
-            if (request.method === "GET") return listDocuments(env.DB, session, clientId);
-            if (request.method === "POST") return createDocument(request, env.DB, session, clientId);
+            if (request.method === "GET") return await permitted(env.DB, session, "documents.view", () => listDocuments(env.DB, session, clientId));
+            if (request.method === "POST") return await permitted(env.DB, session, "documents.manage", () => createDocument(request, env.DB, session, clientId));
           }
           return methodNotAllowed(["GET", "POST"]);
         }
         const carePlanMatch = url.pathname.match(/^\/api\/care-plans\/([^/]+)$/);
         if (carePlanMatch) {
           const id = decodeURIComponent(carePlanMatch[1]);
-          if (request.method === "PUT") return updateCarePlan(request, env.DB, session, id);
-          if (request.method === "DELETE") return archiveCarePlan(env.DB, session, id);
+          if (request.method === "PUT") return await permitted(env.DB, session, "care_plans.edit", () => updateCarePlan(request, env.DB, session, id));
+          if (request.method === "DELETE") return await permitted(env.DB, session, "care_plans.archive", () => archiveCarePlan(env.DB, session, id));
           return methodNotAllowed(["PUT", "DELETE"]);
         }
         const riskMatch = url.pathname.match(/^\/api\/risks\/([^/]+)$/);
         if (riskMatch) {
           const id = decodeURIComponent(riskMatch[1]);
-          if (request.method === "PUT") return updateRisk(request, env.DB, session, id);
+          if (request.method === "PUT") return await permitted(env.DB, session, "risks.manage", () => updateRisk(request, env.DB, session, id));
           return methodNotAllowed(["PUT"]);
         }
         const documentMatch = url.pathname.match(/^\/api\/documents\/([^/]+)$/);
         if (documentMatch) {
           const id = decodeURIComponent(documentMatch[1]);
-          if (request.method === "DELETE") return archiveDocument(env.DB, session, id);
+          if (request.method === "DELETE") return await permitted(env.DB, session, "documents.manage", () => archiveDocument(env.DB, session, id));
           return methodNotAllowed(["DELETE"]);
         }
         if (url.pathname === "/api/clients") {
-          if (request.method === "GET") return listClients(env.DB, session, url);
-          if (request.method === "POST") return createClient(request, env.DB, session);
+          if (request.method === "GET") return await permitted(env.DB, session, "clients.view", () => listClients(env.DB, session, url));
+          if (request.method === "POST") return await permitted(env.DB, session, "clients.create", () => createClient(request, env.DB, session));
           return methodNotAllowed(["GET", "POST"]);
         }
         const clientMatch = url.pathname.match(/^\/api\/clients\/([^/]+)$/);
         if (clientMatch) {
           const id = decodeURIComponent(clientMatch[1]);
-          if (request.method === "GET") return getClient(env.DB, session, id);
-          if (request.method === "PUT") return updateClient(request, env.DB, session, id);
-          if (request.method === "DELETE") return archiveClient(env.DB, session, id);
+          if (request.method === "GET") return await permitted(env.DB, session, "clients.view", () => getClient(env.DB, session, id));
+          if (request.method === "PUT") return await permitted(env.DB, session, "clients.edit", () => updateClient(request, env.DB, session, id));
+          if (request.method === "DELETE") return await permitted(env.DB, session, "clients.archive", () => archiveClient(env.DB, session, id));
           return methodNotAllowed(["GET", "PUT", "DELETE"]);
         }
         if (url.pathname === "/api/users") {
@@ -1089,6 +1089,10 @@ function allowedAccessLevels(){return ["organisation_owner","organisation_admin"
 function legacyRole(level){return ({organisation_owner:"owner",organisation_admin:"owner",branch_manager:"manager",senior_carer:"carer",carer:"carer",office_staff:"manager",auditor:"auditor",family:"auditor"})[level]||"auditor";}
 function hasRole(session, roles) { if (session.is_platform_user) return true; return roles.includes(session.role) || roles.includes(session.access_level); }
 function forbidden() { return json({ error: { code: "FORBIDDEN", message: "Your account does not have permission to perform this action." } }, 403); }
+async function permitted(db, session, permission, action) {
+  if (!await userHasPermission(db, session, permission)) return forbidden();
+  return action();
+}
 function unauthorised() { return json({ error: { code: "UNAUTHORISED", message: "Sign in to continue." } }, 401, { "set-cookie": expiredSessionCookie() }); }
 function databaseRequired(message = "The D1 database binding named DB is not configured.") { return json({ error: { code: "DATABASE_NOT_CONFIGURED", message } }, 503); }
 function methodNotAllowed(allow) { return json({ error: { code: "METHOD_NOT_ALLOWED", message: "This method is not allowed." } }, 405, { allow: allow.join(", ") }); }
