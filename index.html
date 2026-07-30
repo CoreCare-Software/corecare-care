@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f766e">
   <meta name="description" content="CoreCare care management platform">
   <title>CoreCare</title>
-  <link rel="stylesheet" href="styles.css?v=1.16.4">
+  <link rel="stylesheet" href="styles.css?v=1.17.0">
 </head>
 <body>
   <div id="login-view" class="login-shell">
@@ -631,6 +631,8 @@
 
 <dialog id="rota-optimise-dialog" class="client-dialog wide-dialog"><form method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Planner intelligence</p><h2>Optimise selected day</h2></div><button type="button" data-close-dialog="rota-optimise-dialog">×</button></div><div id="rota-optimise-summary" class="generation-result"></div><div id="rota-optimise-list" class="optimise-list"></div><p id="rota-optimise-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="rota-optimise-dialog">Cancel</button><button id="rota-optimise-apply" type="button" class="primary-button compact">Apply recommendations</button></div></form></dialog>
 
-<script src="app.js?v=1.16.4"></script>
+
+<dialog id="suitability-dialog" class="client-dialog suitability-dialog"><form method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Intelligent allocation</p><h2>Suitability analysis</h2><p id="suitability-client" class="muted"></p></div><button type="button" data-close-dialog="suitability-dialog">×</button></div><div class="suitability-overview"><strong id="suitability-score" class="suitability-big-score">—</strong><div><h3>Why this allocation scored this way</h3><ul id="suitability-reasons" class="suitability-reasons"></ul></div></div><section><h3>Best conflict-free carers</h3><div id="suitability-alternatives" class="suitability-alternatives"></div></section><div class="dialog-actions"><button type="button" class="primary-button compact" data-close-dialog="suitability-dialog">Close</button></div></form></dialog>
+<script src="app.js?v=1.17.0"></script>
 </body>
 </html>
