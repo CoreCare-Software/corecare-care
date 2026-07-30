@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # CoreCare Enterprise 1.19.1 — Care Delivery Visit Workflow
+=======
+# CoreCare Enterprise 1.19.0 — Care Delivery Visit Workflow
+>>>>>>> 73e9568d208f38e4e952ab6a8b070be3c80c0b37
 
 Begins Phase 1 Care Delivery with a complete visit-record workflow layered onto the existing rota and electronic call monitoring system.
 

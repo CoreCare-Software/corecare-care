@@ -1,6 +1,10 @@
 {
   "name": "corecare",
+<<<<<<< HEAD
   "version": "1.19.1",
+=======
+  "version": "1.19.0",
+>>>>>>> 73e9568d208f38e4e952ab6a8b070be3c80c0b37
   "private": true,
   "description": "CoreCare multi-tenant care management SaaS platform",
   "type": "module",
