@@ -296,7 +296,7 @@ function applyAccessVisibility(){
   const platformWorkspace=isPlatformWorkspace();
   $$('.organisation-workspace-nav').forEach(node=>{
     const page=node.dataset?.page;
-    node.hidden=platformWorkspace || Boolean(page && (!workspaceAllowsPage(page) || modules[page]!==true));
+    node.hidden=platformWorkspace || Boolean(page && (!workspaceAllowsPage(page) || (page!=='dashboard' && modules[page]!==true)));
   });
   // Carers use one protected workspace: their own dashboard and allocated visits only.
   const type=dashboardType();
@@ -326,6 +326,7 @@ function canOpenPage(page){
     if(isPlatformWorkspace()) return page==='platform';
     if(currentUser?.supportMode) return workspaceAllowsPage(page);
   }
+  if(!isPlatformWorkspace() && page==='dashboard' && workspaceAllowsPage(page)) return true;
   return Boolean(!isPlatformWorkspace()&&workspaceAllowsPage(page)&&(currentUser?.modules||{})[page]===true);
 }
 function denyPage(){showToastError(new Error('You do not have permission to view this area.'));}
