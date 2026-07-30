@@ -2009,13 +2009,71 @@ $('#visit-record-form')?.addEventListener('submit',async e=>{e.preventDefault();
 $('#carer-refresh')?.addEventListener('click',()=>loadCarerDashboard().catch(showToastError));$('#carer-open-clock')?.addEventListener('click',()=>$('#visit-clock-dialog')?.showModal());
 
 
+const CORECARE_MEDICINE_CATALOGUE = [
+  {name:'Paracetamol',forms:['Tablet','Capsule','Oral suspension','Soluble tablet'],strengths:['500 mg','120 mg/5 ml','250 mg/5 ml'],route:'Oral'},
+  {name:'Ibuprofen',forms:['Tablet','Capsule','Oral suspension','Gel'],strengths:['200 mg','400 mg','100 mg/5 ml','5%'],route:'Oral'},
+  {name:'Aspirin',forms:['Dispersible tablet','Gastro-resistant tablet'],strengths:['75 mg','300 mg'],route:'Oral'},
+  {name:'Amoxicillin',forms:['Capsule','Oral suspension'],strengths:['250 mg','500 mg','125 mg/5 ml','250 mg/5 ml'],route:'Oral'},
+  {name:'Atorvastatin',forms:['Tablet'],strengths:['10 mg','20 mg','40 mg','80 mg'],route:'Oral'},
+  {name:'Amlodipine',forms:['Tablet'],strengths:['5 mg','10 mg'],route:'Oral'},
+  {name:'Bisoprolol',forms:['Tablet'],strengths:['1.25 mg','2.5 mg','5 mg','10 mg'],route:'Oral'},
+  {name:'Ramipril',forms:['Capsule','Tablet'],strengths:['1.25 mg','2.5 mg','5 mg','10 mg'],route:'Oral'},
+  {name:'Lisinopril',forms:['Tablet'],strengths:['2.5 mg','5 mg','10 mg','20 mg'],route:'Oral'},
+  {name:'Losartan',forms:['Tablet'],strengths:['25 mg','50 mg','100 mg'],route:'Oral'},
+  {name:'Furosemide',forms:['Tablet','Oral solution'],strengths:['20 mg','40 mg','50 mg/5 ml'],route:'Oral'},
+  {name:'Omeprazole',forms:['Gastro-resistant capsule','Dispersible tablet'],strengths:['10 mg','20 mg','40 mg'],route:'Oral'},
+  {name:'Lansoprazole',forms:['Gastro-resistant capsule','Orodispersible tablet'],strengths:['15 mg','30 mg'],route:'Oral'},
+  {name:'Metformin',forms:['Tablet','Modified-release tablet','Oral solution'],strengths:['500 mg','850 mg','1 g'],route:'Oral'},
+  {name:'Gliclazide',forms:['Tablet','Modified-release tablet'],strengths:['40 mg','80 mg','30 mg','60 mg'],route:'Oral'},
+  {name:'Levothyroxine',forms:['Tablet','Oral solution'],strengths:['25 micrograms','50 micrograms','75 micrograms','100 micrograms'],route:'Oral'},
+  {name:'Sertraline',forms:['Tablet'],strengths:['50 mg','100 mg'],route:'Oral'},
+  {name:'Citalopram',forms:['Tablet','Oral drops'],strengths:['10 mg','20 mg','40 mg'],route:'Oral'},
+  {name:'Mirtazapine',forms:['Tablet','Orodispersible tablet'],strengths:['15 mg','30 mg','45 mg'],route:'Oral'},
+  {name:'Gabapentin',forms:['Capsule','Tablet','Oral solution'],strengths:['100 mg','300 mg','400 mg','600 mg'],route:'Oral'},
+  {name:'Pregabalin',forms:['Capsule','Oral solution'],strengths:['25 mg','50 mg','75 mg','100 mg','150 mg','300 mg'],route:'Oral'},
+  {name:'Codeine phosphate',forms:['Tablet','Oral solution'],strengths:['15 mg','30 mg','25 mg/5 ml'],route:'Oral'},
+  {name:'Morphine sulfate',forms:['Oral solution','Modified-release tablet','Immediate-release tablet'],strengths:['10 mg/5 ml','20 mg/ml','5 mg','10 mg','30 mg'],route:'Oral'},
+  {name:'Co-codamol',forms:['Tablet','Effervescent tablet'],strengths:['8 mg/500 mg','15 mg/500 mg','30 mg/500 mg'],route:'Oral'},
+  {name:'Senna',forms:['Tablet','Syrup'],strengths:['7.5 mg','7.5 mg/5 ml'],route:'Oral'},
+  {name:'Lactulose',forms:['Oral solution'],strengths:['3.1–3.7 g/5 ml'],route:'Oral'},
+  {name:'Macrogol 3350 with electrolytes',forms:['Powder for oral solution'],strengths:['13.8 g sachet'],route:'Oral'},
+  {name:'Salbutamol',forms:['Inhaler','Nebuliser solution'],strengths:['100 micrograms/dose','2.5 mg/2.5 ml','5 mg/2.5 ml'],route:'Inhaled'},
+  {name:'Beclometasone dipropionate',forms:['Inhaler'],strengths:['50 micrograms/dose','100 micrograms/dose','200 micrograms/dose'],route:'Inhaled'},
+  {name:'Tiotropium',forms:['Inhalation capsule','Inhaler'],strengths:['18 micrograms','2.5 micrograms/dose'],route:'Inhaled'},
+  {name:'Apixaban',forms:['Tablet'],strengths:['2.5 mg','5 mg'],route:'Oral'},
+  {name:'Rivaroxaban',forms:['Tablet'],strengths:['2.5 mg','10 mg','15 mg','20 mg'],route:'Oral'},
+  {name:'Warfarin',forms:['Tablet'],strengths:['0.5 mg','1 mg','3 mg','5 mg'],route:'Oral'},
+  {name:'Clopidogrel',forms:['Tablet'],strengths:['75 mg'],route:'Oral'},
+  {name:'Donepezil',forms:['Tablet','Orodispersible tablet'],strengths:['5 mg','10 mg'],route:'Oral'},
+  {name:'Memantine',forms:['Tablet','Oral solution'],strengths:['5 mg','10 mg','15 mg','20 mg'],route:'Oral'},
+  {name:'Carbamazepine',forms:['Tablet','Modified-release tablet','Oral suspension'],strengths:['100 mg','200 mg','400 mg','100 mg/5 ml'],route:'Oral'},
+  {name:'Sodium valproate',forms:['Tablet','Modified-release tablet','Oral solution'],strengths:['100 mg','200 mg','300 mg','500 mg'],route:'Oral'},
+  {name:'Insulin glargine',forms:['Solution for injection'],strengths:['100 units/ml','300 units/ml'],route:'Subcutaneous'},
+  {name:'Insulin aspart',forms:['Solution for injection'],strengths:['100 units/ml'],route:'Subcutaneous'},
+  {name:'Hydrocortisone',forms:['Cream','Ointment','Tablet'],strengths:['1%','10 mg','20 mg'],route:'Topical'},
+  {name:'Clotrimazole',forms:['Cream','Solution'],strengths:['1%'],route:'Topical'},
+  {name:'Chloramphenicol',forms:['Eye drops','Eye ointment'],strengths:['0.5%','1%'],route:'Ocular'}
+];
+function initialiseMedicationCatalogue(){
+  const list=$('#medication-name-options'); if(!list)return;
+  list.innerHTML=CORECARE_MEDICINE_CATALOGUE.map(m=>`<option value="${escapeHtml(m.name)}">${escapeHtml(m.forms.join(', '))}</option>`).join('');
+}
+function applyMedicationCatalogueMatch(form){
+  const value=form?.elements?.name?.value?.trim().toLowerCase(); if(!value)return;
+  const match=CORECARE_MEDICINE_CATALOGUE.find(m=>m.name.toLowerCase()===value); if(!match)return;
+  if(!form.elements.form.value)form.elements.form.value=match.forms[0]||'';
+  if(!form.elements.route.value)form.elements.route.value=match.route||'';
+  if(!form.elements.strength.value&&match.strengths.length===1)form.elements.strength.value=match.strengths[0];
+  form.elements.strength.placeholder=match.strengths.length?'Common strengths: '+match.strengths.join(', '):'e.g. 500 mg';
+}
+
 let medicationData={medications:[],administrations:[]};
 let bodyMapData={records:[]};
-function populateMedicationClients(){const el=$('#medication-client');if(!el)return;const chosen=el.value;el.innerHTML='<option value="">Choose a client</option>'+clients.filter(x=>x.status!=='Archived').map(x=>`<option value="${escapeHtml(x.id)}">${escapeHtml(x.first_name+' '+x.last_name)}</option>`).join('');if(chosen)el.value=chosen;}
+function populateMedicationClients(){const el=$('#medication-client');if(!el)return;const chosen=el.value;el.innerHTML='<option value="">Choose a client</option>'+clients.filter(x=>x.status!=='Archived').map(x=>`<option value="${escapeHtml(x.id)}">${escapeHtml(clientDisplayName(x)||'Unnamed client')}</option>`).join('');if(chosen)el.value=chosen;}
 async function loadMedicationModule(){if(!clients.length)await loadClients();populateMedicationClients();const id=$('#medication-client')?.value;if(id)await loadMedicationForClient(id);else renderMedication();}
 async function loadMedicationForClient(clientId){medicationData=await api('/api/medication?clientId='+encodeURIComponent(clientId));renderMedication();}
 function renderMedication(){const list=$('#medication-list'),mar=$('#mar-list'),summary=$('#medication-summary');if(!list)return;const meds=medicationData.medications||[],entries=medicationData.administrations||[];if(summary)summary.innerHTML=[['Active medicines',meds.filter(x=>x.status==='active').length],['PRN medicines',meds.filter(x=>x.is_prn).length],['MAR entries',entries.length],['Low stock',meds.filter(x=>x.stock_quantity!==null&&Number(x.stock_quantity)<=5).length]].map(x=>`<article><span>${x[0]}</span><strong>${x[1]}</strong></article>`).join('');list.innerHTML=meds.length?meds.map(m=>`<article class="record-card medication-card"><div class="record-card-heading"><div><span class="badge ${m.status==='active'?'active':'neutral'}">${escapeHtml(m.status)}</span><h3>${escapeHtml(m.name)} ${escapeHtml(m.strength||'')}</h3></div><span class="badge ${m.is_prn?'warning':'neutral'}">${m.is_prn?'PRN':'Regular'}</span></div><p><strong>${escapeHtml(m.dose)}</strong> · ${escapeHtml(m.route||'Route not recorded')}</p><p class="muted">${escapeHtml((m.scheduledTimes||[]).join(', ')||m.frequency||'No schedule recorded')}</p><p>${escapeHtml(m.instructions||'')}</p><p><b>Stock:</b> ${m.stock_quantity===null?'Not tracked':escapeHtml(String(m.stock_quantity))+' '+escapeHtml(m.stock_unit||'')}</p>${m.is_prn&&m.prn_protocol?`<div class="notice-banner small-notice"><div><strong>PRN protocol</strong><span>${escapeHtml(m.prn_protocol)}</span></div></div>`:''}<div class="record-actions"><button class="primary-button compact" data-administer-medication="${escapeHtml(m.id)}">Record administration</button><button class="secondary-button compact" data-edit-medication="${escapeHtml(m.id)}">Edit</button></div></article>`).join(''):'<p class="muted">No medications recorded for this client.</p>';mar.innerHTML=entries.length?entries.map(e=>`<div class="mar-entry"><div><strong>${escapeHtml(e.medication_name)}</strong><small>${new Date(e.administered_at).toLocaleString('en-GB')}</small></div><div><span class="mar-outcome">${escapeHtml(e.outcome)}</span><small>${escapeHtml(e.reason||e.notes||'No additional notes')}</small></div><div><small>${escapeHtml(e.recorded_by_name||'Recorded user')}</small></div></div>`).join(''):'<p class="muted">No MAR entries recorded.</p>';$$('[data-administer-medication]').forEach(b=>b.onclick=()=>openAdministration(b.dataset.administerMedication));$$('[data-edit-medication]').forEach(b=>b.onclick=()=>openMedicationDialog(meds.find(x=>x.id===b.dataset.editMedication)));}
-function openMedicationDialog(m=null){const clientId=$('#medication-client')?.value;if(!clientId)return showToastError(new Error('Choose a client first.'));const f=$('#medication-form');f.reset();f.elements.id.value=m?.id||'';for(const k of ['name','strength','form','route','dose','frequency','startDate','endDate','stockQuantity','stockUnit','status','instructions','prnProtocol','minIntervalMinutes','maxDose24h'])if(f.elements[k]&&m)f.elements[k].value=m[k.replace(/[A-Z]/g,x=>'_'+x.toLowerCase())]??m[k]??'';f.elements.scheduledTimes.value=(m?.scheduledTimes||[]).join(', ');f.elements.isPrn.checked=!!m?.is_prn;$('#medication-dialog').showModal();}
+function openMedicationDialog(m=null){const clientId=$('#medication-client')?.value;if(!clientId)return showToastError(new Error('Choose a client first.'));const f=$('#medication-form');f.reset();const error=$('#medication-error');if(error){error.hidden=true;error.textContent='';}initialiseMedicationCatalogue();f.elements.id.value=m?.id||'';for(const k of ['name','strength','form','route','dose','frequency','startDate','endDate','stockQuantity','stockUnit','status','instructions','prnProtocol','minIntervalMinutes','maxDose24h'])if(f.elements[k]&&m)f.elements[k].value=m[k.replace(/[A-Z]/g,x=>'_'+x.toLowerCase())]??m[k]??'';f.elements.scheduledTimes.value=(m?.scheduledTimes||[]).join(', ');f.elements.isPrn.checked=!!m?.is_prn;$('#medication-dialog').showModal();setTimeout(()=>f.elements.name?.focus(),50);}
 function openAdministration(id){const m=(medicationData.medications||[]).find(x=>x.id===id),f=$('#administration-form');f.reset();f.elements.medicationId.value=id;f.elements.doseGiven.value=m?.dose||'';f.elements.administeredAt.value=new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);$('#administration-title').textContent='Record '+(m?.name||'medication');$('#administration-dialog').showModal();}
 async function loadBodyMap(){if(!selectedClientId)return;bodyMapData=await api('/api/body-map?clientId='+encodeURIComponent(selectedClientId));renderBodyMap();}
 function renderBodyMap(){const list=$('#body-map-list'),canvas=$('#body-map-canvas');if(!list||!canvas)return;canvas.querySelectorAll('.body-marker').forEach(x=>x.remove());const current=canvas.dataset.view||'front',records=bodyMapData.records||[];records.filter(x=>x.view===current).forEach((r,i)=>{const b=document.createElement('button');b.className='body-marker';b.style.left=r.x_percent+'%';b.style.top=r.y_percent+'%';b.title=r.concern_type+': '+r.body_location;b.textContent=String(i+1);b.onclick=e=>{e.stopPropagation();openBodyMapUpdate(r.id)};canvas.appendChild(b)});list.innerHTML=records.length?records.map(r=>`<article class="record-card body-map-record" data-severity="${escapeHtml(r.severity)}"><div class="record-card-heading"><div><span class="badge ${r.status==='resolved'?'active':r.severity==='high'||r.severity==='critical'?'danger':'warning'}">${escapeHtml(r.status)}</span><h3>${escapeHtml(r.concern_type)} · ${escapeHtml(r.body_location||r.view)}</h3></div><span>${new Date(r.first_observed_at).toLocaleDateString('en-GB')}</span></div><p>${escapeHtml(r.description)}</p><p class="muted">${escapeHtml(r.size||'Size not recorded')} · ${escapeHtml(r.appearance||'Appearance not recorded')}</p><p><b>Action:</b> ${escapeHtml(r.action_taken||'None recorded')}</p><button class="secondary-button compact" data-body-update="${escapeHtml(r.id)}">Add progress update</button></article>`).join(''):'<p class="muted">No body-map concerns recorded.</p>';$$('[data-body-update]').forEach(b=>b.onclick=()=>openBodyMapUpdate(b.dataset.bodyUpdate));}
@@ -2026,7 +2084,7 @@ function openBodyMapUpdate(id){const f=$('#body-map-update-form');f.reset();f.el
 
 $('#medication-client')?.addEventListener('change',e=>e.target.value?loadMedicationForClient(e.target.value).catch(showToastError):(medicationData={medications:[],administrations:[]},renderMedication()));
 $('#add-medication')?.addEventListener('click',()=>openMedicationDialog());
-$('#medication-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=e.currentTarget,d=Object.fromEntries(new FormData(f));d.clientId=$('#medication-client').value;d.isPrn=f.elements.isPrn.checked;d.scheduledTimes=d.scheduledTimes.split(',').map(x=>x.trim()).filter(Boolean);try{await api('/api/medication',{method:'POST',body:JSON.stringify(d)});$('#medication-dialog').close();await loadMedicationForClient(d.clientId);}catch(err){const el=$('#medication-error');el.textContent=err.message;el.hidden=false;}});
+$('#medication-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=e.currentTarget,el=$('#medication-error'),submit=f.querySelector('[type=submit]');if(el){el.hidden=true;el.textContent='';}const d=Object.fromEntries(new FormData(f));d.clientId=$('#medication-client')?.value||'';d.isPrn=f.elements.isPrn.checked;d.scheduledTimes=String(d.scheduledTimes||'').split(',').map(x=>x.trim()).filter(Boolean);if(!d.clientId){if(el){el.textContent='Choose a client before saving medication.';el.hidden=false;}return;}try{if(submit){submit.disabled=true;submit.textContent='Saving…';}await api('/api/medication',{method:'POST',body:JSON.stringify(d)});$('#medication-dialog')?.close();await loadMedicationForClient(d.clientId)}catch(err){if(el){el.textContent=err.message||'Medication could not be saved.';el.hidden=false;}else showToastError(err);}finally{if(submit){submit.disabled=false;submit.textContent='Save medication';}}});
 $('#administration-form')?.addEventListener('submit',async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.currentTarget));try{await api('/api/medication/'+encodeURIComponent(d.medicationId)+'/administer',{method:'POST',body:JSON.stringify(d)});$('#administration-dialog').close();await loadMedicationForClient($('#medication-client').value);}catch(err){const el=$('#administration-error');el.textContent=err.message;el.hidden=false;}});
 $('#add-body-map')?.addEventListener('click',()=>openBodyMapAt());
 $('#body-map-canvas')?.addEventListener('click',e=>{const r=e.currentTarget.getBoundingClientRect();openBodyMapAt(Math.round((e.clientX-r.left)/r.width*1000)/10,Math.round((e.clientY-r.top)/r.height*1000)/10)});
@@ -2034,3 +2092,8 @@ $$('[data-body-view]').forEach(b=>b.addEventListener('click',()=>{$$('[data-body
 $('#body-map-form')?.addEventListener('submit',async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.currentTarget));d.clientId=selectedClientId;try{await api('/api/body-map',{method:'POST',body:JSON.stringify(d)});$('#body-map-dialog').close();await loadBodyMap();}catch(err){const el=$('#body-map-error');el.textContent=err.message;el.hidden=false;}});
 $('#body-map-update-form')?.addEventListener('submit',async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.currentTarget));try{await api('/api/body-map/'+encodeURIComponent(d.recordId)+'/update',{method:'POST',body:JSON.stringify(d)});$('#body-map-update-dialog').close();await loadBodyMap();}catch(err){const el=$('#body-map-update-error');el.textContent=err.message;el.hidden=false;}});
 $$('[data-close-dialog]').forEach(b=>b.addEventListener('click',()=>document.getElementById(b.dataset.closeDialog)?.close()));
+
+// v1.24.1 stability: delegated dialog controls remain reliable even after dynamic rendering.
+document.addEventListener('click',event=>{const button=event.target.closest('[data-close-dialog]');if(!button)return;event.preventDefault();const dialog=document.getElementById(button.dataset.closeDialog);if(dialog?.open)dialog.close();});
+$('#medication-form')?.elements?.name?.addEventListener('change',e=>applyMedicationCatalogueMatch(e.currentTarget.form));
+initialiseMedicationCatalogue();
