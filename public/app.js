@@ -30,6 +30,21 @@ let carePlans = [];
 let allCarePlans = [];
 let clientRisks = [];
 let clientDocuments = [];
+const carePlanDomainDefinitions = [
+  ['personal_care','Personal care','Washing, dressing, grooming, oral care and dignity.'],
+  ['communication','Communication','How the person communicates, understands information and makes choices.'],
+  ['mobility','Mobility & moving safely','Walking, transfers, equipment, positioning and manual handling.'],
+  ['nutrition','Nutrition & hydration','Food, drinks, swallowing, dietary needs and monitoring.'],
+  ['medication','Medication support','Prompts, administration, preferences, side effects and escalation.'],
+  ['continence','Continence','Toileting routines, continence products, privacy and infection prevention.'],
+  ['skin','Skin integrity','Pressure care, skin observations, repositioning and equipment.'],
+  ['cognition','Cognition & mental health','Memory, orientation, emotional wellbeing, distress and reassurance.'],
+  ['behaviour','Behaviour support','Triggers, early signs, prevention, de-escalation and least-restrictive support.'],
+  ['falls','Falls prevention','Falls history, environmental risks, footwear, aids and response.'],
+  ['sleep','Sleep & night support','Usual routine, night checks, comfort, safety and sleep preferences.'],
+  ['social','Relationships & meaningful activity','Important relationships, community, interests, faith and occupation.']
+];
+
 
 const labels = {
   family: ['Family portal', 'Secure family access, updates and messaging will be introduced in a later milestone.'],
@@ -224,7 +239,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.22.1';
+const CORECARE_FALLBACK_VERSION = '1.23.0';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -1088,11 +1103,26 @@ async function loadClientWorkspace(id){
 function dueClass(date){return date && new Date(`${date}T23:59:59`)<new Date()?'date-overdue':'';}
 function renderCarePlans(){
  const el=$('#care-plan-list'); if(!el)return;
- el.innerHTML=carePlans.length?carePlans.map(p=>`<article class="record-card"><header><div><p class="eyebrow">Version ${p.version}</p><h3>${escapeHtml(p.title)}</h3></div><span class="badge ${p.status==='Active'?'success':p.status==='Draft'?'active':'neutral'}">${escapeHtml(p.status)}</span></header><div class="record-meta"><span>Review: <strong class="${dueClass(p.reviewDate)}">${formatDate(p.reviewDate)}</strong></span><span>Author: ${escapeHtml(p.authorName||'Not recorded')}</span></div><p>${escapeHtml(p.desiredOutcomes||p.personalDetails||'No plan summary recorded.')}</p><div class="record-actions"><button class="row-action" data-edit-plan="${escapeHtml(p.id)}">Open / edit</button></div></article>`).join(''):'<div class="empty-records">No care plans have been created for this client.</div>';
+ el.innerHTML=carePlans.length?carePlans.map(p=>`<article class="record-card"><header><div><p class="eyebrow">Version ${p.version}</p><h3>${escapeHtml(p.title)}</h3></div><span class="badge ${p.status==='Active'?'success':p.status==='Draft'?'active':'neutral'}">${escapeHtml(p.status)}</span></header><div class="record-meta"><span>Review: <strong class="${dueClass(p.reviewDate)}">${formatDate(p.reviewDate)}</strong></span><span>Author: ${escapeHtml(p.authorName||'Not recorded')}</span></div><p>${escapeHtml(p.planSummary||p.whatMatters||p.desiredOutcomes||'No plan summary recorded.')}</p><div class="care-plan-card-meta"><span>${(p.sections||[]).length} active domains</span><span class="badge ${p.approvalStatus==='approved'?'success':'active'}">${p.approvalStatus==='approved'?'Approved':'Approval pending'}</span></div><div class="record-actions"><button class="row-action" data-edit-plan="${escapeHtml(p.id)}">Open care plan</button></div></article>`).join(''):'<div class="empty-records">No care plans have been created for this client.</div>';
  $$('[data-edit-plan]').forEach(b=>b.addEventListener('click',()=>openCarePlanDialog(b.dataset.editPlan)));
 }
-function openCarePlanDialog(id=''){const form=$('#care-plan-form');form.reset();form.elements.id.value=id;$('#care-plan-error').hidden=true;const item=carePlans.find(x=>x.id===id);$('#care-plan-dialog-title').textContent=id?'Edit care plan':'Add care plan';if(item)Object.entries(item).forEach(([k,v])=>{const f=form.elements.namedItem(k);if(f)f.value=v??'';});$('#care-plan-dialog').showModal();}
-async function saveCarePlan(e){e.preventDefault();const form=e.currentTarget,data=Object.fromEntries(new FormData(form)),error=$('#care-plan-error');error.hidden=true;try{await api(data.id?`/api/care-plans/${encodeURIComponent(data.id)}`:`/api/clients/${encodeURIComponent(selectedClientId)}/care-plans`,{method:data.id?'PUT':'POST',body:JSON.stringify(data)});$('#care-plan-dialog').close();await loadClientWorkspace(selectedClientId);await loadDashboard();}catch(x){error.textContent=x.message;error.hidden=false;}}
+function renderCarePlanDomains(sections=[]){
+  const byCategory=Object.fromEntries((sections||[]).map(section=>[section.category,section]));
+  const list=$('#care-plan-domain-list'); if(!list)return;
+  list.innerHTML=carePlanDomainDefinitions.map(([category,title,description],index)=>{const section=byCategory[category]||{};const enabled=section.enabled!==false;return `<article class="care-plan-domain ${enabled?'enabled':''}" data-care-domain="${category}"><header><label class="care-domain-toggle"><input type="checkbox" data-domain-enabled ${enabled?'checked':''}><span></span></label><button type="button" class="care-domain-heading" data-domain-expand><span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(description)}</small></span><b>${enabled?'Included':'Not included'}</b></button></header><div class="care-domain-fields" ${enabled?'':'hidden'}><div class="form-grid"><label class="wide"><span>Assessed needs</span><textarea data-domain-field="assessedNeeds" rows="3" placeholder="What support is needed, why it is needed and the person's current level of independence.">${escapeHtml(section.assessedNeeds||'')}</textarea></label><label class="wide"><span>Desired outcomes</span><textarea data-domain-field="desiredOutcomes" rows="3" placeholder="What the person wants to achieve, maintain or avoid.">${escapeHtml(section.desiredOutcomes||'')}</textarea></label><label class="wide"><span>Staff support instructions</span><textarea data-domain-field="supportInstructions" rows="5" placeholder="Clear step-by-step guidance: what staff must do, when, how and when to escalate.">${escapeHtml(section.supportInstructions||'')}</textarea></label><label class="wide"><span>Risks and controls</span><textarea data-domain-field="risksControls" rows="3" placeholder="Known risks, preventative controls, warning signs and escalation action.">${escapeHtml(section.risksControls||'')}</textarea></label><label class="wide"><span>Personal preferences</span><textarea data-domain-field="personalPreferences" rows="3" placeholder="Choices, routines, preferred approach and things staff must avoid.">${escapeHtml(section.personalPreferences||'')}</textarea></label><label><span>Domain review date</span><input data-domain-field="reviewDate" type="date" value="${escapeHtml(section.reviewDate||'')}"></label></div></div></article>`}).join('');
+  updateCarePlanProgress();
+}
+function updateCarePlanProgress(){const enabled=$$('#care-plan-domain-list [data-domain-enabled]:checked').length;setText('#care-plan-progress-count',`${enabled} / ${carePlanDomainDefinitions.length}`);}
+function collectCarePlanSections(){return $$('#care-plan-domain-list [data-care-domain]').map((card,index)=>{const value=name=>card.querySelector(`[data-domain-field="${name}"]`)?.value||'';return {category:card.dataset.careDomain,title:card.querySelector('.care-domain-heading strong')?.textContent||card.dataset.careDomain,enabled:card.querySelector('[data-domain-enabled]')?.checked!==false,assessedNeeds:value('assessedNeeds'),desiredOutcomes:value('desiredOutcomes'),supportInstructions:value('supportInstructions'),risksControls:value('risksControls'),personalPreferences:value('personalPreferences'),reviewDate:value('reviewDate'),sortOrder:index};}).filter(section=>section.enabled);}
+function openCarePlanDialog(id=''){
+  const form=$('#care-plan-form');form.reset();form.elements.id.value=id;$('#care-plan-error').hidden=true;const item=carePlans.find(x=>x.id===id);
+  $('#care-plan-dialog-title').textContent=id?'Review structured care plan':'Create structured care plan';
+  if(item)Object.entries(item).forEach(([k,v])=>{const f=form.elements.namedItem(k);if(f&&!Array.isArray(v))f.value=v??'';});
+  else {form.elements.title.value='Comprehensive care and support plan';form.elements.planType.value='Comprehensive care plan';form.elements.authorName.value=currentUser?.displayName||'';const d=new Date();form.elements.effectiveDate.value=d.toISOString().slice(0,10);d.setMonth(d.getMonth()+6);form.elements.reviewDate.value=d.toISOString().slice(0,10);}
+  renderCarePlanDomains(item?.sections||[]);$('#care-plan-dialog').showModal();setTimeout(()=>form.elements.title.focus(),50);
+}
+async function saveCarePlan(e){e.preventDefault();const form=e.currentTarget,data=Object.fromEntries(new FormData(form)),error=$('#care-plan-error');data.sections=collectCarePlanSections();error.hidden=true;if(!data.sections.length){error.textContent='Enable and complete at least one care and support domain.';error.hidden=false;return;}try{await api(data.id?`/api/care-plans/${encodeURIComponent(data.id)}`:`/api/clients/${encodeURIComponent(selectedClientId)}/care-plans`,{method:data.id?'PUT':'POST',body:JSON.stringify(data)});$('#care-plan-dialog').close();await loadClientWorkspace(selectedClientId);await Promise.all([loadDashboard(),loadAllCarePlans().catch(()=>{})]);}catch(x){error.textContent=x.message;error.hidden=false;}}
+
 function renderRisks(){const el=$('#risk-list');if(!el)return;el.innerHTML=clientRisks.length?clientRisks.map(r=>`<article class="record-card risk-${r.severity.toLowerCase()}"><header><div><p class="eyebrow">${escapeHtml(r.category)}</p><h3>${escapeHtml(r.title)}</h3></div><span class="badge ${r.severity==='High'?'danger':r.severity==='Medium'?'active':'success'}">${escapeHtml(r.severity)}</span></header><div class="record-meta"><span>${escapeHtml(r.likelihood)} likelihood</span><span class="${dueClass(r.reviewDate)}">Review ${formatDate(r.reviewDate)}</span><span>${escapeHtml(r.status)}</span></div><p><strong>Controls:</strong> ${escapeHtml(r.controls||'None recorded')}</p><div class="record-actions"><button class="row-action" data-edit-risk="${escapeHtml(r.id)}">Edit</button></div></article>`).join(''):'<div class="empty-records">No risk assessments have been recorded.</div>';$$('[data-edit-risk]').forEach(b=>b.addEventListener('click',()=>openRiskDialog(b.dataset.editRisk)));}
 function openRiskDialog(id=''){const form=$('#risk-form');form.reset();form.elements.id.value=id;$('#risk-error').hidden=true;const item=clientRisks.find(x=>x.id===id);$('#risk-dialog-title').textContent=id?'Edit risk':'Add risk';if(item)Object.entries(item).forEach(([k,v])=>{const f=form.elements.namedItem(k);if(f)f.value=v??'';});$('#risk-dialog').showModal();}
 async function saveRisk(e){e.preventDefault();const data=Object.fromEntries(new FormData(e.currentTarget)),error=$('#risk-error');error.hidden=true;try{await api(data.id?`/api/risks/${encodeURIComponent(data.id)}`:`/api/clients/${encodeURIComponent(selectedClientId)}/risks`,{method:data.id?'PUT':'POST',body:JSON.stringify(data)});$('#risk-dialog').close();await loadClientWorkspace(selectedClientId);await loadDashboard();}catch(x){error.textContent=x.message;error.hidden=false;}}
@@ -1215,6 +1245,8 @@ $('#archive-profile-client').addEventListener('click', archiveSelectedClient);
 
 $$('[data-client-tab]').forEach(button => button.addEventListener('click', () => showClientTab(button.dataset.clientTab)));
 $('#add-care-plan').addEventListener('click', () => openCarePlanDialog());
+document.addEventListener('change',event=>{const toggle=event.target.closest?.('[data-domain-enabled]');if(!toggle)return;const card=toggle.closest('[data-care-domain]'),fields=card.querySelector('.care-domain-fields'),badge=card.querySelector('.care-domain-heading b');card.classList.toggle('enabled',toggle.checked);fields.hidden=!toggle.checked;badge.textContent=toggle.checked?'Included':'Not included';updateCarePlanProgress();});
+document.addEventListener('click',event=>{const heading=event.target.closest?.('[data-domain-expand]');if(heading){const card=heading.closest('[data-care-domain]'),fields=card.querySelector('.care-domain-fields');if(card.querySelector('[data-domain-enabled]').checked)fields.hidden=!fields.hidden;}const jump=event.target.closest?.('[data-plan-jump]');if(jump){event.preventDefault();$('#'+jump.dataset.planJump)?.scrollIntoView({behavior:'smooth',block:'start'});}});
 $('#close-care-plan-dialog').addEventListener('click', () => $('#care-plan-dialog').close());
 $('#cancel-care-plan').addEventListener('click', () => $('#care-plan-dialog').close());
 $('#care-plan-form').addEventListener('submit', saveCarePlan);

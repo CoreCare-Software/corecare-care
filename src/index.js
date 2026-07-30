@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.22.1 — Rota Planning UI Polish */
-const VERSION = "1.22.1";
+/** CoreCare Enterprise 1.23.0 — Structured Care Plans */
+const VERSION = "1.23.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.22.1 — Rota Planning UI Polish" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.23.0 — Structured Care Plans" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -1017,56 +1017,63 @@ async function ensureClient(db, session, clientId) {
   return db.prepare(`SELECT id,branch_id FROM clients WHERE id=? AND organisation_id=? ${branchRestricted(session)?"AND branch_id=?":""}`).bind(clientId, session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first();
 }
 function carePlanInput(input) {
-  const keys=["title","status","effectiveDate","reviewDate","authorName","personalDetails","medicalConditions","communication","mobility","nutritionHydration","medicationSupport","continence","skinIntegrity","mentalCapacity","risks","desiredOutcomes"];
+  const keys=["title","status","effectiveDate","reviewDate","authorName","planType","planSummary","whatMatters","preferences","consentStatus","capacityStatus","decisionMaker","reviewNotes"];
   const v={}; for(const k of keys)v[k]=clean(input[k]);
+  v.sections=Array.isArray(input.sections)?input.sections.map((section,index)=>({
+    category:clean(section.category), title:clean(section.title)||clean(section.category), enabled:section.enabled===false?0:1,
+    assessedNeeds:clean(section.assessedNeeds), desiredOutcomes:clean(section.desiredOutcomes), supportInstructions:clean(section.supportInstructions),
+    risksControls:clean(section.risksControls), personalPreferences:clean(section.personalPreferences), reviewDate:clean(section.reviewDate), sortOrder:index
+  })).filter(section=>section.category&&section.title):[];
   if(!v.title || !v.reviewDate) return {error:"Enter a care-plan title and review date."};
-  if(!["Draft","Active","Archived"].includes(v.status)) v.status="Draft";
+  if(!["Draft","Active","Under review","Archived"].includes(v.status)) v.status="Draft";
+  if(!["Not recorded","Person consented","Representative consented","Best-interest decision","Consent declined"].includes(v.consentStatus)) v.consentStatus="Not recorded";
+  if(!["Not assessed","Has capacity","Lacks capacity","Capacity varies","Assessment required"].includes(v.capacityStatus)) v.capacityStatus="Not assessed";
   return {v};
 }
+async function carePlanSections(db,organisationId,planIds){
+  if(!planIds.length)return {};
+  const marks=planIds.map(()=>'?').join(',');
+  const rows=await db.prepare(`SELECT * FROM care_plan_sections WHERE organisation_id=? AND care_plan_id IN (${marks}) ORDER BY sort_order,title`).bind(organisationId,...planIds).all();
+  const grouped={}; for(const row of rows.results||[])(grouped[row.care_plan_id]??=[]).push(toCarePlanSection(row)); return grouped;
+}
+function sectionStatements(db,session,planId,sections){
+  const statements=[db.prepare("DELETE FROM care_plan_sections WHERE care_plan_id=? AND organisation_id=?").bind(planId,session.organisation_id)];
+  for(const section of sections)statements.push(db.prepare(`INSERT INTO care_plan_sections(id,organisation_id,care_plan_id,category,title,enabled,assessed_needs,desired_outcomes,support_instructions,risks_controls,personal_preferences,review_date,sort_order) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,planId,section.category,section.title,section.enabled,section.assessedNeeds,section.desiredOutcomes,section.supportInstructions,section.risksControls,section.personalPreferences,section.reviewDate||null,section.sortOrder));
+  return statements;
+}
+function toCarePlanSection(r){return {id:r.id,category:r.category,title:r.title,enabled:Boolean(r.enabled),assessedNeeds:r.assessed_needs||"",desiredOutcomes:r.desired_outcomes||"",supportInstructions:r.support_instructions||"",risksControls:r.risks_controls||"",personalPreferences:r.personal_preferences||"",reviewDate:r.review_date||"",sortOrder:r.sort_order||0};}
 async function listCarePlans(db, session, clientId){
   if(!await ensureClient(db,session,clientId)) return json({error:{code:"CLIENT_NOT_FOUND",message:"Client not found."}},404);
-  const r=await db.prepare("SELECT * FROM care_plans WHERE organisation_id=? AND client_id=? ORDER BY CASE status WHEN 'Active' THEN 0 WHEN 'Draft' THEN 1 ELSE 2 END, review_date").bind(session.organisation_id,clientId).all();
-  return json({carePlans:r.results.map(toCarePlan)});
+  const r=await db.prepare("SELECT * FROM care_plans WHERE organisation_id=? AND client_id=? ORDER BY CASE status WHEN 'Active' THEN 0 WHEN 'Under review' THEN 1 WHEN 'Draft' THEN 2 ELSE 3 END, review_date").bind(session.organisation_id,clientId).all();
+  const sections=await carePlanSections(db,session.organisation_id,(r.results||[]).map(x=>x.id));
+  return json({carePlans:r.results.map(row=>({...toCarePlan(row),sections:sections[row.id]||[]}))});
 }
 
 async function listAllCarePlans(db, session, url){
   const status=clean(url.searchParams.get("status"));
-  const params=[session.organisation_id];
-  let where="cp.organisation_id=?";
-  if(status && ["Draft","Active","Archived"].includes(status)){
-    where+=" AND cp.status=?";
-    params.push(status);
-  }
-  const result=await db.prepare(`
-    SELECT cp.*, c.first_name, c.last_name, c.preferred_name
-    FROM care_plans cp
-    JOIN clients c ON c.id=cp.client_id AND c.organisation_id=cp.organisation_id
-    WHERE ${where}
-    ORDER BY CASE cp.status WHEN 'Active' THEN 0 WHEN 'Draft' THEN 1 ELSE 2 END,
-             cp.review_date,
-             c.last_name COLLATE NOCASE,
-             c.first_name COLLATE NOCASE
-  `).bind(...params).all();
-  return json({carePlans:result.results.map(row=>({
-    ...toCarePlan(row),
-    clientName:[row.preferred_name||row.first_name,row.last_name].filter(Boolean).join(" ")
-  }))});
+  const params=[session.organisation_id]; let where="cp.organisation_id=?";
+  if(status && ["Draft","Active","Under review","Archived"].includes(status)){where+=" AND cp.status=?";params.push(status);}
+  const result=await db.prepare(`SELECT cp.*, c.first_name, c.last_name, c.preferred_name FROM care_plans cp JOIN clients c ON c.id=cp.client_id AND c.organisation_id=cp.organisation_id WHERE ${where} ORDER BY CASE cp.status WHEN 'Active' THEN 0 WHEN 'Under review' THEN 1 WHEN 'Draft' THEN 2 ELSE 3 END,cp.review_date,c.last_name COLLATE NOCASE,c.first_name COLLATE NOCASE`).bind(...params).all();
+  const sections=await carePlanSections(db,session.organisation_id,(result.results||[]).map(x=>x.id));
+  return json({carePlans:result.results.map(row=>({...toCarePlan(row),sections:sections[row.id]||[],clientName:[row.preferred_name||row.first_name,row.last_name].filter(Boolean).join(" ")}))});
 }
 async function createCarePlan(request,db,session,clientId){
-  if(!hasRole(session,["owner","manager","carer"])) return forbidden();
+  if(!hasRole(session,["owner","manager","organisation_owner","organisation_admin","branch_manager","office_staff","senior_carer"])) return forbidden();
   if(!await ensureClient(db,session,clientId)) return json({error:{code:"CLIENT_NOT_FOUND",message:"Client not found."}},404);
   const parsed=carePlanInput(await readJson(request)); if(parsed.error)return json({error:{code:"VALIDATION_ERROR",message:parsed.error}},400); const v=parsed.v,id=crypto.randomUUID();
-  await db.batch([db.prepare(`INSERT INTO care_plans (id,organisation_id,branch_id,client_id,title,status,effective_date,review_date,author_name,personal_details,medical_conditions,communication,mobility,nutrition_hydration,medication_support,continence,skin_integrity,mental_capacity,risks,desired_outcomes,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,activeBranch(session),clientId,v.title,v.status,v.effectiveDate||null,v.reviewDate,v.authorName,v.personalDetails,v.medicalConditions,v.communication,v.mobility,v.nutritionHydration,v.medicationSupport,v.continence,v.skinIntegrity,v.mentalCapacity,v.risks,v.desiredOutcomes,session.user_id),auditStatement(db,session.organisation_id,session.user_id,"care_plan.created","care_plan",id,{clientId,title:v.title,status:v.status})]);
-  const row=await db.prepare("SELECT * FROM care_plans WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).first(); return json({carePlan:toCarePlan(row)},201);
+  const statements=[db.prepare(`INSERT INTO care_plans (id,organisation_id,branch_id,client_id,title,status,effective_date,review_date,author_name,plan_type,plan_summary,what_matters,preferences,consent_status,capacity_status,decision_maker,review_notes,approval_status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?)`).bind(id,session.organisation_id,activeBranch(session),clientId,v.title,v.status==='Active'?'Draft':v.status,v.effectiveDate||null,v.reviewDate,v.authorName,v.planType||'Comprehensive care plan',v.planSummary,v.whatMatters,v.preferences,v.consentStatus,v.capacityStatus,v.decisionMaker,v.reviewNotes,session.user_id),...sectionStatements(db,session,id,v.sections),auditStatement(db,session.organisation_id,session.user_id,"care_plan.created","care_plan",id,{clientId,title:v.title,status:'Draft',sections:v.sections.length})];
+  await db.batch(statements); const row=await db.prepare("SELECT * FROM care_plans WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).first(); return json({carePlan:{...toCarePlan(row),sections:v.sections}},201);
 }
 async function updateCarePlan(request,db,session,id){
-  if(!hasRole(session,["owner","manager","carer"])) return forbidden(); const existing=await db.prepare("SELECT * FROM care_plans WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).first(); if(!existing)return json({error:{code:"NOT_FOUND",message:"Care plan not found."}},404);
+  if(!hasRole(session,["owner","manager","organisation_owner","organisation_admin","branch_manager","office_staff","senior_carer"])) return forbidden();
+  const existing=await db.prepare("SELECT * FROM care_plans WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).first(); if(!existing)return json({error:{code:"NOT_FOUND",message:"Care plan not found."}},404);
   const parsed=carePlanInput(await readJson(request)); if(parsed.error)return json({error:{code:"VALIDATION_ERROR",message:parsed.error}},400); const v=parsed.v,next=Number(existing.version||1)+1;
-  await db.batch([db.prepare("INSERT INTO care_plan_versions (id,organisation_id,care_plan_id,version,snapshot_json,created_by) VALUES (?,?,?,?,?,?)").bind(crypto.randomUUID(),session.organisation_id,id,existing.version||1,JSON.stringify(toCarePlan(existing)),session.user_id),db.prepare(`UPDATE care_plans SET title=?,status=?,version=?,effective_date=?,review_date=?,author_name=?,personal_details=?,medical_conditions=?,communication=?,mobility=?,nutrition_hydration=?,medication_support=?,continence=?,skin_integrity=?,mental_capacity=?,risks=?,desired_outcomes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(v.title,v.status,next,v.effectiveDate||null,v.reviewDate,v.authorName,v.personalDetails,v.medicalConditions,v.communication,v.mobility,v.nutritionHydration,v.medicationSupport,v.continence,v.skinIntegrity,v.mentalCapacity,v.risks,v.desiredOutcomes,id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,"care_plan.updated","care_plan",id,{version:next,status:v.status})]);
-  return json({carePlan:toCarePlan(await db.prepare("SELECT * FROM care_plans WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).first())});
+  const oldSections=await carePlanSections(db,session.organisation_id,[id]); const snapshot={...toCarePlan(existing),sections:oldSections[id]||[]};
+  const statements=[db.prepare("INSERT INTO care_plan_versions (id,organisation_id,care_plan_id,version,snapshot_json,created_by) VALUES (?,?,?,?,?,?)").bind(crypto.randomUUID(),session.organisation_id,id,existing.version||1,JSON.stringify(snapshot),session.user_id),db.prepare(`UPDATE care_plans SET title=?,status=?,version=?,effective_date=?,review_date=?,author_name=?,plan_type=?,plan_summary=?,what_matters=?,preferences=?,consent_status=?,capacity_status=?,decision_maker=?,review_notes=?,approval_status='pending',approved_by=NULL,approved_at=NULL,submitted_by=?,submitted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(v.title,v.status==='Active'?'Under review':v.status,next,v.effectiveDate||null,v.reviewDate,v.authorName,v.planType||'Comprehensive care plan',v.planSummary,v.whatMatters,v.preferences,v.consentStatus,v.capacityStatus,v.decisionMaker,v.reviewNotes,session.user_id,id,session.organisation_id),...sectionStatements(db,session,id,v.sections),auditStatement(db,session.organisation_id,session.user_id,"care_plan.updated","care_plan",id,{version:next,status:v.status,sections:v.sections.length})];
+  await db.batch(statements); return json({carePlan:{...toCarePlan(await db.prepare("SELECT * FROM care_plans WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).first()),sections:v.sections}});
 }
-async function archiveCarePlan(db,session,id){if(!hasRole(session,["owner","manager"]))return forbidden();const r=await db.prepare("UPDATE care_plans SET status='Archived',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).run();if(!r.meta.changes)return json({error:{code:"NOT_FOUND",message:"Care plan not found."}},404);await audit(db,session.organisation_id,session.user_id,"care_plan.archived","care_plan",id,{});return json({ok:true});}
-function toCarePlan(r){return {id:r.id,clientId:r.client_id,title:r.title,status:r.status,version:r.version,effectiveDate:r.effective_date||"",reviewDate:r.review_date,authorName:r.author_name||"",personalDetails:r.personal_details||"",medicalConditions:r.medical_conditions||"",communication:r.communication||"",mobility:r.mobility||"",nutritionHydration:r.nutrition_hydration||"",medicationSupport:r.medication_support||"",continence:r.continence||"",skinIntegrity:r.skin_integrity||"",mentalCapacity:r.mental_capacity||"",risks:r.risks||"",desiredOutcomes:r.desired_outcomes||"",approvalStatus:r.approval_status||"pending",approvedAt:r.approved_at||"",visitGenerationStatus:r.visit_generation_status||"not_generated",visitsGeneratedAt:r.visits_generated_at||"",createdAt:r.created_at,updatedAt:r.updated_at};}
+async function archiveCarePlan(db,session,id){if(!hasRole(session,["owner","manager","organisation_owner","organisation_admin","branch_manager"]))return forbidden();const r=await db.prepare("UPDATE care_plans SET status='Archived',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).run();if(!r.meta.changes)return json({error:{code:"NOT_FOUND",message:"Care plan not found."}},404);await audit(db,session.organisation_id,session.user_id,"care_plan.archived","care_plan",id,{});return json({ok:true});}
+function toCarePlan(r){return {id:r.id,clientId:r.client_id,title:r.title,status:r.status,version:r.version,effectiveDate:r.effective_date||"",reviewDate:r.review_date,authorName:r.author_name||"",planType:r.plan_type||"Comprehensive care plan",planSummary:r.plan_summary||"",whatMatters:r.what_matters||r.personal_details||"",preferences:r.preferences||"",consentStatus:r.consent_status||"Not recorded",capacityStatus:r.capacity_status||"Not assessed",decisionMaker:r.decision_maker||"",reviewNotes:r.review_notes||"",personalDetails:r.personal_details||"",medicalConditions:r.medical_conditions||"",communication:r.communication||"",mobility:r.mobility||"",nutritionHydration:r.nutrition_hydration||"",medicationSupport:r.medication_support||"",continence:r.continence||"",skinIntegrity:r.skin_integrity||"",mentalCapacity:r.mental_capacity||"",risks:r.risks||"",desiredOutcomes:r.desired_outcomes||"",approvalStatus:r.approval_status||"pending",approvedAt:r.approved_at||"",submittedAt:r.submitted_at||"",visitGenerationStatus:r.visit_generation_status||"not_generated",visitsGeneratedAt:r.visits_generated_at||"",createdAt:r.created_at,updatedAt:r.updated_at};}
 
 function riskInput(input){const v={category:clean(input.category)||"General Risk",title:clean(input.title),severity:clean(input.severity)||"Medium",likelihood:clean(input.likelihood)||"Possible",controls:clean(input.controls),actions:clean(input.actions),status:clean(input.status)||"Active",reviewDate:clean(input.reviewDate)};if(!v.title||!v.reviewDate)return {error:"Enter a risk title and review date."};return {v};}
 async function listRisks(db,session,clientId){if(!await ensureClient(db,session,clientId))return json({error:{code:"CLIENT_NOT_FOUND",message:"Client not found."}},404);const r=await db.prepare("SELECT * FROM risk_assessments WHERE organisation_id=? AND client_id=? ORDER BY CASE severity WHEN 'High' THEN 0 WHEN 'Medium' THEN 1 ELSE 2 END, review_date").bind(session.organisation_id,clientId).all();return json({risks:r.results.map(toRisk)});}
