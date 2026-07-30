@@ -2054,18 +2054,28 @@ const CORECARE_MEDICINE_CATALOGUE = [
   {name:'Clotrimazole',forms:['Cream','Solution'],strengths:['1%'],route:'Topical'},
   {name:'Chloramphenicol',forms:['Eye drops','Eye ointment'],strengths:['0.5%','1%'],route:'Ocular'}
 ];
-function initialiseMedicationCatalogue(){
-  const list=$('#medication-name-options'); if(!list)return;
-  list.innerHTML=CORECARE_MEDICINE_CATALOGUE.map(m=>`<option value="${escapeHtml(m.name)}">${escapeHtml(m.forms.join(', '))}</option>`).join('');
-}
-function applyMedicationCatalogueMatch(form){
-  const value=form?.elements?.name?.value?.trim().toLowerCase(); if(!value)return;
-  const match=CORECARE_MEDICINE_CATALOGUE.find(m=>m.name.toLowerCase()===value); if(!match)return;
-  if(!form.elements.form.value)form.elements.form.value=match.forms[0]||'';
-  if(!form.elements.route.value)form.elements.route.value=match.route||'';
-  if(!form.elements.strength.value&&match.strengths.length===1)form.elements.strength.value=match.strengths[0];
-  form.elements.strength.placeholder=match.strengths.length?'Common strengths: '+match.strengths.join(', '):'e.g. 500 mg';
-}
+const MEDICATION_ALIASES = {
+  'Paracetamol':['acetaminophen','panadol','calpol','paracetomol','paracetamol'],
+  'Ibuprofen':['nurofen','brufen'],
+  'Co-codamol':['cocodamol','co codamol'],
+  'Salbutamol':['ventolin'],
+  'Omeprazole':['losec'],
+  'Lansoprazole':['zoton'],
+  'Furosemide':['frusemide'],
+  'Morphine sulfate':['oramorph','mst continus'],
+  'Macrogol 3350 with electrolytes':['movicol','laxido'],
+  'Insulin glargine':['lantus','toujeo'],
+  'Insulin aspart':['novorapid']
+};
+function normaliseMedicineSearch(value){return String(value||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]/g,'');}
+function medicineEditDistance(a,b){a=normaliseMedicineSearch(a);b=normaliseMedicineSearch(b);const row=Array.from({length:b.length+1},(_,i)=>i);for(let i=1;i<=a.length;i++){let prev=row[0];row[0]=i;for(let j=1;j<=b.length;j++){const old=row[j];row[j]=Math.min(row[j]+1,row[j-1]+1,prev+(a[i-1]===b[j-1]?0:1));prev=old;}}return row[b.length];}
+function medicineSearchTerms(m){return [m.name,...(MEDICATION_ALIASES[m.name]||[])];}
+function searchMedicationCatalogue(query){const q=normaliseMedicineSearch(query);if(q.length<2)return[];return CORECARE_MEDICINE_CATALOGUE.map(m=>{const terms=medicineSearchTerms(m).map(normaliseMedicineSearch);let score=999;for(const term of terms){if(term===q)score=Math.min(score,0);else if(term.startsWith(q))score=Math.min(score,1);else if(term.includes(q))score=Math.min(score,2);else if(q.length>=4){const d=medicineEditDistance(q,term.slice(0,Math.max(q.length,Math.min(term.length,q.length+2))));if(d<=2)score=Math.min(score,3+d/10);}}return{m,score};}).filter(x=>x.score<999).sort((a,b)=>a.score-b.score||a.m.name.localeCompare(b.m.name)).slice(0,8).map(x=>x.m);}
+function initialiseMedicationCatalogue(){renderMedicationSearchResults('');}
+function applyMedicationCatalogueSelection(form,match){if(!form||!match)return;form.elements.name.value=match.name;if(!form.elements.form.value)form.elements.form.value=match.forms[0]||'';if(!form.elements.route.value)form.elements.route.value=match.route||'';if(!form.elements.strength.value&&match.strengths.length===1)form.elements.strength.value=match.strengths[0];form.elements.strength.placeholder=match.strengths.length?'Common strengths: '+match.strengths.join(', '):'e.g. 500 mg';renderMedicationSearchResults('');form.elements.name.setAttribute('aria-expanded','false');}
+function applyMedicationCatalogueMatch(form){const value=normaliseMedicineSearch(form?.elements?.name?.value);if(!value)return;const match=CORECARE_MEDICINE_CATALOGUE.find(m=>medicineSearchTerms(m).some(t=>normaliseMedicineSearch(t)===value));if(match)applyMedicationCatalogueSelection(form,match);}
+function renderMedicationSearchResults(query){const box=$('#medication-search-results'),input=$('#medication-form')?.elements?.name;if(!box||!input)return;const results=searchMedicationCatalogue(query);if(normaliseMedicineSearch(query).length<2){box.hidden=true;box.innerHTML='';input.setAttribute('aria-expanded','false');return;}box.innerHTML=results.length?results.map((m,i)=>`<button type="button" role="option" data-medication-result="${escapeHtml(m.name)}" class="medication-search-option"><strong>${escapeHtml(m.name)}</strong><small>${escapeHtml(m.forms.slice(0,3).join(' · '))}${m.strengths.length?' · '+escapeHtml(m.strengths.slice(0,3).join(', ')):''}</small></button>`).join(''):'<div class="medication-search-empty">No catalogue match. You can still enter the prescribed medicine manually.</div>';box.hidden=false;input.setAttribute('aria-expanded','true');}
+
 
 let medicationData={medications:[],administrations:[]};
 let bodyMapData={records:[]};
@@ -2095,5 +2105,10 @@ $$('[data-close-dialog]').forEach(b=>b.addEventListener('click',()=>document.get
 
 // v1.24.1 stability: delegated dialog controls remain reliable even after dynamic rendering.
 document.addEventListener('click',event=>{const button=event.target.closest('[data-close-dialog]');if(!button)return;event.preventDefault();const dialog=document.getElementById(button.dataset.closeDialog);if(dialog?.open)dialog.close();});
-$('#medication-form')?.elements?.name?.addEventListener('change',e=>applyMedicationCatalogueMatch(e.currentTarget.form));
+const medicationNameInput=$('#medication-form')?.elements?.name;
+medicationNameInput?.addEventListener('input',e=>renderMedicationSearchResults(e.currentTarget.value));
+medicationNameInput?.addEventListener('change',e=>applyMedicationCatalogueMatch(e.currentTarget.form));
+medicationNameInput?.addEventListener('keydown',e=>{if(e.key==='Escape'){renderMedicationSearchResults('');return;}if(e.key==='ArrowDown'){const first=$('#medication-search-results [data-medication-result]');if(first){e.preventDefault();first.focus();}}});
+document.addEventListener('click',e=>{const option=e.target.closest?.('[data-medication-result]');if(option){e.preventDefault();const match=CORECARE_MEDICINE_CATALOGUE.find(m=>m.name===option.dataset.medicationResult);applyMedicationCatalogueSelection($('#medication-form'),match);medicationNameInput?.focus();return;}if(!e.target.closest?.('.medication-search-wrap'))renderMedicationSearchResults('');});
+document.addEventListener('keydown',e=>{const option=e.target.closest?.('[data-medication-result]');if(!option)return;if(e.key==='Enter'||e.key===' '){e.preventDefault();option.click();}else if(e.key==='ArrowDown'){e.preventDefault();option.nextElementSibling?.focus();}else if(e.key==='ArrowUp'){e.preventDefault();(option.previousElementSibling||medicationNameInput)?.focus();}});
 initialiseMedicationCatalogue();
