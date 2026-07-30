@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f766e">
   <meta name="description" content="CoreCare care management platform">
   <title>CoreCare</title>
-  <link rel="stylesheet" href="styles.css?v=1.17.1">
+  <link rel="stylesheet" href="styles.css?v=1.18.0">
 </head>
 <body>
   <div id="login-view" class="login-shell">
@@ -328,6 +328,16 @@
               <div id="rota-intelligence-warnings" class="rota-intelligence-warnings"><div class="planner-warning"><span>…</span><p>Analysing the selected day.</p></div></div>
             </div>
           </section>
+          <section id="planner-command-centre" class="panel planner-command-centre" aria-labelledby="planner-command-title">
+            <div class="panel-heading"><div><p class="eyebrow">Manager intelligence</p><h2 id="planner-command-title">Planner command centre</h2><p>Review capacity, continuity, travel and the most useful actions for the selected day.</p></div><button id="planner-command-refresh" type="button" class="secondary-button compact">Refresh analysis</button></div>
+            <div class="planner-command-grid">
+              <article class="planner-command-card planner-assistant-card"><div class="planner-card-heading"><h3>Smart planner assistant</h3><span class="badge active">Preview</span></div><p class="muted">Ask a practical rota question or choose a quick view.</p><div class="planner-assistant-controls"><input id="planner-assistant-query" type="search" placeholder="e.g. Which carers have spare capacity?"><button id="planner-assistant-run" type="button" class="primary-button compact">Ask</button></div><div class="planner-assistant-chips"><button type="button" data-planner-question="medication">Medication visits</button><button type="button" data-planner-question="capacity">Spare capacity</button><button type="button" data-planner-question="late">Late visits</button><button type="button" data-planner-question="travel">Travel risks</button></div><div id="planner-assistant-answer" class="planner-assistant-answer">Choose a question to analyse the selected day.</div></article>
+              <article class="planner-command-card"><div class="planner-card-heading"><h3>Capacity</h3><span id="planner-capacity-status" class="badge neutral">Calculating</span></div><div class="planner-capacity-metrics"><div><span>Available</span><strong id="planner-capacity-available">0h</strong></div><div><span>Booked</span><strong id="planner-capacity-booked">0h</strong></div><div><span>Utilisation</span><strong id="planner-capacity-utilisation">0%</strong></div><div><span>Travel</span><strong id="planner-capacity-travel">0h</strong></div></div><div id="planner-capacity-list" class="planner-mini-list"></div></article>
+              <article class="planner-command-card"><div class="planner-card-heading"><h3>Continuity watch</h3><span id="planner-continuity-status" class="badge neutral">0%</span></div><div id="planner-continuity-list" class="planner-mini-list"></div></article>
+              <article class="planner-command-card"><div class="planner-card-heading"><h3>Travel overview</h3><button id="planner-open-route" type="button" class="text-button">Route view</button></div><div id="planner-travel-list" class="planner-mini-list"></div></article>
+              <article class="planner-command-card planner-suggestions-card"><div class="planner-card-heading"><h3>Automatic suggestions</h3><button id="planner-open-optimiser" type="button" class="text-button">Open optimiser</button></div><div id="planner-suggestions-list" class="planner-suggestions-list"></div></article>
+            </div>
+          </section>
           <section class="panel client-panel rota-planner-panel">
             <div class="rota-planner-toolbar rota-toolbar-modern">
               <div class="advanced-planner-actions" role="group" aria-label="Advanced planner controls">
@@ -646,6 +656,6 @@
 
 
 <dialog id="suitability-dialog" class="client-dialog suitability-dialog"><form method="dialog"><div class="dialog-heading"><div><p class="eyebrow">Intelligent allocation</p><h2>Suitability analysis</h2><p id="suitability-client" class="muted"></p></div><button type="button" data-close-dialog="suitability-dialog">×</button></div><div class="suitability-overview"><strong id="suitability-score" class="suitability-big-score">—</strong><div><h3>Why this allocation scored this way</h3><ul id="suitability-reasons" class="suitability-reasons"></ul></div></div><section><h3>Best conflict-free carers</h3><div id="suitability-alternatives" class="suitability-alternatives"></div></section><div class="dialog-actions"><button type="button" class="primary-button compact" data-close-dialog="suitability-dialog">Close</button></div></form></dialog>
-<script src="app.js?v=1.17.1"></script>
+<script src="app.js?v=1.18.0"></script>
 </body>
 </html>
