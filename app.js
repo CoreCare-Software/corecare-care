@@ -89,8 +89,50 @@ function initialsFromName(name) {
 }
 
 function roleLabel(role) {
-  return ({ platform_owner:'Platform owner',platform_admin:'Platform admin',organisation_owner:'Organisation owner',organisation_admin:'Organisation admin',branch_manager:'Branch manager',senior_carer:'Senior carer',carer:'Carer',office_staff:'Office staff',auditor:'Read-only auditor',family:'Family member',owner:'Organisation owner',manager:'Manager' })[role] || 'CoreCare user';
+  return ({ platform_owner:'Platform owner',platform_admin:'Platform admin',organisation_owner:'Organisation owner',organisation_admin:'Registered manager',branch_manager:'Branch manager',senior_carer:'Senior carer',carer:'Carer',office_staff:'Care coordinator',auditor:'Read-only auditor',family:'Family member',owner:'Organisation owner',manager:'Registered manager' })[role] || 'CoreCare user';
 }
+
+
+const WORKSPACE_CONFIG = {
+  manager: {
+    label: 'Manager workspace',
+    roles: ['organisation_owner','organisation_admin','branch_manager','owner','manager'],
+    pages: ['dashboard','operations','clients','staff','family','care','medication','visits','rota','tasks','incidents','finance','reports','settings']
+  },
+  coordinator: {
+    label: 'Care coordinator workspace',
+    roles: ['office_staff'],
+    pages: ['dashboard','clients','staff','care','visits','rota','tasks','incidents']
+  },
+  senior: {
+    label: 'Senior carer workspace',
+    roles: ['senior_carer'],
+    pages: ['dashboard','clients','care','medication','visits','tasks','incidents']
+  },
+  carer: {
+    label: 'Carer workspace',
+    roles: ['carer'],
+    pages: ['dashboard','medication','visits']
+  },
+  family: {
+    label: 'Family workspace',
+    roles: ['family'],
+    pages: ['dashboard','family']
+  },
+  auditor: {
+    label: 'Audit workspace',
+    roles: ['auditor'],
+    pages: ['dashboard','operations','clients','staff','care','medication','visits','rota','tasks','incidents','finance','reports']
+  }
+};
+function workspaceKey(){
+  if(isPlatformWorkspace()) return 'platform';
+  const role=currentUser?.accessLevel||currentUser?.role;
+  return Object.entries(WORKSPACE_CONFIG).find(([,config])=>config.roles.includes(role))?.[0]||'manager';
+}
+function workspaceConfig(){return WORKSPACE_CONFIG[workspaceKey()]||WORKSPACE_CONFIG.manager;}
+function workspaceAllowsPage(page){return page==='platform'?isPlatformWorkspace():workspaceConfig().pages.includes(page);}
+function dashboardType(){return workspaceKey();}
 
 function updateIdentity() {
   const name = currentUser?.displayName || 'CoreCare user';
@@ -118,9 +160,11 @@ function updateIdentity() {
     }
   }
   document.body.classList.toggle('platform-workspace', platformWorkspace);
+  document.body.dataset.workspace=platformWorkspace?'platform':workspaceKey();
+  const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.15.7';
+const CORECARE_FALLBACK_VERSION = '1.20.0';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -223,23 +267,48 @@ async function showApplication(user) {
     showPage('platform');
     showPlatformView(location.hash && location.hash !== '#platform' ? location.hash.slice(1) : 'platform-page', false);
   } else {
-    await Promise.all([loadClients(), loadStaff(), loadDashboard()]);
-    renderClients();
-    renderStaff();
+    const type=dashboardType();
+    const jobs=[];
+    if(['carer','senior'].includes(type)) jobs.push(loadCarerDashboard(type));
+    else if(type==='family') jobs.push(loadFamilyDashboard());
+    else if(type==='coordinator') jobs.push(loadCoordinatorDashboard());
+    else jobs.push(loadManagerDashboard());
+    if(!['carer','family'].includes(type)&&hasAccess('clients.view'))jobs.push(loadClients());
+    if(['manager','coordinator','senior','auditor'].includes(type)&&hasAccess('staff.view'))jobs.push(loadStaff());
+    await Promise.all(jobs);
+    if(hasAccess('clients.view')&&!['carer','family'].includes(type))renderClients();
+    if(hasAccess('staff.view')&&['manager','coordinator','senior','auditor'].includes(type))renderStaff();
     await loadDevelopmentStatus();
-    showPage('dashboard');
+    showPage(canOpenPage('dashboard')?'dashboard':workspaceConfig().pages.find(canOpenPage)||'dashboard');
   }
   $('#main-content').focus();
   if (currentUser?.mustChangePassword) setTimeout(() => openPasswordDialog(true), 100);
 }
 
 
-function applyAccessVisibility(){
-  if(!currentUser||currentUser.isPlatformUser)return;
-  const modules=currentUser.modules||{};
-  $$('.organisation-workspace-nav[data-page]').forEach(button=>{const page=button.dataset.page;button.hidden=modules[page]===false;});
+function isPlatformWorkspace(){
+  return Boolean(currentUser?.isPlatformUser && !currentUser?.supportMode);
 }
-function hasAccess(permission){return currentUser?.isPlatformUser||currentUser?.accessLevel==='organisation_owner'||(currentUser?.permissions||[]).includes(permission);}
+
+function applyAccessVisibility(){
+  if(!currentUser)return;
+  const modules=currentUser.modules||{};
+  const platformWorkspace=isPlatformWorkspace();
+  $$('.organisation-workspace-nav').forEach(node=>{
+    const page=node.dataset?.page;
+    node.hidden=platformWorkspace || Boolean(page && (!workspaceAllowsPage(page) || modules[page]!==true));
+  });
+  $$('.organisation-workspace-action').forEach(node=>{node.hidden=platformWorkspace;});
+  const visibility={
+    '#add-client':'clients.create','#add-staff':'staff.create','#edit-profile-client':'clients.edit','#archive-profile-client':'clients.archive'
+  };
+  Object.entries(visibility).forEach(([selector,permission])=>{const node=$(selector);if(node)node.hidden=!hasAccess(permission);});
+  $$('.quick-action[data-quick="client"]').forEach(node=>node.hidden=!hasAccess('clients.create'));
+  $$('.quick-action[data-quick="staff"]').forEach(node=>node.hidden=!hasAccess('staff.create'));
+}
+function hasAccess(permission){return Boolean(currentUser?.isPlatformUser||(currentUser?.permissions||[]).includes(permission));}
+function canOpenPage(page){return Boolean((currentUser?.isPlatformUser&&page==='platform')||(!isPlatformWorkspace()&&workspaceAllowsPage(page)&&(currentUser?.modules||{})[page]===true));}
+function denyPage(){showToastError(new Error('You do not have permission to view this area.'));}
 
 function showLogin(message = '') {
   currentUser = null;
@@ -269,6 +338,12 @@ function activatePage(id) {
 }
 
 function showPage(page) {
+  if(isPlatformWorkspace() && page!=='platform'){
+    showToastError(new Error('Open an organisation through an authorised support session before accessing organisation records.'));
+    showPage('platform');
+    return;
+  }
+  if(page!=='platform'&&page!=='client-profile'&&!canOpenPage(page)){denyPage();return;}
   selectedClientId = page === 'client-profile' ? selectedClientId : null;
   if (page === 'platform') {
     if (!currentUser?.isPlatformUser) return showPage('dashboard');
@@ -299,6 +374,11 @@ function showPage(page) {
   }
   if (page === 'dashboard') {
     activatePage('#dashboard-page');
+    const type=dashboardType();
+    if(type==='coordinator')loadCoordinatorDashboard().catch(showToastError);
+    else if(type==='family')loadFamilyDashboard().catch(showToastError);
+    else if(['carer','senior'].includes(type))loadCarerDashboard(type).catch(showToastError);
+    else loadManagerDashboard().catch(showToastError);
     setDate();
     updateIdentity();
     loadDashboard().catch(showToastError);
@@ -617,6 +697,56 @@ async function loadClients() {
 }
 
 
+
+
+function hideDashboardSections(){
+  const dashboard=$('#dashboard-page');if(!dashboard)return;
+  Array.from(dashboard.children).forEach(node=>node.hidden=true);
+}
+function ensureWorkspaceDashboard(id,html){
+  let section=$(`#${id}`);
+  if(!section){section=document.createElement('section');section.id=id;section.className='role-dashboard';section.innerHTML=html;$('#dashboard-page').appendChild(section);}
+  section.hidden=false;return section;
+}
+function dashboardMetricCard(label,value,copy=''){return `<article><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(copy)}</small></article>`;}
+async function loadManagerDashboard(){
+  hideDashboardSections();
+  const generic=[...$('#dashboard-page').children].filter(n=>!n.classList.contains('role-dashboard')&&n.id!=='carer-dashboard');generic.forEach(n=>n.hidden=false);
+  await loadDashboard();
+}
+async function loadCoordinatorDashboard(){
+  hideDashboardSections();
+  const [dashboard,board]=await Promise.all([api('/api/dashboard'),api('/api/visits/board')]);
+  const stats=board.stats||{},visits=board.visits||[],unallocated=visits.filter(v=>!v.staff_id&&v.status!=='completed').length;
+  const section=ensureWorkspaceDashboard('coordinator-dashboard',`<div class="role-hero"><div><p class="eyebrow">Care coordinator workspace</p><h2>Today’s rota control</h2><p>Allocate visits, resolve gaps and keep care delivery moving.</p></div><button class="primary-button compact" data-page-link="rota">Open rota</button></div><section class="role-metrics" id="coordinator-metrics"></section><section class="role-grid"><article class="panel span-two"><div class="panel-heading"><div><p class="eyebrow">Scheduling priorities</p><h2>Visits needing attention</h2></div></div><div id="coordinator-priority" class="workspace-list"></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">Quick actions</p><h2>Coordinate today</h2></div></div><div class="workspace-actions"><button data-page-link="rota">Allocate visits</button><button data-page-link="staff">Check staff availability</button><button data-page-link="visits">Open live visits</button><button data-page-link="tasks">Manage cover tasks</button></div></article></section>`);
+  $('#coordinator-metrics').innerHTML=dashboardMetricCard('Visits today',visits.length,'scheduled care calls')+dashboardMetricCard('Unallocated',unallocated,'require allocation')+dashboardMetricCard('Late',stats.late||0,'need coordinator action')+dashboardMetricCard('In progress',stats.inProgress||0,'currently underway');
+  const priority=visits.filter(v=>!v.staff_id||['late','overrunning'].includes(v.live_status)).slice(0,8);
+  $('#coordinator-priority').innerHTML=priority.map(v=>`<div class="workspace-row"><div><strong>${escapeHtml(v.client_name||'Client')}</strong><span>${new Date(v.scheduled_start).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})} · ${escapeHtml(v.visit_type||'Care visit')}</span></div><span class="badge ${v.staff_id?'danger':'warning'}">${v.staff_id?escapeHtml(carerStatusLabel(v.live_status)):'Unallocated'}</span></div>`).join('')||'<div class="empty-state"><strong>No scheduling issues</strong><span>Today’s rota has no immediate allocation or timing warnings.</span></div>';
+  bindPageLinks(section);
+}
+async function loadFamilyDashboard(){
+  hideDashboardSections();
+  const section=ensureWorkspaceDashboard('family-dashboard',`<div class="role-hero family-role-hero"><div><p class="eyebrow">Family workspace</p><h2>Care updates for your relative</h2><p>View only the information the care provider has chosen to share with you.</p></div></div><section class="role-metrics"><article><span>Next visit</span><strong>Scheduled</strong><small>Details will appear when family sharing is enabled</small></article><article><span>Recent updates</span><strong>0</strong><small>shared care notes</small></article><article><span>Messages</span><strong>0</strong><small>unread messages</small></article></section><section class="role-grid"><article class="panel span-two"><div class="panel-heading"><div><p class="eyebrow">Shared information</p><h2>Family updates</h2></div></div><div class="empty-state"><strong>No shared updates yet</strong><span>Your care provider controls which visits, notes and documents are visible here.</span></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">Privacy</p><h2>Read-only access</h2></div></div><p class="padded muted">Family accounts cannot access staff records, internal care plans, organisation management or other clients.</p></article></section>`);
+}
+function bindPageLinks(root=document){root.querySelectorAll('[data-page-link]').forEach(button=>{if(button.dataset.workspaceBound)return;button.dataset.workspaceBound='1';button.addEventListener('click',()=>showPage(button.dataset.pageLink));});}
+
+function carerStatusLabel(status){return ({scheduled:'Upcoming',due:'Due now',late:'Late',in_progress:'In progress',overrunning:'Overrunning',completed:'Completed',missed:'Missed'})[status]||String(status||'').replaceAll('_',' ');}
+function carerStatusTone(status){return ['late','overrunning','missed'].includes(status)?'danger':status==='completed'?'success':status==='in_progress'?'active':status==='due'?'active':'neutral';}
+async function loadCarerDashboard(type='carer'){
+  hideDashboardSections();
+  const section=$('#carer-dashboard');if(!section)return;section.hidden=false;
+  $('#carer-greeting').textContent=type==='senior'?'My visits and senior responsibilities':'Today’s visits';
+  const eyebrow=section.querySelector('.carer-hero .eyebrow');if(eyebrow)eyebrow.textContent=type==='senior'?'Senior carer workspace':'My working day';
+  const payload=await api('/api/carer/dashboard'),m=payload.metrics||{};
+  $('#carer-total').textContent=m.today??0;$('#carer-completed').textContent=m.completed??0;$('#carer-progress').textContent=m.inProgress??0;$('#carer-late').textContent=m.late??0;
+  const warning=$('#carer-link-warning');warning.hidden=payload.linked!==false;if(payload.linked===false)$('#carer-link-message').textContent=payload.message||'Ask a manager to link your login to your staff record.';
+  const visits=payload.visits||[];$('#carer-summary').textContent=payload.linked===false?'Your account needs manager attention.':visits.length?`${m.completed||0} of ${visits.length} visits completed today.`:'You have no allocated visits today.';
+  const list=$('#carer-visit-list');list.innerHTML=visits.map(v=>{const live=v.live_status||v.status,start=new Date(v.scheduled_start),end=v.scheduled_end?new Date(v.scheduled_end):null;const canRecord=v.status==='in_progress'||v.status==='completed';return `<article class="carer-visit-card ${escapeHtml(live)}"><div class="carer-visit-time"><strong>${start.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</strong><span>${end?end.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):''}</span></div><div class="carer-visit-copy"><div><span class="badge ${carerStatusTone(live)}">${escapeHtml(carerStatusLabel(live))}</span>${v.has_care_record?'<span class="badge success">Record saved</span>':''}</div><h3>${escapeHtml(v.client_preferred_name||v.client_name||'Client')}</h3><p>${escapeHtml(v.visit_type||'Care visit')}</p><small>${escapeHtml(v.address||'Address not recorded')}</small></div><div class="carer-visit-actions">${canRecord?`<button class="secondary-button compact" data-carer-record="${escapeHtml(v.id)}">${v.status==='completed'?'View record':'Record care'}</button>`:''}${v.status==='scheduled'?'<button class="primary-button compact" data-carer-clock>Clock in</button>':''}${v.status==='in_progress'?'<button class="primary-button compact" data-carer-clock>Clock out</button>':''}</div></article>`;}).join('')||'<div class="empty-state"><strong>No visits allocated today</strong><span>Your manager can allocate visits from the rota.</span></div>';
+  const history=$('#carer-history');history.innerHTML=(payload.history||[]).map(v=>`<button class="carer-history-row" data-carer-record="${escapeHtml(v.id)}"><span>${new Date(v.scheduled_start).toLocaleDateString('en-GB',{day:'2-digit',month:'short'})}</span><div><strong>${escapeHtml(v.client_preferred_name||v.client_name||'Client')}</strong><small>${escapeHtml(v.visit_type||'Care visit')}</small></div><em>View</em></button>`).join('')||'<p class="muted">No previous completed visits yet.</p>';
+  document.querySelectorAll('[data-carer-record]').forEach(b=>b.addEventListener('click',()=>openVisitCareRecord(b.dataset.carerRecord)));
+  document.querySelectorAll('[data-carer-clock]').forEach(b=>b.addEventListener('click',()=>$('#visit-clock-dialog')?.showModal()));
+}
+
 async function loadDashboard() {
   const payload = await api('/api/dashboard');
   const m = payload.metrics || {};
@@ -649,18 +779,23 @@ function renderStaff() {
     const haystack = `${item.firstName} ${item.lastName} ${item.preferredName} ${item.jobTitle} ${item.phone} ${item.email}`.toLowerCase();
     return (!term || haystack.includes(term)) && (status === 'all' || item.status === status);
   });
-  $('#staff-table-body').innerHTML = filtered.map(item => `<tr><td><div class="client-person"><span class="person-avatar">${initialsFromName(staffName(item))}</span><div><strong>${escapeHtml(staffName(item))}</strong><span>${escapeHtml(item.preferredName ? `Known as ${item.preferredName}` : item.employmentType)}</span></div></div></td><td>${escapeHtml(item.jobTitle)}</td><td>${escapeHtml(item.phone || item.email || 'Not recorded')}</td><td class="${isPast(item.dbsExpiry) ? 'date-overdue' : ''}">${formatDate(item.dbsExpiry)}${isPast(item.dbsExpiry) ? ' · overdue' : ''}</td><td class="${isPast(item.trainingExpiry) ? 'date-overdue' : ''}">${formatDate(item.trainingExpiry)}${isPast(item.trainingExpiry) ? ' · overdue' : ''}</td><td><span class="badge ${item.status === 'Active' ? 'success' : 'neutral'}">${escapeHtml(item.status)}</span></td><td><button class="row-action" data-edit-staff="${escapeHtml(item.id)}">Edit</button></td></tr>`).join('');
+  $('#staff-table-body').innerHTML = filtered.map(item => `<tr><td><div class="client-person"><span class="person-avatar">${initialsFromName(staffName(item))}</span><div><strong>${escapeHtml(staffName(item))}</strong><span>${escapeHtml(item.preferredName ? `Known as ${item.preferredName}` : item.employmentType)}</span></div></div></td><td>${escapeHtml(item.jobTitle)}</td><td>${escapeHtml(item.phone || item.email || 'Not recorded')}</td><td class="${isPast(item.dbsExpiry) ? 'date-overdue' : ''}">${formatDate(item.dbsExpiry)}${isPast(item.dbsExpiry) ? ' · overdue' : ''}</td><td class="${isPast(item.trainingExpiry) ? 'date-overdue' : ''}">${formatDate(item.trainingExpiry)}${isPast(item.trainingExpiry) ? ' · overdue' : ''}</td><td><span class="badge ${item.status === 'Active' ? 'success' : 'neutral'}">${escapeHtml(item.status)}</span>${item.loginUserId?`<small class="table-subline">Login: ${escapeHtml(item.loginStatus||'active')}</small>`:'<small class="table-subline">No login</small>'}</td><td>${hasAccess('staff.edit')?`<button class="row-action" data-edit-staff="${escapeHtml(item.id)}">Edit</button>`:'<span class="muted">View only</span>'}</td></tr>`).join('');
   $('#staff-empty').hidden = filtered.length > 0;
   $('#staff-active-count').textContent = staff.filter(x => x.status === 'Active').length;
   $('#staff-dbs-count').textContent = staff.filter(x => x.status === 'Active' && isPast(x.dbsExpiry)).length;
   $('#staff-training-count').textContent = staff.filter(x => x.status === 'Active' && isPast(x.trainingExpiry)).length;
   $$('[data-edit-staff]').forEach(button => button.addEventListener('click', () => openStaffDialog(button.dataset.editStaff)));
 }
+function toggleStaffLoginFields(){const checked=$('#staff-create-login')?.checked;const fields=$('#staff-login-fields');if(fields)fields.hidden=!checked;}
 function openStaffDialog(id = '') {
+  if(!hasAccess(id?'staff.edit':'staff.create')){denyPage();return;}
   staffForm.reset(); $('#staff-form-error').hidden = true; staffForm.elements.id.value = id;
   $('#staff-dialog-title').textContent = id ? 'Edit staff' : 'Add staff';
   const item = staff.find(x => x.id === id);
   if (item) Object.entries(item).forEach(([key,value]) => { const field=staffForm.elements.namedItem(key); if(field) field.value=value ?? ''; });
+  const hasLogin=Boolean(item?.loginUserId); $('#staff-create-login').checked=hasLogin; $('#staff-create-login').disabled=hasLogin; toggleStaffLoginFields();
+  const temp=$('#staff-temp-password-field'),statusField=$('#staff-login-status-field'),summary=$('#staff-login-summary'); if(temp)temp.hidden=hasLogin;if(statusField)statusField.hidden=!hasLogin;
+  if(hasLogin){staffForm.elements.loginStatus.value=item.loginStatus||'active';summary.hidden=false;summary.innerHTML=`<strong>Linked login</strong><span>${escapeHtml(item.loginEmail)} · ${escapeHtml((item.loginAccessLevel||'carer').replaceAll('_',' '))}</span><small>${item.lastLoginAt?`Last login ${new Date(item.lastLoginAt).toLocaleString('en-GB')}`:'Has not logged in yet'}${item.mustChangePassword?' · Password change required':''}</small>`;}else{summary.hidden=true;staffForm.elements.loginEmail.value=item?.email||'';}
   staffDialog.showModal();
 }
 async function saveStaff(event) {
@@ -701,7 +836,7 @@ function renderClients() {
       <td>${escapeHtml(client.carePackage || 'Not set')}</td>
       <td><span class="review-date ${reviewDue(client) ? 'overdue' : ''}">${formatDate(client.nextReview)}${reviewDue(client) ? ' · overdue' : ''}</span></td>
       <td><span class="badge ${client.status === 'Active' ? 'success' : client.status === 'Paused' ? 'active' : 'neutral'}">${escapeHtml(client.status)}</span>${client.risk === 'High' ? '<span class="risk-tag">High risk</span>' : ''}</td>
-      <td><button class="row-action" data-edit-client="${escapeHtml(client.id)}">Edit</button></td>
+      <td>${hasAccess('clients.edit')?`<button class="row-action" data-edit-client="${escapeHtml(client.id)}">Edit</button>`:'<span class="muted">View only</span>'}</td>
     </tr>`).join('');
 
   clientEmpty.hidden = filtered.length > 0;
@@ -744,6 +879,7 @@ function addVisitRequirement(value={}){
 function collectVisitRequirements(){return [...document.querySelectorAll('.visit-requirement-row')].map(row=>({visitType:row.querySelector('[data-requirement="visitType"]').value,preferredTime:row.querySelector('[data-requirement="preferredTime"]').value,windowMinutes:Number(row.querySelector('[data-requirement="windowMinutes"]').value),durationMinutes:Number(row.querySelector('[data-requirement="durationMinutes"]').value),carersRequired:Number(row.querySelector('[data-requirement="carersRequired"]').value),notes:row.querySelector('[data-requirement="notes"]').value,schedulingRule:row.querySelector('[data-requirement="schedulingRule"]').value,timeCriticalReason:row.querySelector('[data-requirement="timeCriticalReason"]').value,days:[...row.querySelectorAll('[data-requirement-day]:checked')].map(x=>Number(x.value))})).filter(r=>r.preferredTime&&r.days.length);}
 
 function openClientDialog(id = '') {
+  if(!hasAccess(id?'clients.edit':'clients.create')){denyPage();return;}
   clientForm.reset();
   $('#client-form-error').hidden = true;
   const requirementsList=$('#client-visit-requirements');if(requirementsList)requirementsList.innerHTML='';
@@ -962,13 +1098,14 @@ $$('.nav-item').forEach(button => button.addEventListener('click', () => {
 
 $$('[data-page-link]').forEach(button => button.addEventListener('click', () => $(`[data-page="${button.dataset.pageLink}"]`).click()));
 $('[data-return-dashboard]').addEventListener('click', () => $('[data-page="dashboard"]').click());
-$('#add-client').addEventListener('click', () => openClientDialog());
-$('#add-staff').addEventListener('click', () => openStaffDialog());
+$('#add-client')?.addEventListener('click', () => openClientDialog());
+$('#add-staff')?.addEventListener('click', () => openStaffDialog());
 $('#close-staff-dialog').addEventListener('click', () => staffDialog.close());
 $('#cancel-staff').addEventListener('click', () => staffDialog.close());
 $('#staff-search').addEventListener('input', renderStaff);
 $('#staff-status-filter').addEventListener('change', renderStaff);
 staffForm.addEventListener('submit', saveStaff);
+$('#staff-create-login')?.addEventListener('change',toggleStaffLoginFields);
 $('#quick-add').addEventListener('click', () => quickAddDialog.showModal());
 $('#close-quick-add').addEventListener('click', () => quickAddDialog.close());
 $$('[data-quick]').forEach(button => button.addEventListener('click', () => {
@@ -1562,7 +1699,9 @@ function saveVisitQueue(q){localStorage.setItem(VISIT_QUEUE_KEY,JSON.stringify(q
 function setVisitText(sel,val){const n=$(sel);if(n)n.textContent=String(val??0)}
 async function loadVisitsBoard(){visitsData=await api('/api/visits/board');renderVisitsBoard();await syncPendingVisitEvents();}
 function renderVisitsBoard(){const s=visitsData.stats||{};setVisitText('#visit-scheduled',s.scheduled);setVisitText('#visit-progress',s.inProgress);setVisitText('#visit-late',s.late);setVisitText('#visit-completed',s.completed);setVisitText('#visit-overrunning',s.overrunning);
- const list=$('#visits-live-list');if(list)list.innerHTML=(visitsData.visits||[]).map(v=>`<article class="operations-row visit-live-row"><div class="operations-row-status ${escapeHtml(v.live_status||v.status)}"></div><div><strong>${escapeHtml(v.client_name||'Client')}</strong><p>${escapeHtml(v.visit_type||'Care visit')}</p><small>${opFmt(v.scheduled_start)} · ${escapeHtml(v.staff_name||'Unallocated')}</small></div><span class="badge ${v.live_status==='late'||v.live_status==='overrunning'?'danger':v.status==='completed'?'success':v.status==='in_progress'?'active':'neutral'}">${escapeHtml((v.live_status||v.status).replaceAll('_',' '))}</span>${['in_progress','completed'].includes(v.status)?`<button class="secondary-button compact" data-visit-record="${escapeHtml(v.id)}">${v.status==='completed'?'View record':'Record care'}</button>`:''}</article>`).join('')||'<div class="empty-state"><strong>No visits today</strong><span>Schedule a visit to begin live monitoring.</span></div>';document.querySelectorAll('[data-visit-record]').forEach(b=>b.addEventListener('click',()=>openVisitCareRecord(b.dataset.visitRecord)));
+ const list=$('#visits-live-list');if(list)list.innerHTML=(visitsData.visits||[]).map(v=>`<article class="operations-row visit-live-row visit-openable" data-visit-open="${escapeHtml(v.id)}" tabindex="0" role="button" aria-label="Open care record for ${escapeHtml(v.client_name||'client')}"><div class="operations-row-status ${escapeHtml(v.live_status||v.status)}"></div><div><strong>${escapeHtml(v.client_name||'Client')}</strong><p>${escapeHtml(v.visit_type||'Care visit')}</p><small>${opFmt(v.scheduled_start)} · ${escapeHtml(v.staff_name||'Unallocated')}</small></div><span class="badge ${v.live_status==='late'||v.live_status==='overrunning'?'danger':v.status==='completed'?'success':v.status==='in_progress'?'active':'neutral'}">${escapeHtml((v.live_status||v.status).replaceAll('_',' '))}</span><button type="button" class="secondary-button compact" data-visit-record="${escapeHtml(v.id)}">${v.status==='completed'?'View record':v.status==='in_progress'?'Record care':'Open visit'}</button></article>`).join('')||'<div class="empty-state"><strong>No visits today</strong><span>Schedule a visit to begin live monitoring.</span></div>';
+ document.querySelectorAll('[data-visit-record]').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();openVisitCareRecord(b.dataset.visitRecord);}));
+ document.querySelectorAll('[data-visit-open]').forEach(row=>{row.addEventListener('click',()=>openVisitCareRecord(row.dataset.visitOpen));row.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openVisitCareRecord(row.dataset.visitOpen);}});});
  const co='<option value="">Select client</option>'+(visitsData.clients||[]).map(x=>`<option value="${escapeHtml(x.id)}">${escapeHtml(x.preferred_name||x.first_name)} ${escapeHtml(x.last_name)}</option>`).join('');const so='<option value="">Unallocated</option>'+(visitsData.staff||[]).map(x=>`<option value="${escapeHtml(x.id)}">${escapeHtml(x.preferred_name||x.first_name)} ${escapeHtml(x.last_name)}</option>`).join('');if($('#visit-client'))$('#visit-client').innerHTML=co;if($('#visit-code-client'))$('#visit-code-client').innerHTML=co;if($('#visit-staff'))$('#visit-staff').innerHTML=so;renderSyncStatus();}
 function renderSyncStatus(){const q=visitQueue(),n=$('#visit-sync-status');if(n)n.innerHTML=q.length?`<strong>${q.length} event${q.length===1?'':'s'} saved offline</strong><span>CoreCare will retry automatically. <button id="visit-sync-now" class="text-button">Sync now</button></span>`:'<strong>All visit events synced</strong><span>No offline records waiting.</span>';$('#visit-sync-now')?.addEventListener('click',syncPendingVisitEvents);}
 async function queueVisitEvent(type,code){const event={eventId:crypto.randomUUID(),type,code:code.trim(),deviceTime:new Date().toISOString(),source:navigator.onLine?'online':'offline'};const q=visitQueue();q.push(event);saveVisitQueue(q);await syncPendingVisitEvents();}
@@ -1719,4 +1858,6 @@ async function openVisitCareRecord(visitId){
  f.followUpRequired.checked=Boolean(r.follow_up_required);const done=new Set((data.tasks||[]).filter(x=>x.status==='completed').map(x=>x.task_key));f.querySelectorAll('input[name="task"]').forEach(x=>x.checked=done.has(x.value));const med=(data.medication||[])[0];if(med){f.medicationOutcome.value=med.outcome;f.medicationName.value=med.medication_name;f.medicationReason.value=med.reason;}
  $('#visit-record-error').hidden=true;$('#visit-record-dialog')?.showModal();
 }
-$('#visit-record-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=e.currentTarget,err=$('#visit-record-error');err.hidden=true;const fd=new FormData(f),tasks=[...f.querySelectorAll('input[name="task"]:checked')].map(x=>({key:x.value,label:x.dataset.label,status:'completed'}));const medication=[{name:fd.get('medicationName'),outcome:fd.get('medicationOutcome'),reason:fd.get('medicationReason')}];const payload=Object.fromEntries(fd);payload.tasks=tasks;payload.medication=medication;payload.followUpRequired=f.followUpRequired.checked;payload.incidentRequired=f.incidentRequired.checked;payload.completeVisit=true;try{await api(`/api/visits/${encodeURIComponent(fd.get('visitId'))}/care-record`,{method:'POST',body:JSON.stringify(payload)});$('#visit-record-dialog')?.close();await loadVisitsBoardNoSync();}catch(ex){err.textContent=ex.message;err.hidden=false;}});
+$('#visit-record-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=e.currentTarget,err=$('#visit-record-error');err.hidden=true;const fd=new FormData(f),tasks=[...f.querySelectorAll('input[name="task"]:checked')].map(x=>({key:x.value,label:x.dataset.label,status:'completed'}));const medication=[{name:fd.get('medicationName'),outcome:fd.get('medicationOutcome'),reason:fd.get('medicationReason')}];const payload=Object.fromEntries(fd);payload.tasks=tasks;payload.medication=medication;payload.followUpRequired=f.followUpRequired.checked;payload.incidentRequired=f.incidentRequired.checked;payload.completeVisit=true;try{await api(`/api/visits/${encodeURIComponent(fd.get('visitId'))}/care-record`,{method:'POST',body:JSON.stringify(payload)});$('#visit-record-dialog')?.close();if(['carer','senior_carer'].includes(currentUser?.accessLevel))await loadCarerDashboard();else await loadVisitsBoardNoSync();}catch(ex){err.textContent=ex.message;err.hidden=false;}});
+
+$('#carer-refresh')?.addEventListener('click',()=>loadCarerDashboard().catch(showToastError));$('#carer-open-clock')?.addEventListener('click',()=>$('#visit-clock-dialog')?.showModal());

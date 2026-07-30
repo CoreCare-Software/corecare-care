@@ -89,8 +89,50 @@ function initialsFromName(name) {
 }
 
 function roleLabel(role) {
-  return ({ platform_owner:'Platform owner',platform_admin:'Platform admin',organisation_owner:'Organisation owner',organisation_admin:'Organisation admin',branch_manager:'Branch manager',senior_carer:'Senior carer',carer:'Carer',office_staff:'Office staff',auditor:'Read-only auditor',family:'Family member',owner:'Organisation owner',manager:'Manager' })[role] || 'CoreCare user';
+  return ({ platform_owner:'Platform owner',platform_admin:'Platform admin',organisation_owner:'Organisation owner',organisation_admin:'Registered manager',branch_manager:'Branch manager',senior_carer:'Senior carer',carer:'Carer',office_staff:'Care coordinator',auditor:'Read-only auditor',family:'Family member',owner:'Organisation owner',manager:'Registered manager' })[role] || 'CoreCare user';
 }
+
+
+const WORKSPACE_CONFIG = {
+  manager: {
+    label: 'Manager workspace',
+    roles: ['organisation_owner','organisation_admin','branch_manager','owner','manager'],
+    pages: ['dashboard','operations','clients','staff','family','care','medication','visits','rota','tasks','incidents','finance','reports','settings']
+  },
+  coordinator: {
+    label: 'Care coordinator workspace',
+    roles: ['office_staff'],
+    pages: ['dashboard','clients','staff','care','visits','rota','tasks','incidents']
+  },
+  senior: {
+    label: 'Senior carer workspace',
+    roles: ['senior_carer'],
+    pages: ['dashboard','clients','care','medication','visits','tasks','incidents']
+  },
+  carer: {
+    label: 'Carer workspace',
+    roles: ['carer'],
+    pages: ['dashboard','medication','visits']
+  },
+  family: {
+    label: 'Family workspace',
+    roles: ['family'],
+    pages: ['dashboard','family']
+  },
+  auditor: {
+    label: 'Audit workspace',
+    roles: ['auditor'],
+    pages: ['dashboard','operations','clients','staff','care','medication','visits','rota','tasks','incidents','finance','reports']
+  }
+};
+function workspaceKey(){
+  if(isPlatformWorkspace()) return 'platform';
+  const role=currentUser?.accessLevel||currentUser?.role;
+  return Object.entries(WORKSPACE_CONFIG).find(([,config])=>config.roles.includes(role))?.[0]||'manager';
+}
+function workspaceConfig(){return WORKSPACE_CONFIG[workspaceKey()]||WORKSPACE_CONFIG.manager;}
+function workspaceAllowsPage(page){return page==='platform'?isPlatformWorkspace():workspaceConfig().pages.includes(page);}
+function dashboardType(){return workspaceKey();}
 
 function updateIdentity() {
   const name = currentUser?.displayName || 'CoreCare user';
@@ -118,9 +160,11 @@ function updateIdentity() {
     }
   }
   document.body.classList.toggle('platform-workspace', platformWorkspace);
+  document.body.dataset.workspace=platformWorkspace?'platform':workspaceKey();
+  const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.19.6';
+const CORECARE_FALLBACK_VERSION = '1.20.0';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -223,15 +267,19 @@ async function showApplication(user) {
     showPage('platform');
     showPlatformView(location.hash && location.hash !== '#platform' ? location.hash.slice(1) : 'platform-page', false);
   } else {
-    const carerWorkspace=['carer','senior_carer'].includes(currentUser?.accessLevel);
-    const jobs=[carerWorkspace?loadCarerDashboard():loadDashboard()];
-    if(!carerWorkspace&&hasAccess('clients.view'))jobs.push(loadClients());
-    if(!carerWorkspace&&hasAccess('staff.view'))jobs.push(loadStaff());
+    const type=dashboardType();
+    const jobs=[];
+    if(['carer','senior'].includes(type)) jobs.push(loadCarerDashboard(type));
+    else if(type==='family') jobs.push(loadFamilyDashboard());
+    else if(type==='coordinator') jobs.push(loadCoordinatorDashboard());
+    else jobs.push(loadManagerDashboard());
+    if(!['carer','family'].includes(type)&&hasAccess('clients.view'))jobs.push(loadClients());
+    if(['manager','coordinator','senior','auditor'].includes(type)&&hasAccess('staff.view'))jobs.push(loadStaff());
     await Promise.all(jobs);
-    if(!carerWorkspace&&hasAccess('clients.view'))renderClients();
-    if(!carerWorkspace&&hasAccess('staff.view'))renderStaff();
+    if(hasAccess('clients.view')&&!['carer','family'].includes(type))renderClients();
+    if(hasAccess('staff.view')&&['manager','coordinator','senior','auditor'].includes(type))renderStaff();
     await loadDevelopmentStatus();
-    showPage(canOpenPage('dashboard')?'dashboard':Object.keys(currentUser.modules||{}).find(canOpenPage)||'dashboard');
+    showPage(canOpenPage('dashboard')?'dashboard':workspaceConfig().pages.find(canOpenPage)||'dashboard');
   }
   $('#main-content').focus();
   if (currentUser?.mustChangePassword) setTimeout(() => openPasswordDialog(true), 100);
@@ -248,7 +296,7 @@ function applyAccessVisibility(){
   const platformWorkspace=isPlatformWorkspace();
   $$('.organisation-workspace-nav').forEach(node=>{
     const page=node.dataset?.page;
-    node.hidden=platformWorkspace || Boolean(page && modules[page]!==true);
+    node.hidden=platformWorkspace || Boolean(page && (!workspaceAllowsPage(page) || modules[page]!==true));
   });
   $$('.organisation-workspace-action').forEach(node=>{node.hidden=platformWorkspace;});
   const visibility={
@@ -259,7 +307,7 @@ function applyAccessVisibility(){
   $$('.quick-action[data-quick="staff"]').forEach(node=>node.hidden=!hasAccess('staff.create'));
 }
 function hasAccess(permission){return Boolean(currentUser?.isPlatformUser||(currentUser?.permissions||[]).includes(permission));}
-function canOpenPage(page){return Boolean(currentUser?.isPlatformUser||(currentUser?.modules||{})[page]===true);}
+function canOpenPage(page){return Boolean((currentUser?.isPlatformUser&&page==='platform')||(!isPlatformWorkspace()&&workspaceAllowsPage(page)&&(currentUser?.modules||{})[page]===true));}
 function denyPage(){showToastError(new Error('You do not have permission to view this area.'));}
 
 function showLogin(message = '') {
@@ -326,6 +374,11 @@ function showPage(page) {
   }
   if (page === 'dashboard') {
     activatePage('#dashboard-page');
+    const type=dashboardType();
+    if(type==='coordinator')loadCoordinatorDashboard().catch(showToastError);
+    else if(type==='family')loadFamilyDashboard().catch(showToastError);
+    else if(['carer','senior'].includes(type))loadCarerDashboard(type).catch(showToastError);
+    else loadManagerDashboard().catch(showToastError);
     setDate();
     updateIdentity();
     loadDashboard().catch(showToastError);
@@ -645,11 +698,45 @@ async function loadClients() {
 
 
 
+
+function hideDashboardSections(){
+  const dashboard=$('#dashboard-page');if(!dashboard)return;
+  Array.from(dashboard.children).forEach(node=>node.hidden=true);
+}
+function ensureWorkspaceDashboard(id,html){
+  let section=$(`#${id}`);
+  if(!section){section=document.createElement('section');section.id=id;section.className='role-dashboard';section.innerHTML=html;$('#dashboard-page').appendChild(section);}
+  section.hidden=false;return section;
+}
+function dashboardMetricCard(label,value,copy=''){return `<article><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(copy)}</small></article>`;}
+async function loadManagerDashboard(){
+  hideDashboardSections();
+  const generic=[...$('#dashboard-page').children].filter(n=>!n.classList.contains('role-dashboard')&&n.id!=='carer-dashboard');generic.forEach(n=>n.hidden=false);
+  await loadDashboard();
+}
+async function loadCoordinatorDashboard(){
+  hideDashboardSections();
+  const [dashboard,board]=await Promise.all([api('/api/dashboard'),api('/api/visits/board')]);
+  const stats=board.stats||{},visits=board.visits||[],unallocated=visits.filter(v=>!v.staff_id&&v.status!=='completed').length;
+  const section=ensureWorkspaceDashboard('coordinator-dashboard',`<div class="role-hero"><div><p class="eyebrow">Care coordinator workspace</p><h2>Today’s rota control</h2><p>Allocate visits, resolve gaps and keep care delivery moving.</p></div><button class="primary-button compact" data-page-link="rota">Open rota</button></div><section class="role-metrics" id="coordinator-metrics"></section><section class="role-grid"><article class="panel span-two"><div class="panel-heading"><div><p class="eyebrow">Scheduling priorities</p><h2>Visits needing attention</h2></div></div><div id="coordinator-priority" class="workspace-list"></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">Quick actions</p><h2>Coordinate today</h2></div></div><div class="workspace-actions"><button data-page-link="rota">Allocate visits</button><button data-page-link="staff">Check staff availability</button><button data-page-link="visits">Open live visits</button><button data-page-link="tasks">Manage cover tasks</button></div></article></section>`);
+  $('#coordinator-metrics').innerHTML=dashboardMetricCard('Visits today',visits.length,'scheduled care calls')+dashboardMetricCard('Unallocated',unallocated,'require allocation')+dashboardMetricCard('Late',stats.late||0,'need coordinator action')+dashboardMetricCard('In progress',stats.inProgress||0,'currently underway');
+  const priority=visits.filter(v=>!v.staff_id||['late','overrunning'].includes(v.live_status)).slice(0,8);
+  $('#coordinator-priority').innerHTML=priority.map(v=>`<div class="workspace-row"><div><strong>${escapeHtml(v.client_name||'Client')}</strong><span>${new Date(v.scheduled_start).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})} · ${escapeHtml(v.visit_type||'Care visit')}</span></div><span class="badge ${v.staff_id?'danger':'warning'}">${v.staff_id?escapeHtml(carerStatusLabel(v.live_status)):'Unallocated'}</span></div>`).join('')||'<div class="empty-state"><strong>No scheduling issues</strong><span>Today’s rota has no immediate allocation or timing warnings.</span></div>';
+  bindPageLinks(section);
+}
+async function loadFamilyDashboard(){
+  hideDashboardSections();
+  const section=ensureWorkspaceDashboard('family-dashboard',`<div class="role-hero family-role-hero"><div><p class="eyebrow">Family workspace</p><h2>Care updates for your relative</h2><p>View only the information the care provider has chosen to share with you.</p></div></div><section class="role-metrics"><article><span>Next visit</span><strong>Scheduled</strong><small>Details will appear when family sharing is enabled</small></article><article><span>Recent updates</span><strong>0</strong><small>shared care notes</small></article><article><span>Messages</span><strong>0</strong><small>unread messages</small></article></section><section class="role-grid"><article class="panel span-two"><div class="panel-heading"><div><p class="eyebrow">Shared information</p><h2>Family updates</h2></div></div><div class="empty-state"><strong>No shared updates yet</strong><span>Your care provider controls which visits, notes and documents are visible here.</span></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">Privacy</p><h2>Read-only access</h2></div></div><p class="padded muted">Family accounts cannot access staff records, internal care plans, organisation management or other clients.</p></article></section>`);
+}
+function bindPageLinks(root=document){root.querySelectorAll('[data-page-link]').forEach(button=>{if(button.dataset.workspaceBound)return;button.dataset.workspaceBound='1';button.addEventListener('click',()=>showPage(button.dataset.pageLink));});}
+
 function carerStatusLabel(status){return ({scheduled:'Upcoming',due:'Due now',late:'Late',in_progress:'In progress',overrunning:'Overrunning',completed:'Completed',missed:'Missed'})[status]||String(status||'').replaceAll('_',' ');}
 function carerStatusTone(status){return ['late','overrunning','missed'].includes(status)?'danger':status==='completed'?'success':status==='in_progress'?'active':status==='due'?'active':'neutral';}
-async function loadCarerDashboard(){
+async function loadCarerDashboard(type='carer'){
+  hideDashboardSections();
   const section=$('#carer-dashboard');if(!section)return;section.hidden=false;
-  Array.from($('#dashboard-page').children).forEach(node=>{if(node!==section)node.hidden=true;});
+  $('#carer-greeting').textContent=type==='senior'?'My visits and senior responsibilities':'Today’s visits';
+  const eyebrow=section.querySelector('.carer-hero .eyebrow');if(eyebrow)eyebrow.textContent=type==='senior'?'Senior carer workspace':'My working day';
   const payload=await api('/api/carer/dashboard'),m=payload.metrics||{};
   $('#carer-total').textContent=m.today??0;$('#carer-completed').textContent=m.completed??0;$('#carer-progress').textContent=m.inProgress??0;$('#carer-late').textContent=m.late??0;
   const warning=$('#carer-link-warning');warning.hidden=payload.linked!==false;if(payload.linked===false)$('#carer-link-message').textContent=payload.message||'Ask a manager to link your login to your staff record.';
