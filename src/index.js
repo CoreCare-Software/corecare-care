@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.20.4 — Carer Dashboard Reliability */
-const VERSION = "1.20.4";
+/** CoreCare Enterprise 1.20.5 — Carer Dashboard Query Fix */
+const VERSION = "1.20.5";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.20.4 — Carer Dashboard Reliability" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.20.5 — Carer Dashboard Query Fix" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -895,7 +895,7 @@ async function carerDashboard(db,session){
   if(now<serviceStart)serviceStart.setDate(serviceStart.getDate()-1);
   const serviceEnd=new Date(serviceStart);serviceEnd.setDate(serviceEnd.getDate()+1);
 
-  const base=`SELECT v.*,c.first_name||' '||c.last_name client_name,c.preferred_name client_preferred_name,c.address_line_1,c.address_line_2,c.town,c.county,c.postcode
+  const base=`SELECT v.*,c.first_name||' '||c.last_name client_name,c.preferred_name client_preferred_name,c.address_line_1,c.address_line_2,c.town,c.postcode
     FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id
     WHERE v.organisation_id=? AND v.staff_id=?`;
   const [todayRows,historyRows]=await Promise.all([
@@ -919,7 +919,7 @@ async function carerDashboard(db,session){
   const clock=Date.now();
   for(const v of [...visits,...history]){
     v.has_care_record=recorded.has(v.id)?1:0;
-    v.address=[v.address_line_1,v.address_line_2,v.town,v.county,v.postcode].filter(Boolean).join(', ');
+    v.address=[v.address_line_1,v.address_line_2,v.town,v.postcode].filter(Boolean).join(', ');
   }
   for(const v of visits){
     const start=new Date(v.scheduled_start).getTime(),end=v.scheduled_end?new Date(v.scheduled_end).getTime():start+3600000;
