@@ -120,7 +120,7 @@ function updateIdentity() {
   document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
-const CORECARE_FALLBACK_VERSION = '1.15.5';
+const CORECARE_FALLBACK_VERSION = '1.15.3';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -280,7 +280,7 @@ function showPage(page) {
   }
   if (page === 'rota') {
     activatePage('#rota-page');
-    loadRotaBoard().catch(showToastError);
+    loadRotaBoard();
     return;
   }
   if (page === 'visits') {
@@ -1490,31 +1490,14 @@ async function loadRotaTemplates(){const target=$('#template-visit-list');if(!ta
 function populateTemplateSelects(){const clients=templateOptions(rotaTemplates.clients||[],'Select client'),staff=templateOptions(rotaTemplates.staff||[],'Any suitable carer');['template-visit-client','template-exception-client'].forEach(id=>{const e=$('#'+id);if(e)e.innerHTML=clients});['template-preferred-staff','template-backup-staff','template-pattern-staff','template-exception-staff','template-replacement-staff'].forEach(id=>{const e=$('#'+id);if(e)e.innerHTML=staff})}
 function renderRotaTemplates(){
  const visits=$('#template-visit-list'),patterns=$('#template-pattern-list'),exceptions=$('#template-exception-list'),runs=$('#template-run-list');
- if(visits)visits.innerHTML=(rotaTemplates.visitTemplates||[]).map(x=>`<article class="template-card"><div><span class="badge active">${templateDays[x.day_of_week]} ${escapeHtml(x.preferred_time)}</span><h3>${escapeHtml(x.client_name||'Client')}</h3><p>${escapeHtml(x.visit_type)} · ${x.duration_minutes} minutes</p><small>Preferred: ${escapeHtml(x.preferred_staff_name||'Any suitable carer')}${x.backup_staff_name?` · Backup: ${escapeHtml(x.backup_staff_name)}`:''}</small></div><button class="icon-button" data-template-delete="visit" data-id="${x.id}" title="Delete">×</button></article>`).join('')||'<div class="empty-state"><strong>No recurring visits yet</strong><span>Add the client’s regular weekly calls.</span></div>';
- if(patterns)patterns.innerHTML=(rotaTemplates.workingPatterns||[]).map(x=>`<article class="template-card"><div><span class="badge neutral">Week ${x.week_number} of ${x.cycle_weeks}</span><h3>${escapeHtml(x.staff_name||'Carer')}</h3><p>${templateDays[x.day_of_week]} · ${escapeHtml(x.start_time)}–${escapeHtml(x.end_time)}</p><small>${escapeHtml(x.name)}</small></div><button class="icon-button" data-template-delete="working-pattern" data-id="${x.id}">×</button></article>`).join('')||'<div class="empty-state"><strong>No working patterns yet</strong><span>Add normal hours for each carer.</span></div>';
- if(exceptions)exceptions.innerHTML=(rotaTemplates.exceptions||[]).map(x=>`<article class="template-card"><div><span class="badge warning">${escapeHtml(x.exception_type)}</span><h3>${escapeHtml(x.staff_name||x.client_name||'Organisation-wide exception')}</h3><p>${templateDate(x.start_at)}${x.end_at?` – ${templateDate(x.end_at)}`:''}</p><small>${escapeHtml(x.reason||x.action)}</small></div><button class="icon-button" data-template-delete="exception" data-id="${x.id}">×</button></article>`).join('')||'<div class="empty-state"><strong>No current exceptions</strong><span>Holidays and one-off changes appear here.</span></div>';
+ if(visits)visits.innerHTML=(rotaTemplates.visitTemplates||[]).map(x=>`<article class="template-card" data-template-edit="visit" data-id="${x.id}" tabindex="0" title="Double-click to edit"><div><span class="badge active">${templateDays[x.day_of_week]} ${escapeHtml(x.preferred_time)}</span><h3>${escapeHtml(x.client_name||'Client')}</h3><p>${escapeHtml(x.visit_type)} · ${x.duration_minutes} minutes</p><small>Preferred: ${escapeHtml(x.preferred_staff_name||'Any suitable carer')}${x.backup_staff_name?` · Backup: ${escapeHtml(x.backup_staff_name)}`:''}</small></div><button class="icon-button" data-template-delete="visit" data-id="${x.id}" title="Delete">×</button></article>`).join('')||'<div class="empty-state"><strong>No recurring visits yet</strong><span>Add the client’s regular weekly calls.</span></div>';
+ if(patterns)patterns.innerHTML=(rotaTemplates.workingPatterns||[]).map(x=>`<article class="template-card" data-template-edit="pattern" data-id="${x.id}" tabindex="0" title="Double-click to edit"><div><span class="badge neutral">Week ${x.week_number} of ${x.cycle_weeks}</span><h3>${escapeHtml(x.staff_name||'Carer')}</h3><p>${templateDays[x.day_of_week]} · ${escapeHtml(x.start_time)}–${escapeHtml(x.end_time)}</p><small>${escapeHtml(x.name)}</small></div><button class="icon-button" data-template-delete="working-pattern" data-id="${x.id}">×</button></article>`).join('')||'<div class="empty-state"><strong>No working patterns yet</strong><span>Add normal hours for each carer.</span></div>';
+ if(exceptions)exceptions.innerHTML=(rotaTemplates.exceptions||[]).map(x=>`<article class="template-card" data-template-edit="exception" data-id="${x.id}" tabindex="0" title="Double-click to edit"><div><span class="badge warning">${escapeHtml(x.exception_type)}</span><h3>${escapeHtml(x.staff_name||x.client_name||'Organisation-wide exception')}</h3><p>${templateDate(x.start_at)}${x.end_at?` – ${templateDate(x.end_at)}`:''}</p><small>${escapeHtml(x.reason||x.action)}</small></div><button class="icon-button" data-template-delete="exception" data-id="${x.id}">×</button></article>`).join('')||'<div class="empty-state"><strong>No current exceptions</strong><span>Holidays and one-off changes appear here.</span></div>';
  if(runs)runs.innerHTML=(rotaTemplates.runs||[]).map(x=>`<article class="template-card generation-card"><div><span class="badge success">${escapeHtml(x.week_commencing)}</span><h3>${x.visits_created} visits generated</h3><p>${x.visits_unallocated} unallocated · ${x.visits_skipped} skipped</p><small>${templateDate(x.generated_at)}</small></div></article>`).join('')||'<div class="empty-state"><strong>No generated weeks yet</strong><span>Use Generate week when templates are ready.</span></div>';
 }
 function openTemplateDialog(id){const d=$('#'+id);d?.querySelector('form')?.reset();d?.showModal()}
-document.addEventListener('click',e=>{
-  const tab=e.target.closest?.('[data-template-tab]');
-  if(tab){
-    document.querySelectorAll('[data-template-tab]').forEach(x=>x.classList.toggle('active',x===tab));
-    document.querySelectorAll('.template-panel').forEach(x=>x.classList.toggle('active',x.id===`template-${tab.dataset.templateTab}`));
-    return;
-  }
-  const action=e.target.closest?.('#template-refresh,#template-add-visit,#template-add-pattern,#template-add-exception,#template-generate-open');
-  if(!action)return;
-  if(action.id==='template-refresh') return loadRotaTemplates().catch(showToastError);
-  if(action.id==='template-add-visit') return openTemplateDialog('template-visit-dialog');
-  if(action.id==='template-add-pattern') return openTemplateDialog('template-pattern-dialog');
-  if(action.id==='template-add-exception') return openTemplateDialog('template-exception-dialog');
-  if(action.id==='template-generate-open'){
-    openTemplateDialog('template-generate-dialog');
-    const w=$('#rota-week')?.value;
-    if(w&&$('#template-generate-form')) $('#template-generate-form').elements.weekCommencing.value=w;
-  }
-});
+document.querySelectorAll('[data-template-tab]').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('[data-template-tab]').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.template-panel').forEach(x=>x.classList.toggle('active',x.id===`template-${b.dataset.templateTab}`))}));
+$('#template-refresh')?.addEventListener('click',loadRotaTemplates);$('#template-add-visit')?.addEventListener('click',()=>openTemplateDialog('template-visit-dialog'));$('#template-add-pattern')?.addEventListener('click',()=>openTemplateDialog('template-pattern-dialog'));$('#template-add-exception')?.addEventListener('click',()=>openTemplateDialog('template-exception-dialog'));$('#template-generate-open')?.addEventListener('click',()=>{openTemplateDialog('template-generate-dialog');const w=$('#rota-week')?.value;if(w)$('#template-generate-form').elements.weekCommencing.value=w});
 async function submitTemplateForm(e,path){e.preventDefault();const f=e.currentTarget,err=f.querySelector('.form-error');try{await api(path,{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(f)))});f.closest('dialog').close();await loadRotaTemplates()}catch(ex){err.textContent=ex.message;err.hidden=false}}
 $('#template-visit-form')?.addEventListener('submit',e=>submitTemplateForm(e,'/api/rota/templates/visit'));$('#template-pattern-form')?.addEventListener('submit',e=>submitTemplateForm(e,'/api/rota/templates/working-pattern'));$('#template-exception-form')?.addEventListener('submit',e=>submitTemplateForm(e,'/api/rota/templates/exception'));
 $('#template-generate-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=e.currentTarget,err=f.querySelector('.form-error'),result=$('#template-generate-result');try{const r=await api('/api/rota/templates/generate',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(f)))});result.hidden=false;result.innerHTML=`<strong>${r.created} visits created</strong><span>${r.unallocated} left in the allocation queue · ${r.skipped} skipped</span>${r.warnings?.length?`<small>${r.warnings.slice(0,5).map(escapeHtml).join('<br>')}</small>`:''}`;await Promise.all([loadRotaTemplates(),loadRotaBoard()])}catch(ex){err.textContent=ex.message;err.hidden=false}});
@@ -1522,3 +1505,79 @@ document.addEventListener('click',async e=>{const b=e.target.closest?.('[data-te
 const originalLoadRotaBoard=loadRotaBoard;loadRotaBoard=async function(){const r=await originalLoadRotaBoard.apply(this,arguments);if($('#template-visit-list')&&!rotaTemplates.clients.length)await loadRotaTemplates();return r};
 
 $('#care-delivery-refresh')?.addEventListener('click',()=>Promise.all([loadAllCarePlans(),loadCareDeliveryDashboard()]).catch(showToastError));
+
+
+// CoreCare 1.15.6 — unified rota interaction controller.
+// Uses delegated capture-phase events so controls remain active after any rota re-render.
+(function initialiseRotaInteractionController(){
+  if (window.__corecareRotaControllerInitialised) return;
+  window.__corecareRotaControllerInitialised = true;
+
+  function activateTemplateTab(name){
+    document.querySelectorAll('[data-template-tab]').forEach(button=>button.classList.toggle('active',button.dataset.templateTab===name));
+    document.querySelectorAll('.template-panel').forEach(panel=>panel.classList.toggle('active',panel.id===`template-${name}`));
+  }
+  function openNamedDialog(id){
+    const dialog=document.getElementById(id);
+    if(!dialog) return;
+    const form=dialog.querySelector('form');
+    form?.reset();
+    form?.querySelector('.form-error')?.setAttribute('hidden','');
+    if(!dialog.open) dialog.showModal();
+  }
+  function fillForm(form,row,map){
+    Object.entries(map).forEach(([field,key])=>{const element=form?.elements?.[field];if(element) element.value=row?.[key]??'';});
+  }
+  function editTemplate(kind,id){
+    let row,dialog,form;
+    if(kind==='visit'){
+      row=(rotaTemplates.visitTemplates||[]).find(x=>String(x.id)===String(id)); dialog=$('#template-visit-dialog'); form=$('#template-visit-form');
+      if(!row||!dialog||!form)return;
+      form.reset(); fillForm(form,row,{id:'id',clientId:'client_id',name:'name',dayOfWeek:'day_of_week',preferredTime:'preferred_time',durationMinutes:'duration_minutes',windowMinutes:'window_minutes',visitType:'visit_type',carersRequired:'carers_required',preferredStaffId:'preferred_staff_id',backupStaffId:'backup_staff_id',effectiveFrom:'effective_from',effectiveTo:'effective_to',notes:'notes'});
+    }else if(kind==='pattern'){
+      row=(rotaTemplates.workingPatterns||[]).find(x=>String(x.id)===String(id)); dialog=$('#template-pattern-dialog'); form=$('#template-pattern-form');
+      if(!row||!dialog||!form)return;
+      form.reset(); fillForm(form,row,{id:'id',staffId:'staff_id',name:'name',cycleWeeks:'cycle_weeks',weekNumber:'week_number',dayOfWeek:'day_of_week',startTime:'start_time',endTime:'end_time'});
+    }else{
+      row=(rotaTemplates.exceptions||[]).find(x=>String(x.id)===String(id)); dialog=$('#template-exception-dialog'); form=$('#template-exception-form');
+      if(!row||!dialog||!form)return;
+      form.reset(); fillForm(form,row,{id:'id',exceptionType:'exception_type',action:'action',staffId:'staff_id',clientId:'client_id',startAt:'start_at',endAt:'end_at',replacementStaffId:'replacement_staff_id',reason:'reason'});
+    }
+    form.querySelector('.form-error')?.setAttribute('hidden','');
+    if(!dialog.open)dialog.showModal();
+  }
+
+  document.addEventListener('click',async event=>{
+    const tab=event.target.closest?.('[data-template-tab]');
+    if(tab){event.preventDefault();activateTemplateTab(tab.dataset.templateTab);return;}
+    const target=event.target.closest?.('button, [role="button"]');
+    if(!target)return;
+    try{
+      switch(target.id){
+        case 'template-refresh': event.preventDefault(); await loadRotaTemplates(); break;
+        case 'template-add-visit': event.preventDefault(); openNamedDialog('template-visit-dialog'); break;
+        case 'template-add-pattern': event.preventDefault(); openNamedDialog('template-pattern-dialog'); break;
+        case 'template-add-exception': event.preventDefault(); openNamedDialog('template-exception-dialog'); break;
+        case 'template-generate-open':
+          event.preventDefault(); openNamedDialog('template-generate-dialog');
+          if($('#rota-week')?.value) $('#template-generate-form').elements.weekCommencing.value=$('#rota-week').value;
+          break;
+        case 'rota-optimise': event.preventDefault(); openRotaOptimiser(); break;
+        case 'rota-refresh': event.preventDefault(); await loadRotaBoard(); break;
+        case 'rota-new': event.preventDefault(); if(!rotaData.clients?.length)await loadRotaBoard(); $('#rota-form')?.reset(); $('#rota-dialog')?.showModal(); break;
+      }
+    }catch(error){console.error('Rota interaction failed',target.id,error); showToastError?.(error);}
+  },true);
+
+  document.addEventListener('dblclick',event=>{
+    const visit=event.target.closest?.('[data-rota-open]');
+    if(visit){event.preventDefault();event.stopPropagation();openRotaEdit(visit.dataset.rotaOpen);return;}
+    const template=event.target.closest?.('[data-template-edit]');
+    if(template&&!event.target.closest('[data-template-delete]')){event.preventDefault();editTemplate(template.dataset.templateEdit,template.dataset.id);}
+  },true);
+
+  document.addEventListener('keydown',event=>{
+    const template=event.target.closest?.('[data-template-edit]');
+    if(template&&(event.key==='Enter'||event.key===' ')){event.preventDefault();editTemplate(template.dataset.templateEdit,template.dataset.id);}
+  });
+})();
