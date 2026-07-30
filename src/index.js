@@ -412,12 +412,9 @@ async function saveVisitRequirements(request,db,session,clientId){
   const input=await readJson(request),requirements=normaliseVisitRequirements(input.requirements,input.startDate);
   if(!requirements.length)return json({error:{code:'VALIDATION_ERROR',message:'Add at least one valid visit requirement.'}},400);
   const client=await db.prepare('SELECT id FROM clients WHERE id=? AND organisation_id=?').bind(clientId,session.organisation_id).first();if(!client)return notFound('Client');
-  const statements=[
-    db.prepare(`DELETE FROM care_visits WHERE organisation_id=? AND client_id=? AND requirement_id IS NOT NULL AND rota_status='draft' AND scheduled_start>=CURRENT_TIMESTAMP AND status='scheduled'`).bind(session.organisation_id,clientId),
-    db.prepare(`UPDATE client_visit_requirements SET status='replaced',updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND client_id=? AND status='active'`).bind(session.organisation_id,clientId)
-  ];
+  const statements=[];
   for(const r of requirements)statements.push(...visitRequirementStatements(db,session,clientId,r));
-  statements.push(auditStatement(db,session.organisation_id,session.user_id,'client.visit_requirements_replaced','client',clientId,{count:requirements.length}));
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,'client.visit_requirements_created','client',clientId,{count:requirements.length}));
   await db.batch(statements);return json({ok:true,requirementsCreated:requirements.length,visitsGenerated:requirements.reduce((n,r)=>n+generatedOccurrenceCount(r),0)});
 }
 
