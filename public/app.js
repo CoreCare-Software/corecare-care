@@ -401,7 +401,6 @@ function showPage(page) {
     else loadManagerDashboard().catch(showToastError);
     setDate();
     updateIdentity();
-    loadDashboard().catch(showToastError);
     return;
   }
   if (page === 'clients') {
