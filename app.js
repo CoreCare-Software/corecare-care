@@ -30,10 +30,25 @@ let carePlans = [];
 let allCarePlans = [];
 let clientRisks = [];
 let clientDocuments = [];
+const carePlanDomainDefinitions = [
+  ['personal_care','Personal care','Washing, dressing, grooming, oral care and dignity.'],
+  ['communication','Communication','How the person communicates, understands information and makes choices.'],
+  ['mobility','Mobility & moving safely','Walking, transfers, equipment, positioning and manual handling.'],
+  ['nutrition','Nutrition & hydration','Food, drinks, swallowing, dietary needs and monitoring.'],
+  ['medication','Medication support','Prompts, administration, preferences, side effects and escalation.'],
+  ['continence','Continence','Toileting routines, continence products, privacy and infection prevention.'],
+  ['skin','Skin integrity','Pressure care, skin observations, repositioning and equipment.'],
+  ['cognition','Cognition & mental health','Memory, orientation, emotional wellbeing, distress and reassurance.'],
+  ['behaviour','Behaviour support','Triggers, early signs, prevention, de-escalation and least-restrictive support.'],
+  ['falls','Falls prevention','Falls history, environmental risks, footwear, aids and response.'],
+  ['sleep','Sleep & night support','Usual routine, night checks, comfort, safety and sleep preferences.'],
+  ['social','Relationships & meaningful activity','Important relationships, community, interests, faith and occupation.']
+];
+
 
 const labels = {
   family: ['Family portal', 'Secure family access, updates and messaging will be introduced in a later milestone.'],
-  medication: ['Medication', 'Medication profiles, electronic MAR and administration records will be built here.'],
+  medication: ['Medication', 'Medication profiles and electronic MAR.'],
   visits: ['Visits', 'Live visits, daily notes, outcomes and evidence of care will be managed here.'],
   rota: ['Rota', 'Scheduling, recurring calls, assignments, travel and availability will be managed here.'],
   tasks: ['Tasks', 'Operational tasks, reminders, ownership and escalation will be managed here.'],
@@ -224,7 +239,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.22.1';
+const CORECARE_FALLBACK_VERSION = '1.23.1';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -426,6 +441,9 @@ function showPage(page) {
     activatePage('#rota-page');
     loadRotaBoard();
     return;
+  }
+  if (page === 'medication') {
+    activatePage('#medication-page'); pageKicker.textContent='Care delivery'; pageTitle.textContent='Medication'; loadMedicationModule().catch(showToastError); return;
   }
   if (page === 'visits') {
     activatePage('#visits-page');
@@ -1078,6 +1096,7 @@ function showClientTab(name){
   $$('[data-client-tab]').forEach(b=>b.classList.toggle('active',b.dataset.clientTab===name));
   $$('.client-tab-panel').forEach(p=>p.classList.remove('active-tab-panel'));
   $(`#client-tab-${name}`)?.classList.add('active-tab-panel');
+  if(name==='body-map') loadBodyMap().catch(showToastError);
 }
 async function loadClientWorkspace(id){
   const encoded=encodeURIComponent(id);
@@ -1088,11 +1107,26 @@ async function loadClientWorkspace(id){
 function dueClass(date){return date && new Date(`${date}T23:59:59`)<new Date()?'date-overdue':'';}
 function renderCarePlans(){
  const el=$('#care-plan-list'); if(!el)return;
- el.innerHTML=carePlans.length?carePlans.map(p=>`<article class="record-card"><header><div><p class="eyebrow">Version ${p.version}</p><h3>${escapeHtml(p.title)}</h3></div><span class="badge ${p.status==='Active'?'success':p.status==='Draft'?'active':'neutral'}">${escapeHtml(p.status)}</span></header><div class="record-meta"><span>Review: <strong class="${dueClass(p.reviewDate)}">${formatDate(p.reviewDate)}</strong></span><span>Author: ${escapeHtml(p.authorName||'Not recorded')}</span></div><p>${escapeHtml(p.desiredOutcomes||p.personalDetails||'No plan summary recorded.')}</p><div class="record-actions"><button class="row-action" data-edit-plan="${escapeHtml(p.id)}">Open / edit</button></div></article>`).join(''):'<div class="empty-records">No care plans have been created for this client.</div>';
+ el.innerHTML=carePlans.length?carePlans.map(p=>`<article class="record-card"><header><div><p class="eyebrow">Version ${p.version}</p><h3>${escapeHtml(p.title)}</h3></div><span class="badge ${p.status==='Active'?'success':p.status==='Draft'?'active':'neutral'}">${escapeHtml(p.status)}</span></header><div class="record-meta"><span>Review: <strong class="${dueClass(p.reviewDate)}">${formatDate(p.reviewDate)}</strong></span><span>Author: ${escapeHtml(p.authorName||'Not recorded')}</span></div><p>${escapeHtml(p.planSummary||p.whatMatters||p.desiredOutcomes||'No plan summary recorded.')}</p><div class="care-plan-card-meta"><span>${(p.sections||[]).length} active domains</span><span class="badge ${p.approvalStatus==='approved'?'success':'active'}">${p.approvalStatus==='approved'?'Approved':'Approval pending'}</span></div><div class="record-actions"><button class="row-action" data-edit-plan="${escapeHtml(p.id)}">Open care plan</button></div></article>`).join(''):'<div class="empty-records">No care plans have been created for this client.</div>';
  $$('[data-edit-plan]').forEach(b=>b.addEventListener('click',()=>openCarePlanDialog(b.dataset.editPlan)));
 }
-function openCarePlanDialog(id=''){const form=$('#care-plan-form');form.reset();form.elements.id.value=id;$('#care-plan-error').hidden=true;const item=carePlans.find(x=>x.id===id);$('#care-plan-dialog-title').textContent=id?'Edit care plan':'Add care plan';if(item)Object.entries(item).forEach(([k,v])=>{const f=form.elements.namedItem(k);if(f)f.value=v??'';});$('#care-plan-dialog').showModal();}
-async function saveCarePlan(e){e.preventDefault();const form=e.currentTarget,data=Object.fromEntries(new FormData(form)),error=$('#care-plan-error');error.hidden=true;try{await api(data.id?`/api/care-plans/${encodeURIComponent(data.id)}`:`/api/clients/${encodeURIComponent(selectedClientId)}/care-plans`,{method:data.id?'PUT':'POST',body:JSON.stringify(data)});$('#care-plan-dialog').close();await loadClientWorkspace(selectedClientId);await loadDashboard();}catch(x){error.textContent=x.message;error.hidden=false;}}
+function renderCarePlanDomains(sections=[]){
+  const byCategory=Object.fromEntries((sections||[]).map(section=>[section.category,section]));
+  const list=$('#care-plan-domain-list'); if(!list)return;
+  list.innerHTML=carePlanDomainDefinitions.map(([category,title,description],index)=>{const section=byCategory[category]||{};const enabled=section.enabled!==false;return `<article class="care-plan-domain ${enabled?'enabled':''}" data-care-domain="${category}"><header><label class="care-domain-toggle"><input type="checkbox" data-domain-enabled ${enabled?'checked':''}><span></span></label><button type="button" class="care-domain-heading" data-domain-expand><span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(description)}</small></span><b>${enabled?'Included':'Not included'}</b></button></header><div class="care-domain-fields" ${enabled?'':'hidden'}><div class="form-grid"><label class="wide"><span>Assessed needs</span><textarea data-domain-field="assessedNeeds" rows="3" placeholder="What support is needed, why it is needed and the person's current level of independence.">${escapeHtml(section.assessedNeeds||'')}</textarea></label><label class="wide"><span>Desired outcomes</span><textarea data-domain-field="desiredOutcomes" rows="3" placeholder="What the person wants to achieve, maintain or avoid.">${escapeHtml(section.desiredOutcomes||'')}</textarea></label><label class="wide"><span>Staff support instructions</span><textarea data-domain-field="supportInstructions" rows="5" placeholder="Clear step-by-step guidance: what staff must do, when, how and when to escalate.">${escapeHtml(section.supportInstructions||'')}</textarea></label><label class="wide"><span>Risks and controls</span><textarea data-domain-field="risksControls" rows="3" placeholder="Known risks, preventative controls, warning signs and escalation action.">${escapeHtml(section.risksControls||'')}</textarea></label><label class="wide"><span>Personal preferences</span><textarea data-domain-field="personalPreferences" rows="3" placeholder="Choices, routines, preferred approach and things staff must avoid.">${escapeHtml(section.personalPreferences||'')}</textarea></label><label><span>Domain review date</span><input data-domain-field="reviewDate" type="date" value="${escapeHtml(section.reviewDate||'')}"></label></div></div></article>`}).join('');
+  updateCarePlanProgress();
+}
+function updateCarePlanProgress(){const enabled=$$('#care-plan-domain-list [data-domain-enabled]:checked').length;setText('#care-plan-progress-count',`${enabled} / ${carePlanDomainDefinitions.length}`);}
+function collectCarePlanSections(){return $$('#care-plan-domain-list [data-care-domain]').map((card,index)=>{const value=name=>card.querySelector(`[data-domain-field="${name}"]`)?.value||'';return {category:card.dataset.careDomain,title:card.querySelector('.care-domain-heading strong')?.textContent||card.dataset.careDomain,enabled:card.querySelector('[data-domain-enabled]')?.checked!==false,assessedNeeds:value('assessedNeeds'),desiredOutcomes:value('desiredOutcomes'),supportInstructions:value('supportInstructions'),risksControls:value('risksControls'),personalPreferences:value('personalPreferences'),reviewDate:value('reviewDate'),sortOrder:index};}).filter(section=>section.enabled);}
+function openCarePlanDialog(id=''){
+  const form=$('#care-plan-form');form.reset();form.elements.id.value=id;$('#care-plan-error').hidden=true;const item=carePlans.find(x=>x.id===id);
+  $('#care-plan-dialog-title').textContent=id?'Review structured care plan':'Create structured care plan';
+  if(item)Object.entries(item).forEach(([k,v])=>{const f=form.elements.namedItem(k);if(f&&!Array.isArray(v))f.value=v??'';});
+  else {form.elements.title.value='Comprehensive care and support plan';form.elements.planType.value='Comprehensive care plan';form.elements.authorName.value=currentUser?.displayName||'';const d=new Date();form.elements.effectiveDate.value=d.toISOString().slice(0,10);d.setMonth(d.getMonth()+6);form.elements.reviewDate.value=d.toISOString().slice(0,10);}
+  renderCarePlanDomains(item?.sections||[]);$('#care-plan-dialog').showModal();setTimeout(()=>form.elements.title.focus(),50);
+}
+async function saveCarePlan(e){e.preventDefault();const form=e.currentTarget,data=Object.fromEntries(new FormData(form)),error=$('#care-plan-error');data.sections=collectCarePlanSections();error.hidden=true;if(!data.sections.length){error.textContent='Enable and complete at least one care and support domain.';error.hidden=false;return;}try{await api(data.id?`/api/care-plans/${encodeURIComponent(data.id)}`:`/api/clients/${encodeURIComponent(selectedClientId)}/care-plans`,{method:data.id?'PUT':'POST',body:JSON.stringify(data)});$('#care-plan-dialog').close();await loadClientWorkspace(selectedClientId);await Promise.all([loadDashboard(),loadAllCarePlans().catch(()=>{})]);}catch(x){error.textContent=x.message;error.hidden=false;}}
+
 function renderRisks(){const el=$('#risk-list');if(!el)return;el.innerHTML=clientRisks.length?clientRisks.map(r=>`<article class="record-card risk-${r.severity.toLowerCase()}"><header><div><p class="eyebrow">${escapeHtml(r.category)}</p><h3>${escapeHtml(r.title)}</h3></div><span class="badge ${r.severity==='High'?'danger':r.severity==='Medium'?'active':'success'}">${escapeHtml(r.severity)}</span></header><div class="record-meta"><span>${escapeHtml(r.likelihood)} likelihood</span><span class="${dueClass(r.reviewDate)}">Review ${formatDate(r.reviewDate)}</span><span>${escapeHtml(r.status)}</span></div><p><strong>Controls:</strong> ${escapeHtml(r.controls||'None recorded')}</p><div class="record-actions"><button class="row-action" data-edit-risk="${escapeHtml(r.id)}">Edit</button></div></article>`).join(''):'<div class="empty-records">No risk assessments have been recorded.</div>';$$('[data-edit-risk]').forEach(b=>b.addEventListener('click',()=>openRiskDialog(b.dataset.editRisk)));}
 function openRiskDialog(id=''){const form=$('#risk-form');form.reset();form.elements.id.value=id;$('#risk-error').hidden=true;const item=clientRisks.find(x=>x.id===id);$('#risk-dialog-title').textContent=id?'Edit risk':'Add risk';if(item)Object.entries(item).forEach(([k,v])=>{const f=form.elements.namedItem(k);if(f)f.value=v??'';});$('#risk-dialog').showModal();}
 async function saveRisk(e){e.preventDefault();const data=Object.fromEntries(new FormData(e.currentTarget)),error=$('#risk-error');error.hidden=true;try{await api(data.id?`/api/risks/${encodeURIComponent(data.id)}`:`/api/clients/${encodeURIComponent(selectedClientId)}/risks`,{method:data.id?'PUT':'POST',body:JSON.stringify(data)});$('#risk-dialog').close();await loadClientWorkspace(selectedClientId);await loadDashboard();}catch(x){error.textContent=x.message;error.hidden=false;}}
@@ -1215,6 +1249,8 @@ $('#archive-profile-client').addEventListener('click', archiveSelectedClient);
 
 $$('[data-client-tab]').forEach(button => button.addEventListener('click', () => showClientTab(button.dataset.clientTab)));
 $('#add-care-plan').addEventListener('click', () => openCarePlanDialog());
+document.addEventListener('change',event=>{const toggle=event.target.closest?.('[data-domain-enabled]');if(!toggle)return;const card=toggle.closest('[data-care-domain]'),fields=card.querySelector('.care-domain-fields'),badge=card.querySelector('.care-domain-heading b');card.classList.toggle('enabled',toggle.checked);fields.hidden=!toggle.checked;badge.textContent=toggle.checked?'Included':'Not included';updateCarePlanProgress();});
+document.addEventListener('click',event=>{const heading=event.target.closest?.('[data-domain-expand]');if(heading){const card=heading.closest('[data-care-domain]'),fields=card.querySelector('.care-domain-fields');if(card.querySelector('[data-domain-enabled]').checked)fields.hidden=!fields.hidden;}const jump=event.target.closest?.('[data-plan-jump]');if(jump){event.preventDefault();$('#'+jump.dataset.planJump)?.scrollIntoView({behavior:'smooth',block:'start'});}});
 $('#close-care-plan-dialog').addEventListener('click', () => $('#care-plan-dialog').close());
 $('#cancel-care-plan').addEventListener('click', () => $('#care-plan-dialog').close());
 $('#care-plan-form').addEventListener('submit', saveCarePlan);
@@ -1391,14 +1427,31 @@ function populateBranchSelect(){
 }
 function renderBranches(){
   const list=$('#branch-list'); if(!list)return;
-  list.innerHTML=branches.map(b=>`<article class="record-card"><div class="record-card-heading"><div><p class="eyebrow">${escapeHtml(b.code||'Branch')}</p><h3>${escapeHtml(b.name)}</h3></div><span class="badge ${b.status==='active'?'success':'neutral'}">${escapeHtml(b.status)}</span></div><p>${escapeHtml(b.address||'No address recorded')}</p><small>${escapeHtml(b.phone||'')} ${escapeHtml(b.email||'')}</small></article>`).join('')||'<div class="empty-state"><strong>No branches found</strong></div>';
+  list.innerHTML=branches.map(b=>`<article class="record-card"><div class="record-card-heading"><div><p class="eyebrow">${escapeHtml(b.code||'Branch')}</p><h3>${escapeHtml(b.name)}</h3></div><span class="badge ${b.status==='active'?'success':'neutral'}">${escapeHtml(b.status)}</span></div><p>${escapeHtml(b.address||'No address recorded')}</p><small>${escapeHtml(b.phone||'')} ${escapeHtml(b.email||'')}</small><div class="record-card-actions"><button type="button" class="secondary-button compact" data-edit-branch="${escapeHtml(b.id)}">Edit branch</button></div></article>`).join('')||'<div class="empty-state"><strong>No branches found</strong></div>';
+  $$('[data-edit-branch]').forEach(button=>button.addEventListener('click',()=>openBranchDialog(button.dataset.editBranch)));
 }
 async function loadOrganisations(){const p=await api('/api/platform/organisations');organisations=p.organisations||[];renderOrganisations();}
 function renderOrganisations(){const list=$('#organisation-admin-list');if(!list)return;list.innerHTML=organisations.map(o=>`<article class="record-card"><div class="record-card-heading"><div><p class="eyebrow">${escapeHtml(o.subscription_plan||'development')}</p><h3>${escapeHtml(o.name)}</h3></div><span class="badge ${o.status==='active'?'success':'danger'}">${escapeHtml(o.status)}</span></div><p>${o.branch_count||0} branches · ${o.user_count||0} users · ${o.client_count||0} clients</p><button class="secondary-button" data-switch-org="${escapeHtml(o.id)}">Open organisation</button></article>`).join('');$$('[data-switch-org]').forEach(b=>b.addEventListener('click',async()=>{if(!confirm('Switch your support view to this organisation?'))return;await api('/api/platform/switch-organisation',{method:'POST',body:JSON.stringify({organisationId:b.dataset.switchOrg})});location.reload();}));}
 const branchDialog=$('#branch-dialog'),branchForm=$('#branch-form'),organisationDialog=$('#organisation-dialog'),organisationAdminForm=$('#organisation-admin-form');
-$('#add-branch')?.addEventListener('click',()=>{branchForm.reset();$('#branch-form-error').hidden=true;branchDialog.showModal();});
+function openBranchDialog(branchId=''){
+  if(!branchForm||!branchDialog)return;
+  branchForm.reset();
+  $('#branch-form-error').hidden=true;
+  const branch=branches.find(item=>item.id===branchId);
+  branchForm.elements.id.value=branch?.id||'';
+  branchForm.elements.name.value=branch?.name||'';
+  branchForm.elements.code.value=branch?.code||'';
+  branchForm.elements.address.value=branch?.address||'';
+  branchForm.elements.phone.value=branch?.phone||'';
+  branchForm.elements.email.value=branch?.email||'';
+  branchForm.elements.status.value=branch?.status||'active';
+  $('#branch-dialog-title').textContent=branch?'Edit branch':'Add branch';
+  $('#branch-submit').textContent=branch?'Save changes':'Create branch';
+  branchDialog.showModal();
+}
+$('#add-branch')?.addEventListener('click',()=>openBranchDialog());
 $('#close-branch-dialog')?.addEventListener('click',()=>branchDialog.close());$('#cancel-branch')?.addEventListener('click',()=>branchDialog.close());
-branchForm?.addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/branches',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(branchForm)))});branchDialog.close();const p=await api('/api/branches');branches=p.branches||[];renderBranches();populateBranchSelect();}catch(x){$('#branch-form-error').textContent=x.message;$('#branch-form-error').hidden=false;}});
+branchForm?.addEventListener('submit',async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(branchForm)),id=data.id;delete data.id;try{await api(id?`/api/branches/${encodeURIComponent(id)}`:'/api/branches',{method:id?'PUT':'POST',body:JSON.stringify(data)});branchDialog.close();const p=await api('/api/branches');branches=p.branches||[];renderBranches();populateBranchSelect();}catch(x){$('#branch-form-error').textContent=x.message;$('#branch-form-error').hidden=false;}});
 $('#add-organisation')?.addEventListener('click',()=>{organisationAdminForm.reset();$('#organisation-admin-error').hidden=true;organisationDialog.showModal();});
 $('#close-organisation-dialog')?.addEventListener('click',()=>organisationDialog.close());$('#cancel-organisation')?.addEventListener('click',()=>organisationDialog.close());
 organisationAdminForm?.addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/platform/organisations',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(organisationAdminForm)))});organisationDialog.close();await loadOrganisations();}catch(x){$('#organisation-admin-error').textContent=x.message;$('#organisation-admin-error').hidden=false;}});
@@ -1954,3 +2007,30 @@ async function openVisitCareRecord(visitId){
 $('#visit-record-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=e.currentTarget,err=$('#visit-record-error');err.hidden=true;const fd=new FormData(f),tasks=[...f.querySelectorAll('input[name="task"]:checked')].map(x=>({key:x.value,label:x.dataset.label,status:'completed'}));const medication=[{name:fd.get('medicationName'),outcome:fd.get('medicationOutcome'),reason:fd.get('medicationReason')}];const payload=Object.fromEntries(fd);payload.tasks=tasks;payload.medication=medication;payload.followUpRequired=f.followUpRequired.checked;payload.incidentRequired=f.incidentRequired.checked;payload.completeVisit=true;try{await api(`/api/visits/${encodeURIComponent(fd.get('visitId'))}/care-record`,{method:'POST',body:JSON.stringify(payload)});$('#visit-record-dialog')?.close();if(['carer','senior_carer'].includes(currentUser?.accessLevel))await loadCarerDashboard();else await loadVisitsBoardNoSync();}catch(ex){err.textContent=ex.message;err.hidden=false;}});
 
 $('#carer-refresh')?.addEventListener('click',()=>loadCarerDashboard().catch(showToastError));$('#carer-open-clock')?.addEventListener('click',()=>$('#visit-clock-dialog')?.showModal());
+
+
+let medicationData={medications:[],administrations:[]};
+let bodyMapData={records:[]};
+function populateMedicationClients(){const el=$('#medication-client');if(!el)return;const chosen=el.value;el.innerHTML='<option value="">Choose a client</option>'+clients.filter(x=>x.status!=='Archived').map(x=>`<option value="${escapeHtml(x.id)}">${escapeHtml(x.first_name+' '+x.last_name)}</option>`).join('');if(chosen)el.value=chosen;}
+async function loadMedicationModule(){if(!clients.length)await loadClients();populateMedicationClients();const id=$('#medication-client')?.value;if(id)await loadMedicationForClient(id);else renderMedication();}
+async function loadMedicationForClient(clientId){medicationData=await api('/api/medication?clientId='+encodeURIComponent(clientId));renderMedication();}
+function renderMedication(){const list=$('#medication-list'),mar=$('#mar-list'),summary=$('#medication-summary');if(!list)return;const meds=medicationData.medications||[],entries=medicationData.administrations||[];if(summary)summary.innerHTML=[['Active medicines',meds.filter(x=>x.status==='active').length],['PRN medicines',meds.filter(x=>x.is_prn).length],['MAR entries',entries.length],['Low stock',meds.filter(x=>x.stock_quantity!==null&&Number(x.stock_quantity)<=5).length]].map(x=>`<article><span>${x[0]}</span><strong>${x[1]}</strong></article>`).join('');list.innerHTML=meds.length?meds.map(m=>`<article class="record-card medication-card"><div class="record-card-heading"><div><span class="badge ${m.status==='active'?'active':'neutral'}">${escapeHtml(m.status)}</span><h3>${escapeHtml(m.name)} ${escapeHtml(m.strength||'')}</h3></div><span class="badge ${m.is_prn?'warning':'neutral'}">${m.is_prn?'PRN':'Regular'}</span></div><p><strong>${escapeHtml(m.dose)}</strong> · ${escapeHtml(m.route||'Route not recorded')}</p><p class="muted">${escapeHtml((m.scheduledTimes||[]).join(', ')||m.frequency||'No schedule recorded')}</p><p>${escapeHtml(m.instructions||'')}</p><p><b>Stock:</b> ${m.stock_quantity===null?'Not tracked':escapeHtml(String(m.stock_quantity))+' '+escapeHtml(m.stock_unit||'')}</p>${m.is_prn&&m.prn_protocol?`<div class="notice-banner small-notice"><div><strong>PRN protocol</strong><span>${escapeHtml(m.prn_protocol)}</span></div></div>`:''}<div class="record-actions"><button class="primary-button compact" data-administer-medication="${escapeHtml(m.id)}">Record administration</button><button class="secondary-button compact" data-edit-medication="${escapeHtml(m.id)}">Edit</button></div></article>`).join(''):'<p class="muted">No medications recorded for this client.</p>';mar.innerHTML=entries.length?entries.map(e=>`<div class="mar-entry"><div><strong>${escapeHtml(e.medication_name)}</strong><small>${new Date(e.administered_at).toLocaleString('en-GB')}</small></div><div><span class="mar-outcome">${escapeHtml(e.outcome)}</span><small>${escapeHtml(e.reason||e.notes||'No additional notes')}</small></div><div><small>${escapeHtml(e.recorded_by_name||'Recorded user')}</small></div></div>`).join(''):'<p class="muted">No MAR entries recorded.</p>';$$('[data-administer-medication]').forEach(b=>b.onclick=()=>openAdministration(b.dataset.administerMedication));$$('[data-edit-medication]').forEach(b=>b.onclick=()=>openMedicationDialog(meds.find(x=>x.id===b.dataset.editMedication)));}
+function openMedicationDialog(m=null){const clientId=$('#medication-client')?.value;if(!clientId)return showToastError(new Error('Choose a client first.'));const f=$('#medication-form');f.reset();f.elements.id.value=m?.id||'';for(const k of ['name','strength','form','route','dose','frequency','startDate','endDate','stockQuantity','stockUnit','status','instructions','prnProtocol','minIntervalMinutes','maxDose24h'])if(f.elements[k]&&m)f.elements[k].value=m[k.replace(/[A-Z]/g,x=>'_'+x.toLowerCase())]??m[k]??'';f.elements.scheduledTimes.value=(m?.scheduledTimes||[]).join(', ');f.elements.isPrn.checked=!!m?.is_prn;$('#medication-dialog').showModal();}
+function openAdministration(id){const m=(medicationData.medications||[]).find(x=>x.id===id),f=$('#administration-form');f.reset();f.elements.medicationId.value=id;f.elements.doseGiven.value=m?.dose||'';f.elements.administeredAt.value=new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);$('#administration-title').textContent='Record '+(m?.name||'medication');$('#administration-dialog').showModal();}
+async function loadBodyMap(){if(!selectedClientId)return;bodyMapData=await api('/api/body-map?clientId='+encodeURIComponent(selectedClientId));renderBodyMap();}
+function renderBodyMap(){const list=$('#body-map-list'),canvas=$('#body-map-canvas');if(!list||!canvas)return;canvas.querySelectorAll('.body-marker').forEach(x=>x.remove());const current=canvas.dataset.view||'front',records=bodyMapData.records||[];records.filter(x=>x.view===current).forEach((r,i)=>{const b=document.createElement('button');b.className='body-marker';b.style.left=r.x_percent+'%';b.style.top=r.y_percent+'%';b.title=r.concern_type+': '+r.body_location;b.textContent=String(i+1);b.onclick=e=>{e.stopPropagation();openBodyMapUpdate(r.id)};canvas.appendChild(b)});list.innerHTML=records.length?records.map(r=>`<article class="record-card body-map-record" data-severity="${escapeHtml(r.severity)}"><div class="record-card-heading"><div><span class="badge ${r.status==='resolved'?'active':r.severity==='high'||r.severity==='critical'?'danger':'warning'}">${escapeHtml(r.status)}</span><h3>${escapeHtml(r.concern_type)} · ${escapeHtml(r.body_location||r.view)}</h3></div><span>${new Date(r.first_observed_at).toLocaleDateString('en-GB')}</span></div><p>${escapeHtml(r.description)}</p><p class="muted">${escapeHtml(r.size||'Size not recorded')} · ${escapeHtml(r.appearance||'Appearance not recorded')}</p><p><b>Action:</b> ${escapeHtml(r.action_taken||'None recorded')}</p><button class="secondary-button compact" data-body-update="${escapeHtml(r.id)}">Add progress update</button></article>`).join(''):'<p class="muted">No body-map concerns recorded.</p>';$$('[data-body-update]').forEach(b=>b.onclick=()=>openBodyMapUpdate(b.dataset.bodyUpdate));}
+function openBodyMapAt(x=50,y=50){if(!selectedClientId)return;const f=$('#body-map-form');f.reset();f.elements.view.value=$('#body-map-canvas')?.dataset.view||'front';f.elements.xPercent.value=x;f.elements.yPercent.value=y;$('#body-map-dialog').showModal();}
+function openBodyMapUpdate(id){const f=$('#body-map-update-form');f.reset();f.elements.recordId.value=id;$('#body-map-update-dialog').showModal();}
+
+
+
+$('#medication-client')?.addEventListener('change',e=>e.target.value?loadMedicationForClient(e.target.value).catch(showToastError):(medicationData={medications:[],administrations:[]},renderMedication()));
+$('#add-medication')?.addEventListener('click',()=>openMedicationDialog());
+$('#medication-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=e.currentTarget,d=Object.fromEntries(new FormData(f));d.clientId=$('#medication-client').value;d.isPrn=f.elements.isPrn.checked;d.scheduledTimes=d.scheduledTimes.split(',').map(x=>x.trim()).filter(Boolean);try{await api('/api/medication',{method:'POST',body:JSON.stringify(d)});$('#medication-dialog').close();await loadMedicationForClient(d.clientId);}catch(err){const el=$('#medication-error');el.textContent=err.message;el.hidden=false;}});
+$('#administration-form')?.addEventListener('submit',async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.currentTarget));try{await api('/api/medication/'+encodeURIComponent(d.medicationId)+'/administer',{method:'POST',body:JSON.stringify(d)});$('#administration-dialog').close();await loadMedicationForClient($('#medication-client').value);}catch(err){const el=$('#administration-error');el.textContent=err.message;el.hidden=false;}});
+$('#add-body-map')?.addEventListener('click',()=>openBodyMapAt());
+$('#body-map-canvas')?.addEventListener('click',e=>{const r=e.currentTarget.getBoundingClientRect();openBodyMapAt(Math.round((e.clientX-r.left)/r.width*1000)/10,Math.round((e.clientY-r.top)/r.height*1000)/10)});
+$$('[data-body-view]').forEach(b=>b.addEventListener('click',()=>{$$('[data-body-view]').forEach(x=>x.classList.toggle('active',x===b));$('#body-map-canvas').dataset.view=b.dataset.bodyView;renderBodyMap()}));
+$('#body-map-form')?.addEventListener('submit',async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.currentTarget));d.clientId=selectedClientId;try{await api('/api/body-map',{method:'POST',body:JSON.stringify(d)});$('#body-map-dialog').close();await loadBodyMap();}catch(err){const el=$('#body-map-error');el.textContent=err.message;el.hidden=false;}});
+$('#body-map-update-form')?.addEventListener('submit',async e=>{e.preventDefault();const d=Object.fromEntries(new FormData(e.currentTarget));try{await api('/api/body-map/'+encodeURIComponent(d.recordId)+'/update',{method:'POST',body:JSON.stringify(d)});$('#body-map-update-dialog').close();await loadBodyMap();}catch(err){const el=$('#body-map-update-error');el.textContent=err.message;el.hidden=false;}});
+$$('[data-close-dialog]').forEach(b=>b.addEventListener('click',()=>document.getElementById(b.dataset.closeDialog)?.close()));
