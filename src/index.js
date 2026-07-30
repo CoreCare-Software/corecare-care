@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.19.0 — Care Delivery Visit Workflow */
-const VERSION = "1.19.0";
+/** CoreCare Enterprise 1.19.3 — Allocated Carer Visit Controls */
+const VERSION = "1.19.3";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.19.0 — Care Delivery Visit Workflow" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.19.3 — Allocated Carer Visit Controls" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -745,7 +745,7 @@ async function recalculateRouting(request,env,session){
 async function visitsBoard(db, session) {
   const org=session.organisation_id;
   const [visits,clients,staff,codes]=await Promise.all([
-    db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,s.first_name||' '||s.last_name staff_name FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN staff s ON s.id=v.staff_id AND s.organisation_id=v.organisation_id WHERE v.organisation_id=? AND date(v.scheduled_start)=date('now') ORDER BY v.scheduled_start`).bind(org).all(),
+    db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,s.first_name||' '||s.last_name staff_name,EXISTS(SELECT 1 FROM visit_care_records r WHERE r.organisation_id=v.organisation_id AND r.visit_id=v.id) has_care_record FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN staff s ON s.id=v.staff_id AND s.organisation_id=v.organisation_id WHERE v.organisation_id=? AND date(v.scheduled_start)=date('now') ORDER BY v.scheduled_start`).bind(org).all(),
     db.prepare(`SELECT id,first_name,last_name,preferred_name FROM clients WHERE organisation_id=? AND archived_at IS NULL ORDER BY first_name,last_name`).bind(org).all(),
     db.prepare(`SELECT id,first_name,last_name,preferred_name,job_title FROM staff WHERE organisation_id=? AND status='Active' ORDER BY first_name,last_name`).bind(org).all(),
     db.prepare(`SELECT client_id,code FROM client_visit_codes WHERE organisation_id=? AND active=1`).bind(org).all()
@@ -764,12 +764,19 @@ async function getVisitCareRecord(db,session,visitId){
     db.prepare(`SELECT * FROM visit_task_records WHERE organisation_id=? AND visit_id=? ORDER BY recorded_at`).bind(session.organisation_id,visitId).all(),
     db.prepare(`SELECT * FROM visit_medication_records WHERE organisation_id=? AND visit_id=? ORDER BY recorded_at`).bind(session.organisation_id,visitId).all()
   ]);
-  return json({visit,record:record||null,tasks:tasks.results||[],medication:medication.results||[]});
+  const canAmend=await userHasPermission(db,session,'visits.override');
+  return json({visit,record:record||null,tasks:tasks.results||[],medication:medication.results||[],locked:Boolean(record),canAmend});
 }
 async function saveVisitCareRecord(request,db,session,visitId){
   const i=await readJson(request),visit=await db.prepare(`SELECT * FROM care_visits WHERE id=? AND organisation_id=?`).bind(visitId,session.organisation_id).first();
   if(!visit)return notFound('Visit');
-  if(!['in_progress','completed'].includes(visit.status))return json({error:{code:'VISIT_NOT_STARTED',message:'Clock into the visit before recording care delivery.'}},409);
+  const canOverride=await userHasPermission(db,session,'visits.override');
+  if(visit.staff_id&&session.staff_id&&visit.staff_id!==session.staff_id&&!canOverride)return json({error:{code:'VISIT_ALLOCATED_TO_ANOTHER_CARER',message:'This visit is allocated to another care worker.'}},403);
+  if(!session.staff_id&&!canOverride)return json({error:{code:'CARER_PROFILE_REQUIRED',message:'Your user account is not linked to a care worker profile.'}},403);
+  const existing=await db.prepare(`SELECT id FROM visit_care_records WHERE organisation_id=? AND visit_id=?`).bind(session.organisation_id,visitId).first();
+  const amendmentReason=clean(i.amendmentReason);
+  if(existing&&(!canOverride||!amendmentReason))return json({error:{code:'CARE_RECORD_LOCKED',message:canOverride?'Completed care records are locked. Enter an amendment reason to make a manager correction.':'This completed care record is read-only.'}},409);
+  if(!existing&&visit.status!=='in_progress')return json({error:{code:'VISIT_NOT_STARTED',message:'Clock into the visit before recording care delivery.'}},409);
   const notes=clean(i.careNotes);if(!notes)return json({error:{code:'VALIDATION_ERROR',message:'Enter the care notes before completing the visit.'}},400);
   const recordId=crypto.randomUUID(),tasks=Array.isArray(i.tasks)?i.tasks:[],meds=Array.isArray(i.medication)?i.medication:[],statements=[];
   statements.push(db.prepare(`INSERT INTO visit_care_records(id,organisation_id,visit_id,client_id,staff_id,mood,wellbeing,care_notes,fluid_intake_ml,nutrition,toileting,mobility_support,skin_observation,body_map_notes,follow_up_required,follow_up_notes,completed_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(organisation_id,visit_id) DO UPDATE SET mood=excluded.mood,wellbeing=excluded.wellbeing,care_notes=excluded.care_notes,fluid_intake_ml=excluded.fluid_intake_ml,nutrition=excluded.nutrition,toileting=excluded.toileting,mobility_support=excluded.mobility_support,skin_observation=excluded.skin_observation,body_map_notes=excluded.body_map_notes,follow_up_required=excluded.follow_up_required,follow_up_notes=excluded.follow_up_notes,completed_by=excluded.completed_by,completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP`).bind(recordId,session.organisation_id,visitId,visit.client_id,visit.staff_id||session.staff_id||null,clean(i.mood)||'not_recorded',clean(i.wellbeing)||'no_change',notes,Math.max(0,Number(i.fluidIntakeMl)||0),clean(i.nutrition)||'not_recorded',clean(i.toileting)||'not_recorded',clean(i.mobilitySupport),clean(i.skinObservation),clean(i.bodyMapNotes),i.followUpRequired?1:0,clean(i.followUpNotes),session.user_id));
@@ -777,19 +784,42 @@ async function saveVisitCareRecord(request,db,session,visitId){
   for(const task of tasks){if(!clean(task.key)||!clean(task.label))continue;statements.push(db.prepare(`INSERT INTO visit_task_records(id,organisation_id,visit_id,task_key,task_label,status,notes,recorded_by) VALUES(?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,visitId,clean(task.key),clean(task.label),clean(task.status)||'completed',clean(task.notes),session.user_id));}
   statements.push(db.prepare(`DELETE FROM visit_medication_records WHERE organisation_id=? AND visit_id=?`).bind(session.organisation_id,visitId));
   for(const med of meds){if(!clean(med.outcome)||clean(med.outcome)==='not_required')continue;statements.push(db.prepare(`INSERT INTO visit_medication_records(id,organisation_id,visit_id,client_id,medication_name,outcome,reason,signature_name,recorded_by) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,visitId,visit.client_id,clean(med.name)||'Scheduled medication',clean(med.outcome),clean(med.reason),clean(med.signatureName)||clean(session.display_name)||'CoreCare user',session.user_id));}
-  const complete=i.completeVisit!==false;
-  if(complete)statements.push(db.prepare(`UPDATE care_visits SET status='completed',actual_end=COALESCE(actual_end,CURRENT_TIMESTAMP),notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(notes,visitId,session.organisation_id));
-  if(i.followUpRequired)statements.push(db.prepare(`INSERT INTO operations_tasks(id,organisation_id,client_id,title,description,priority,status,due_at,created_by) VALUES(?,?,?,?,?,'high','open',datetime('now','+1 day'),?)`).bind(crypto.randomUUID(),session.organisation_id,visit.client_id,'Care visit follow-up',clean(i.followUpNotes)||'Review follow-up raised from the care visit.',session.user_id));
-  if(i.incidentRequired&&clean(i.incidentTitle))statements.push(db.prepare(`INSERT INTO operations_incidents(id,organisation_id,client_id,title,description,severity,status,reported_by) VALUES(?,?,?,?,?,?, 'open',?)`).bind(crypto.randomUUID(),session.organisation_id,visit.client_id,clean(i.incidentTitle),clean(i.incidentDetails),clean(i.incidentSeverity)||'medium',session.user_id));
-  statements.push(auditStatement(db,session.organisation_id,session.user_id,'care_delivery.visit_recorded','visit',visitId,{tasks:tasks.length,medication:meds.length,followUp:Boolean(i.followUpRequired),incident:Boolean(i.incidentRequired),completed:complete}));
-  await db.batch(statements);return json({ok:true,visitId,status:complete?'completed':visit.status});
+  if(i.followUpRequired&&!existing)statements.push(db.prepare(`INSERT INTO operations_tasks(id,organisation_id,client_id,title,description,priority,status,due_at,created_by) VALUES(?,?,?,?,?,'high','open',datetime('now','+1 day'),?)`).bind(crypto.randomUUID(),session.organisation_id,visit.client_id,'Care visit follow-up',clean(i.followUpNotes)||'Review follow-up raised from the care visit.',session.user_id));
+  if(i.incidentRequired&&clean(i.incidentTitle)&&!existing)statements.push(db.prepare(`INSERT INTO operations_incidents(id,organisation_id,client_id,title,description,severity,status,reported_by) VALUES(?,?,?,?,?,?, 'open',?)`).bind(crypto.randomUUID(),session.organisation_id,visit.client_id,clean(i.incidentTitle),clean(i.incidentDetails),clean(i.incidentSeverity)||'medium',session.user_id));
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,existing?'care_delivery.record_amended':'care_delivery.visit_recorded','visit',visitId,{tasks:tasks.length,medication:meds.length,followUp:Boolean(i.followUpRequired),incident:Boolean(i.incidentRequired),amendmentReason:existing?amendmentReason:null}));
+  await db.batch(statements);return json({ok:true,visitId,status:visit.status,recordLocked:true,amended:Boolean(existing)});
 }
 async function ensureClientVisitCode(request,db,session){const i=await readJson(request),clientId=clean(i.clientId);if(!clientId)return json({error:{code:'VALIDATION_ERROR',message:'Select a client.'}},400);const client=await db.prepare('SELECT id FROM clients WHERE id=? AND organisation_id=? AND archived_at IS NULL').bind(clientId,session.organisation_id).first();if(!client)return notFound('Client');let row=await db.prepare('SELECT code FROM client_visit_codes WHERE organisation_id=? AND client_id=? AND active=1').bind(session.organisation_id,clientId).first();if(!row){const code='CC-'+crypto.randomUUID().replaceAll('-','').slice(0,20).toUpperCase();await db.prepare('INSERT INTO client_visit_codes(id,organisation_id,client_id,code,created_by) VALUES(?,?,?,?,?)').bind(crypto.randomUUID(),session.organisation_id,clientId,code,session.user_id).run();row={code};}return json({ok:true,code:row.code});}
-async function syncVisitEvents(request,db,session){const i=await readJson(request),events=Array.isArray(i.events)?i.events:[];const results=[];for(const event of events){const eventId=clean(event.eventId),code=clean(event.code),type=clean(event.type),deviceTime=clean(event.deviceTime);if(!eventId||!code||!['clock_in','clock_out'].includes(type)||!deviceTime){results.push({eventId,ok:false,error:'Invalid event'});continue;}const existing=await db.prepare('SELECT id FROM visit_events WHERE device_event_id=? AND organisation_id=?').bind(eventId,session.organisation_id).first();if(existing){results.push({eventId,ok:true,duplicate:true});continue;}const clientCode=await db.prepare('SELECT client_id FROM client_visit_codes WHERE organisation_id=? AND code=? AND active=1').bind(session.organisation_id,code).first();if(!clientCode){results.push({eventId,ok:false,error:'Invalid or inactive client code'});continue;}const staffFilter=session.staff_id?`AND (staff_id IS NULL OR staff_id=?)`:'';
-const visitSql=`SELECT id,status,staff_id FROM care_visits WHERE organisation_id=? AND client_id=? ${staffFilter} AND date(scheduled_start)=date(?) AND status IN ('scheduled','in_progress') ORDER BY CASE WHEN status='in_progress' THEN 0 ELSE 1 END, CASE WHEN staff_id IS NOT NULL THEN 0 ELSE 1 END, ABS(strftime('%s',scheduled_start)-strftime('%s',?)) LIMIT 1`;
-let visit=session.staff_id
-  ?await db.prepare(visitSql).bind(session.organisation_id,clientCode.client_id,session.staff_id,deviceTime,deviceTime).first()
-  :await db.prepare(visitSql).bind(session.organisation_id,clientCode.client_id,deviceTime,deviceTime).first();if(!visit){results.push({eventId,ok:false,error:'No matching visit found'});continue;}if(type==='clock_in'&&visit.status!=='scheduled'){results.push({eventId,ok:true,duplicate:true});continue;}if(type==='clock_out'&&visit.status!=='in_progress'){results.push({eventId,ok:false,error:'Visit is not clocked in'});continue;}const source=clean(event.source)||'online';const update=type==='clock_in'?db.prepare(`UPDATE care_visits SET status='in_progress',actual_start=?,clock_in_method='qr',clock_in_device_time=?,clock_in_received_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(deviceTime,deviceTime,visit.id,session.organisation_id):db.prepare(`UPDATE care_visits SET status='completed',actual_end=?,clock_out_method='qr',clock_out_device_time=?,clock_out_received_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(deviceTime,deviceTime,visit.id,session.organisation_id);await db.batch([update,db.prepare(`INSERT INTO visit_events(id,organisation_id,visit_id,event_type,device_event_id,device_time,source,payload_json,created_by) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,visit.id,type,eventId,deviceTime,source,JSON.stringify(event),session.user_id),auditStatement(db,session.organisation_id,session.user_id,`visits.${type}`,'visit',visit.id,{deviceTime,source})]);results.push({eventId,ok:true,visitId:visit.id});}return json({ok:true,results,receivedAt:new Date().toISOString()});}
+async function syncVisitEvents(request,db,session){
+  const i=await readJson(request),events=Array.isArray(i.events)?i.events:[],results=[],canOverride=await userHasPermission(db,session,'visits.override');
+  for(const event of events){
+    const eventId=clean(event.eventId),code=clean(event.code),type=clean(event.type),deviceTime=clean(event.deviceTime),requestedVisitId=clean(event.visitId);
+    if(!eventId||!code||!['clock_in','clock_out'].includes(type)||!deviceTime){results.push({eventId,ok:false,error:'Invalid event'});continue;}
+    const existing=await db.prepare('SELECT id FROM visit_events WHERE device_event_id=? AND organisation_id=?').bind(eventId,session.organisation_id).first();if(existing){results.push({eventId,ok:true,duplicate:true});continue;}
+    const clientCode=await db.prepare('SELECT client_id FROM client_visit_codes WHERE organisation_id=? AND code=? AND active=1').bind(session.organisation_id,code).first();if(!clientCode){results.push({eventId,ok:false,error:'Invalid or inactive client code'});continue;}
+    if(!session.staff_id&&!canOverride){results.push({eventId,ok:false,error:'Your user account is not linked to a care worker profile'});continue;}
+    let visit=null;
+    if(requestedVisitId&&canOverride){visit=await db.prepare(`SELECT id,status,staff_id,client_id FROM care_visits WHERE id=? AND organisation_id=? AND client_id=?`).bind(requestedVisitId,session.organisation_id,clientCode.client_id).first();}
+    else if(session.staff_id&&type==='clock_out'){visit=await db.prepare(`SELECT id,status,staff_id,client_id FROM care_visits WHERE organisation_id=? AND client_id=? AND staff_id=? AND status='in_progress' ORDER BY actual_start DESC LIMIT 1`).bind(session.organisation_id,clientCode.client_id,session.staff_id).first();}
+    else if(session.staff_id){visit=await db.prepare(`SELECT id,status,staff_id,client_id FROM care_visits WHERE organisation_id=? AND client_id=? AND staff_id=? AND date(scheduled_start)=date(?) AND status='scheduled' ORDER BY ABS(strftime('%s',scheduled_start)-strftime('%s',?)) LIMIT 1`).bind(session.organisation_id,clientCode.client_id,session.staff_id,deviceTime,deviceTime).first();}
+    if(!visit){const allocated=await db.prepare(`SELECT s.first_name||' '||s.last_name staff_name FROM care_visits v LEFT JOIN staff s ON s.id=v.staff_id AND s.organisation_id=v.organisation_id WHERE v.organisation_id=? AND v.client_id=? AND date(v.scheduled_start)=date(?) AND v.status IN ('scheduled','in_progress') ORDER BY ABS(strftime('%s',v.scheduled_start)-strftime('%s',?)) LIMIT 1`).bind(session.organisation_id,clientCode.client_id,deviceTime,deviceTime).first();results.push({eventId,ok:false,error:allocated?.staff_name?`This visit is allocated to ${allocated.staff_name}.`:'No matching visit allocated to you was found'});continue;}
+    if(visit.staff_id&&session.staff_id&&visit.staff_id!==session.staff_id&&!canOverride){results.push({eventId,ok:false,error:'This visit is allocated to another care worker'});continue;}
+    if(type==='clock_in'){
+      const active=await db.prepare(`SELECT id FROM care_visits WHERE organisation_id=? AND staff_id=? AND status='in_progress' AND id!=? LIMIT 1`).bind(session.organisation_id,visit.staff_id||session.staff_id,visit.id).first();
+      if(active){results.push({eventId,ok:false,error:'You already have another visit in progress. Clock out before starting the next visit.'});continue;}
+      if(visit.status!=='scheduled'){results.push({eventId,ok:false,error:'This visit cannot be clocked in from its current status'});continue;}
+    }else{
+      if(visit.status!=='in_progress'){results.push({eventId,ok:false,error:'Visit is not clocked in'});continue;}
+      const record=await db.prepare(`SELECT id FROM visit_care_records WHERE organisation_id=? AND visit_id=?`).bind(session.organisation_id,visit.id).first();
+      if(!record){results.push({eventId,ok:false,error:'Complete and save the care record before clocking out'});continue;}
+    }
+    const source=clean(event.source)||'online';
+    const update=type==='clock_in'?db.prepare(`UPDATE care_visits SET status='in_progress',actual_start=?,clock_in_method='qr',clock_in_device_time=?,clock_in_received_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(deviceTime,deviceTime,visit.id,session.organisation_id):db.prepare(`UPDATE care_visits SET status='completed',actual_end=?,clock_out_method='qr',clock_out_device_time=?,clock_out_received_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(deviceTime,deviceTime,visit.id,session.organisation_id);
+    await db.batch([update,db.prepare(`INSERT INTO visit_events(id,organisation_id,visit_id,event_type,device_event_id,device_time,source,payload_json,created_by) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,visit.id,type,eventId,deviceTime,source,JSON.stringify(event),session.user_id),auditStatement(db,session.organisation_id,session.user_id,`visits.${type}`,'visit',visit.id,{deviceTime,source,override:Boolean(requestedVisitId&&canOverride)})]);
+    results.push({eventId,ok:true,visitId:visit.id,status:type==='clock_in'?'in_progress':'completed'});
+  }
+  return json({ok:true,results,receivedAt:new Date().toISOString()});
+}
 
 async function operationsBoard(db, session) {
   const org=session.organisation_id;
