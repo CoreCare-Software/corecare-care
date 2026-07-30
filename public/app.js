@@ -120,7 +120,7 @@ function updateIdentity() {
   document.body.classList.toggle('platform-workspace', platformWorkspace);
 }
 
-const CORECARE_FALLBACK_VERSION = '1.19.5';
+const CORECARE_FALLBACK_VERSION = '1.19.6';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -237,10 +237,19 @@ async function showApplication(user) {
 }
 
 
+function isPlatformWorkspace(){
+  return Boolean(currentUser?.isPlatformUser && !currentUser?.supportMode);
+}
+
 function applyAccessVisibility(){
   if(!currentUser)return;
   const modules=currentUser.modules||{};
-  $$('.organisation-workspace-nav[data-page]').forEach(button=>{const page=button.dataset.page;button.hidden=!currentUser.isPlatformUser&&modules[page]!==true;});
+  const platformWorkspace=isPlatformWorkspace();
+  $$('.organisation-workspace-nav').forEach(node=>{
+    const page=node.dataset?.page;
+    node.hidden=platformWorkspace || Boolean(page && modules[page]!==true);
+  });
+  $$('.organisation-workspace-action').forEach(node=>{node.hidden=platformWorkspace;});
   const visibility={
     '#add-client':'clients.create','#add-staff':'staff.create','#edit-profile-client':'clients.edit','#archive-profile-client':'clients.archive'
   };
@@ -280,6 +289,11 @@ function activatePage(id) {
 }
 
 function showPage(page) {
+  if(isPlatformWorkspace() && page!=='platform'){
+    showToastError(new Error('Open an organisation through an authorised support session before accessing organisation records.'));
+    showPage('platform');
+    return;
+  }
   if(page!=='platform'&&page!=='client-profile'&&!canOpenPage(page)){denyPage();return;}
   selectedClientId = page === 'client-profile' ? selectedClientId : null;
   if (page === 'platform') {

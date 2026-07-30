@@ -1,5 +1,5 @@
 /** CoreCare Enterprise 1.19.5 — Permission Enforcement */
-const VERSION = "1.19.5";
+const VERSION = "1.19.6";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
