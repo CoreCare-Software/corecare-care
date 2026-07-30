@@ -330,14 +330,9 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:none;box-s
 .scheduler-lane,.unallocated-drop-lane{background-image:linear-gradient(90deg,rgba(250,220,135,.10) 0 37.5%,rgba(80,170,145,.06) 37.5% 75%,rgba(96,110,170,.07) 75% 100%),linear-gradient(to right,rgba(178,203,197,.52) 1px,transparent 1px)!important;background-size:100% 100%,var(--hour-width) 100%!important}
 @media(max-width:900px){.planner-saved-view{width:100%;margin-left:0}.staff-mini-metrics{display:none}}
 
-/* CoreCare 1.16.3 Visit Card Readability */
-.scheduler-visit,.unallocated-timeline-visit{overflow:visible;isolation:isolate}
-.scheduler-visit:hover,.unallocated-timeline-visit:hover,.scheduler-visit.is-selected{z-index:40!important;box-shadow:0 8px 22px rgba(20,65,56,.24)}
-.scheduler-visit .visit-client-name,.unallocated-timeline-visit .visit-client-name{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;line-height:1.05;font-size:.78rem;font-weight:900;color:#102f29;white-space:normal;overflow-wrap:anywhere;margin-top:1px}
-.scheduler-visit .visit-card-meta,.unallocated-timeline-visit .visit-card-meta{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.61rem!important;color:var(--muted);margin-top:2px}
-.visit-hover-card{display:none;position:absolute;left:50%;bottom:calc(100% + 10px);transform:translateX(-50%);width:230px;padding:12px;border:1px solid var(--border);border-radius:12px;background:#fff;color:var(--text);box-shadow:0 12px 32px rgba(12,46,39,.22);z-index:100;pointer-events:none;text-align:left;line-height:1.3}
-.visit-hover-card:after{content:'';position:absolute;left:50%;top:100%;transform:translateX(-50%);border:7px solid transparent;border-top-color:#fff}
-.visit-hover-card strong,.visit-hover-card span,.visit-hover-card small,.visit-hover-card em{display:block}
-.visit-hover-card strong{font-size:.94rem;margin-bottom:5px}.visit-hover-card span{font-size:.76rem;margin-top:2px}.visit-hover-card small{font-size:.68rem;color:var(--brand);font-weight:800;margin-top:6px}.visit-hover-card em{font-size:.64rem;color:var(--muted);font-style:normal;margin-top:7px}
-.scheduler-visit:hover .visit-hover-card,.unallocated-timeline-visit:hover .visit-hover-card{display:block}
-@media(max-width:800px){.visit-hover-card{display:none!important}}
+/* CoreCare 1.16.4 Compact Visit Card Correction */
+.scheduler-visit,.unallocated-timeline-visit{overflow:hidden;isolation:auto}
+.scheduler-visit:hover,.unallocated-timeline-visit:hover,.scheduler-visit.is-selected{z-index:12!important;box-shadow:0 6px 16px rgba(20,65,56,.20)}
+.scheduler-visit .visit-client-name,.unallocated-timeline-visit .visit-client-name{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;line-height:1.02;font-size:.76rem;font-weight:900;color:#102f29;white-space:normal;overflow-wrap:anywhere;margin-top:1px}
+.scheduler-visit .visit-card-meta,.unallocated-timeline-visit .visit-card-meta{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.59rem!important;color:var(--muted);margin-top:2px}
+.visit-hover-card{display:none!important}
