@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.20.1 — Role-Based Workspaces */
-const VERSION = "1.20.1";
+/** CoreCare Enterprise 1.20.2 — Carer Workspace Isolation */
+const VERSION = "1.20.2";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.20.1 — Role-Based Workspaces" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.20.2 — Carer Workspace Isolation" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -25,9 +25,9 @@ export default {
         if (url.pathname === "/api/development/status") return developmentStatus(env, session);
         if (url.pathname === "/api/dashboard" && request.method === "GET") return dashboardSummary(env.DB, session);
         if (url.pathname === "/api/carer/dashboard" && request.method === "GET") return await permitted(env.DB, session, "visits.view", () => carerDashboard(env.DB, session));
-        if (url.pathname === "/api/operations/board" && request.method === "GET") return operationsBoard(env.DB, session);
-        if (url.pathname === "/api/rota" && request.method === "GET") return rotaBoard(env.DB, session, url);
-        if (url.pathname === "/api/rota" && request.method === "POST") return createRotaVisit(request, env, session);
+        if (url.pathname === "/api/operations/board" && request.method === "GET") return requireManagementWorkspace(session) || operationsBoard(env.DB, session);
+        if (url.pathname === "/api/rota" && request.method === "GET") return requireManagementWorkspace(session) || rotaBoard(env.DB, session, url);
+        if (url.pathname === "/api/rota" && request.method === "POST") return requireManagementWorkspace(session) || createRotaVisit(request, env, session);
         if (url.pathname === "/api/rota/templates" && request.method === "GET") return listRotaTemplates(env.DB, session);
         if (url.pathname === "/api/rota/templates/visit" && request.method === "POST") return saveRotaVisitTemplate(request, env.DB, session);
         if (url.pathname === "/api/rota/templates/working-pattern" && request.method === "POST") return saveWorkingPattern(request, env.DB, session);
@@ -46,9 +46,9 @@ export default {
         if (/^\/api\/rota\/[^/]+\/recurrence$/.test(url.pathname) && request.method === "POST") return manageVisitRecurrence(request, env.DB, session, url.pathname.split("/")[3]);
         if (/^\/api\/rota\/[^/]+$/.test(url.pathname) && request.method === "PATCH") return updateRotaVisit(request, env, session, url.pathname.split("/").pop());
         if (/^\/api\/rota\/[^/]+\/cancel$/.test(url.pathname) && request.method === "POST") return cancelRotaVisit(request, env.DB, session, url.pathname.split("/")[3]);
-        if (url.pathname === "/api/visits/board" && request.method === "GET") return visitsBoard(env.DB, session);
-        if (url.pathname === "/api/visits" && request.method === "POST") return createVisit(request, env.DB, session);
-        if (url.pathname === "/api/visits/client-code" && request.method === "POST") return ensureClientVisitCode(request, env.DB, session);
+        if (url.pathname === "/api/visits/board" && request.method === "GET") return requireManagementWorkspace(session) || visitsBoard(env.DB, session);
+        if (url.pathname === "/api/visits" && request.method === "POST") return requireManagementWorkspace(session) || createVisit(request, env.DB, session);
+        if (url.pathname === "/api/visits/client-code" && request.method === "POST") return requireManagementWorkspace(session) || ensureClientVisitCode(request, env.DB, session);
         if (url.pathname === "/api/visits/sync" && request.method === "POST") return syncVisitEvents(request, env.DB, session);
         const visitRecordMatch = url.pathname.match(/^\/api\/visits\/([^/]+)\/care-record$/);
         if (visitRecordMatch && request.method === "GET") return getVisitCareRecord(env.DB, session, decodeURIComponent(visitRecordMatch[1]));
@@ -1123,6 +1123,11 @@ function allowedRoles() { return ["owner", "manager", "carer", "auditor"]; }
 function allowedAccessLevels(){return ["organisation_owner","organisation_admin","branch_manager","senior_carer","carer","office_staff","auditor","family"]; }
 function legacyRole(level){return ({organisation_owner:"owner",organisation_admin:"owner",branch_manager:"manager",senior_carer:"carer",carer:"carer",office_staff:"manager",auditor:"auditor",family:"auditor"})[level]||"auditor";}
 function hasRole(session, roles) { if (session.is_platform_user) return true; return roles.includes(session.role) || roles.includes(session.access_level); }
+function requireManagementWorkspace(session) {
+  if (session.is_platform_user) return null;
+  const allowed = ['organisation_owner','organisation_admin','branch_manager','office_staff','auditor','owner','manager'];
+  return allowed.includes(session.access_level) || allowed.includes(session.role) ? null : forbidden();
+}
 function forbidden() { return json({ error: { code: "FORBIDDEN", message: "Your account does not have permission to perform this action." } }, 403); }
 async function permitted(db, session, permission, action) {
   if (!await userHasPermission(db, session, permission)) return forbidden();

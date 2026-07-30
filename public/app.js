@@ -112,7 +112,7 @@ const WORKSPACE_CONFIG = {
   carer: {
     label: 'Carer workspace',
     roles: ['carer'],
-    pages: ['dashboard','medication','visits']
+    pages: ['dashboard']
   },
   family: {
     label: 'Family workspace',
@@ -164,7 +164,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.20.1';
+const CORECARE_FALLBACK_VERSION = '1.20.2';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -297,6 +297,20 @@ function applyAccessVisibility(){
   $$('.organisation-workspace-nav').forEach(node=>{
     const page=node.dataset?.page;
     node.hidden=platformWorkspace || Boolean(page && (!workspaceAllowsPage(page) || modules[page]!==true));
+  });
+  // Carers use one protected workspace: their own dashboard and allocated visits only.
+  const type=dashboardType();
+  const dashboardNav=document.querySelector('.organisation-workspace-nav[data-page="dashboard"]');
+  if(dashboardNav){
+    dashboardNav.innerHTML=type==='carer'?'<span>⌂</span>My visits':type==='senior'?'<span>⌂</span>Senior carer dashboard':'<span>⌂</span>Organisation dashboard';
+  }
+  $$('.nav-section.organisation-workspace-nav').forEach(section=>{
+    let next=section.nextElementSibling,hasVisible=false;
+    while(next&&!next.classList.contains('nav-section')){
+      if(next.classList.contains('organisation-workspace-nav')&&!next.hidden){hasVisible=true;break;}
+      next=next.nextElementSibling;
+    }
+    section.hidden=platformWorkspace||!hasVisible;
   });
   $$('.organisation-workspace-action').forEach(node=>{node.hidden=platformWorkspace;});
   const visibility={
