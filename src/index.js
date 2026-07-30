@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.15.0 — Care Delivery Foundation */
-const VERSION = "1.15.0";
+/** CoreCare Enterprise 1.15.1 — Protected Time-Critical Visits */
+const VERSION = "1.15.1";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.15.0 — Care Delivery Foundation" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.15.1 — Protected Time-Critical Visits" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -367,6 +367,8 @@ function normaliseVisitRequirements(value, fallbackStartDate) {
     days: Array.isArray(item.days) ? item.days.map(Number).filter(n => n >= 0 && n <= 6) : [1,2,3,4,5,6,0],
     preferredTime: /^([01]\d|2[0-3]):[0-5]\d$/.test(clean(item.preferredTime)) ? clean(item.preferredTime) : '08:00',
     windowMinutes: Math.max(0, Math.min(240, Number(item.windowMinutes) || 60)),
+    schedulingRule: ['flexible','window','fixed'].includes(clean(item.schedulingRule)) ? clean(item.schedulingRule) : ((Number(item.windowMinutes)||60)===0?'fixed':'flexible'),
+    timeCriticalReason: clean(item.timeCriticalReason),
     durationMinutes: Math.max(15, Math.min(480, Number(item.durationMinutes) || 30)),
     carersRequired: Math.max(1, Math.min(4, Number(item.carersRequired) || 1)),
     notes: clean(item.notes),
@@ -382,10 +384,10 @@ function generatedDates(requirement, weeks=8) {
 function generatedOccurrenceCount(requirement){return generatedDates(requirement).length;}
 function visitRequirementStatements(db, session, clientId, requirement) {
   const requirementId=crypto.randomUUID();
-  const statements=[db.prepare(`INSERT INTO client_visit_requirements(id,organisation_id,client_id,visit_type,days_json,preferred_time,window_minutes,duration_minutes,carers_required,notes,start_date,end_date,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(requirementId,session.organisation_id,clientId,requirement.visitType,JSON.stringify(requirement.days),requirement.preferredTime,requirement.windowMinutes,requirement.durationMinutes,requirement.carersRequired,requirement.notes,requirement.startDate,requirement.endDate,session.user_id)];
+  const statements=[db.prepare(`INSERT INTO client_visit_requirements(id,organisation_id,client_id,visit_type,days_json,preferred_time,window_minutes,duration_minutes,carers_required,notes,start_date,end_date,created_by,scheduling_rule,time_critical_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(requirementId,session.organisation_id,clientId,requirement.visitType,JSON.stringify(requirement.days),requirement.preferredTime,requirement.windowMinutes,requirement.durationMinutes,requirement.carersRequired,requirement.notes,requirement.startDate,requirement.endDate,session.user_id,requirement.schedulingRule,requirement.timeCriticalReason)];
   for(const date of generatedDates(requirement)){
     const day=date.toISOString().slice(0,10), start=new Date(`${day}T${requirement.preferredTime}:00`), end=new Date(start.getTime()+requirement.durationMinutes*60000);
-    statements.push(db.prepare(`INSERT OR IGNORE INTO care_visits(id,organisation_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,requirement_id,requirement_occurrence_date,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,clientId,null,requirement.visitType,start.toISOString(),end.toISOString(),'scheduled','requirement','draft',requirementId,'requirement',requirementId,day,session.user_id));
+    statements.push(db.prepare(`INSERT OR IGNORE INTO care_visits(id,organisation_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,requirement_id,requirement_occurrence_date,created_by,protected_time_rule,protected_time_reason,protected_window_minutes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,clientId,null,requirement.visitType,start.toISOString(),end.toISOString(),'scheduled','requirement','draft',requirementId,'requirement',requirementId,day,session.user_id,requirement.schedulingRule,requirement.timeCriticalReason,requirement.windowMinutes));
   }
   return statements;
 }
@@ -410,7 +412,8 @@ async function saveVisitRequirements(request,db,session,clientId){
   const input=await readJson(request),requirements=normaliseVisitRequirements(input.requirements,input.startDate);
   if(!requirements.length)return json({error:{code:'VALIDATION_ERROR',message:'Add at least one valid visit requirement.'}},400);
   const client=await db.prepare('SELECT id FROM clients WHERE id=? AND organisation_id=?').bind(clientId,session.organisation_id).first();if(!client)return notFound('Client');
-  const statements=[];for(const r of requirements)statements.push(...visitRequirementStatements(db,session,clientId,r));
+  const statements=[];
+  for(const r of requirements)statements.push(...visitRequirementStatements(db,session,clientId,r));
   statements.push(auditStatement(db,session.organisation_id,session.user_id,'client.visit_requirements_created','client',clientId,{count:requirements.length}));
   await db.batch(statements);return json({ok:true,requirementsCreated:requirements.length,visitsGenerated:requirements.reduce((n,r)=>n+generatedOccurrenceCount(r),0)});
 }
@@ -506,7 +509,8 @@ async function rotaBoard(db, session, url) {
       (SELECT rt.effective_to FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_effective_to,
       (SELECT rt.end_after_occurrences FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_end_after_occurrences,
       (SELECT GROUP_CONCAT(rt.day_of_week) FROM rota_visit_templates rt WHERE rt.series_id=v.recurrence_group_id AND rt.organisation_id=v.organisation_id) recurrence_days,
-      CASE WHEN (SELECT rt.preferred_staff_id FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) IS NULL THEN 0 ELSE 1 END recurrence_keep_carer
+      CASE WHEN (SELECT rt.preferred_staff_id FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) IS NULL THEN 0 ELSE 1 END recurrence_keep_carer,
+      COALESCE(v.protected_time_rule,'flexible') protected_time_rule, v.protected_time_reason, COALESCE(v.protected_window_minutes,0) protected_window_minutes
       FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN staff s ON s.id=v.staff_id AND s.organisation_id=v.organisation_id
       WHERE v.organisation_id=? AND date(v.scheduled_start) BETWEEN date(?) AND date(?) AND v.rota_status!='cancelled'
       ORDER BY v.scheduled_start`).bind(org,from,to).all(),
@@ -619,6 +623,18 @@ async function manageVisitRecurrence(request,db,session,id){
   await db.batch(statements);return json({ok:true,action,seriesId,templateId:firstTemplateId,templatesCreated:days.length});
 }
 
+async function authoriseProtectedVisitChange(db,session,visit,input,newStart){
+  const email=clean(input.managerEmail).toLowerCase(),password=String(input.managerPassword||''),reason=clean(input.managerOverrideReason);
+  if(!email||!password||reason.length<5)return {error:json({error:{code:'TIME_CRITICAL_AUTH_REQUIRED',message:'Manager authorisation, password and a clear reason are required to change this protected visit.'}},409)};
+  const manager=await db.prepare(`SELECT id,email,role,access_level,status,password_hash,password_salt,password_iterations FROM users WHERE organisation_id=? AND lower(email)=lower(?) LIMIT 1`).bind(session.organisation_id,email).first();
+  const valid=manager&&manager.status==='active'&&await verifyPassword(password,manager.password_salt,manager.password_hash,manager.password_iterations||PASSWORD_ITERATIONS);
+  if(!valid)return {error:json({error:{code:'MANAGER_AUTH_FAILED',message:'The manager email address or password is incorrect.'}},401)};
+  const managerSession={...session,user_id:manager.id,role:manager.role,access_level:manager.access_level,is_platform_user:false};
+  const allowed=['owner','manager'].includes(manager.role)||['organisation_owner','organisation_admin','branch_manager'].includes(manager.access_level)||await userHasPermission(db,managerSession,'rota.time_critical.override');
+  if(!allowed)return {error:json({error:{code:'MANAGER_AUTH_FORBIDDEN',message:'This account is not authorised to override protected visit times.'}},403)};
+  return {manager,reason,statement:db.prepare(`INSERT INTO protected_visit_authorisations(id,organisation_id,visit_id,requested_by,authorised_by,previous_start,new_start,reason) VALUES(?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,visit.id,session.user_id,manager.id,visit.scheduled_start,newStart,reason)};
+}
+
 async function updateRotaVisit(request,env,session,id){
   const db=env.DB;
   const i=await readJson(request),row=await db.prepare(`SELECT * FROM care_visits WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id).first();if(!row)return notFound('Rota visit');
@@ -626,6 +642,12 @@ async function updateRotaVisit(request,env,session,id){
   const requestedLocked=i.plannerLocked===true||i.plannerLocked===1||i.plannerLocked==='1';
   if(Number(row.planner_locked)===1){const allowed=await userHasPermission(db,session,'rota.visit.override_lock');if(!allowed)return json({error:{code:'VISIT_LOCKED',message:'This visit is locked. An authorised planner or manager must unlock or change it.'}},409);}
   const staffId=clean(i.staffId)||null,start=clean(i.scheduledStart)||row.scheduled_start,end=clean(i.scheduledEnd)||row.scheduled_end,scope=['single','future','series'].includes(clean(i.scope))?clean(i.scope):'single',reason=clean(i.reason)||'Planner adjustment',plannerNotes=clean(i.plannerNotes)||row.planner_notes||'';
+  const protectedRule=clean(row.protected_time_rule)||'flexible',timeChanged=new Date(start).getTime()!==new Date(row.scheduled_start).getTime();
+  let protectedAuth=null;
+  if(timeChanged&&protectedRule!=='flexible'){
+    if(protectedRule==='window'){const delta=Math.abs(new Date(start)-new Date(row.scheduled_start))/60000;if(delta<=Number(row.protected_window_minutes||0)){/* permitted within window */}else{protectedAuth=await authoriseProtectedVisitChange(db,session,row,i,start);if(protectedAuth.error)return protectedAuth.error;}}
+    else {protectedAuth=await authoriseProtectedVisitChange(db,session,row,i,start);if(protectedAuth.error)return protectedAuth.error;}
+  }
   if(staffId){const clash=await db.prepare(`SELECT id FROM care_visits WHERE organisation_id=? AND staff_id=? AND id!=? AND rota_status!='cancelled' AND datetime(scheduled_start)<datetime(COALESCE(?,?,'9999-12-31')) AND datetime(COALESCE(scheduled_end,scheduled_start,'9999-12-31'))>datetime(?) LIMIT 1`).bind(session.organisation_id,staffId,id,end,start,start).first();if(clash)return json({error:{code:'ROTA_CLASH',message:'This staff member already has an overlapping visit.'}},409);}
   let travelAssessment=null;
   const overrideReason=clean(i.travelOverrideReason);
@@ -639,6 +661,7 @@ async function updateRotaVisit(request,env,session,id){
   const before=JSON.stringify({staffId:row.staff_id,start:row.scheduled_start,end:row.scheduled_end,visitType:row.visit_type,plannerLocked:Number(row.planner_locked)||0,plannerNotes:row.planner_notes||''});
   const after=JSON.stringify({staffId,start,end,visitType:clean(i.visitType)||row.visit_type,plannerLocked:requestedLocked?1:0,plannerNotes});
   const statements=[];
+  if(protectedAuth?.statement)statements.push(protectedAuth.statement);
   if(scope==='single'||!row.requirement_id){statements.push(db.prepare(`UPDATE care_visits SET client_id=?,staff_id=?,visit_type=?,scheduled_start=?,scheduled_end=?,rota_source='planner',rota_status='draft',change_reason=?,manually_overridden=1,travel_override=?,travel_override_reason=?,planner_locked=?,planner_notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.clientId)||row.client_id,staffId,clean(i.visitType)||row.visit_type,start,end,reason,travelAssessment?.conflict?1:0,overrideReason,requestedLocked?1:0,plannerNotes,id,session.organisation_id));}
   else {
     const time=new Date(start).toISOString().slice(11,16),duration=Math.max(15,Math.round((new Date(end)-new Date(start))/60000));
@@ -648,7 +671,7 @@ async function updateRotaVisit(request,env,session,id){
     statements.push(db.prepare(`UPDATE care_visits SET staff_id=?,visit_type=?,rota_source='planner',rota_status='draft',change_reason=?,manually_overridden=1,planner_locked=?,planner_notes=?,updated_at=CURRENT_TIMESTAMP WHERE requirement_id=? AND organisation_id=? AND status='scheduled' ${condition}`).bind(...bind));
   }
   statements.push(db.prepare(`INSERT INTO visit_change_history(id,organisation_id,visit_id,requirement_id,change_scope,reason,before_json,after_json,changed_by) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,id,row.requirement_id,scope,reason,before,after,session.user_id));
-  statements.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_updated','visit',id,{staffId,start,end,scope,reason}));
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_updated','visit',id,{staffId,start,end,scope,reason,protectedOverride:Boolean(protectedAuth),authorisedBy:protectedAuth?.manager?.id||null}));
   if(travelAssessment?.conflict){statements.push(db.prepare(`INSERT INTO travel_override_history(id,organisation_id,visit_id,calculated_minutes,available_minutes,shortfall_minutes,reason,overridden_by) VALUES(?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,id,travelAssessment.required,travelAssessment.available,travelAssessment.shortfall,overrideReason,session.user_id));}
   await db.batch(statements);
   const affectedDays=new Set([String(start).slice(0,10),String(row.scheduled_start).slice(0,10)]);
@@ -802,7 +825,7 @@ async function carePlanAction(request,db,session,id,action){
   const reqs=await db.prepare(`SELECT * FROM client_visit_requirements WHERE organisation_id=? AND client_id=? AND status='active'`).bind(session.organisation_id,plan.client_id).all();
   if(!(reqs.results||[]).length)return json({error:{code:'NO_VISIT_REQUIREMENTS',message:'Add visit requirements to the client before generating visits.'}},409);
   const statements=[];let count=0;
-  for(const r of reqs.results||[]){const requirement={visitType:r.visit_type,days:JSON.parse(r.days_json||'[]'),preferredTime:r.preferred_time,windowMinutes:r.window_minutes,durationMinutes:r.duration_minutes,carersRequired:r.carers_required,notes:r.notes,startDate:r.start_date,endDate:r.end_date};for(const date of generatedDates(requirement)){const day=date.toISOString().slice(0,10),start=new Date(`${day}T${requirement.preferredTime}:00`),end=new Date(start.getTime()+requirement.durationMinutes*60000);statements.push(db.prepare(`INSERT OR IGNORE INTO care_visits(id,organisation_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,requirement_id,requirement_occurrence_date,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,plan.client_id,null,requirement.visitType,start.toISOString(),end.toISOString(),'scheduled','care_plan','draft',r.id,'requirement',r.id,day,session.user_id));count++;}}
+  for(const r of reqs.results||[]){const requirement={visitType:r.visit_type,days:JSON.parse(r.days_json||'[]'),preferredTime:r.preferred_time,windowMinutes:r.window_minutes,durationMinutes:r.duration_minutes,carersRequired:r.carers_required,notes:r.notes,startDate:r.start_date,endDate:r.end_date};for(const date of generatedDates(requirement)){const day=date.toISOString().slice(0,10),start=new Date(`${day}T${requirement.preferredTime}:00`),end=new Date(start.getTime()+requirement.durationMinutes*60000);statements.push(db.prepare(`INSERT OR IGNORE INTO care_visits(id,organisation_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,requirement_id,requirement_occurrence_date,created_by,protected_time_rule,protected_time_reason,protected_window_minutes) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,plan.client_id,null,requirement.visitType,start.toISOString(),end.toISOString(),'scheduled','care_plan','draft',r.id,'requirement',r.id,day,session.user_id,r.scheduling_rule||'flexible',r.time_critical_reason||'',Number(r.window_minutes)||0));count++;}}
   statements.push(db.prepare(`UPDATE care_plans SET visit_generation_status='generated',visits_generated_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id));statements.push(auditStatement(db,session.organisation_id,session.user_id,'care_plan.visits_generated','care_plan',id,{clientId:plan.client_id,attempted:count}));await db.batch(statements);return json({ok:true,visitsGenerated:count});
 }
 async function acknowledgeCareAlert(db,session,id){const result=await db.prepare(`UPDATE care_delivery_alerts SET status='acknowledged',acknowledged_by=?,acknowledged_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(session.user_id,id,session.organisation_id).run();if(!result.meta.changes)return notFound('Alert');return json({ok:true});}
@@ -1389,7 +1412,7 @@ async function saveFamilyAccess(request,db,session){if(!hasRole(session,["owner"
 
 // Sprint 12 — completed enterprise security services
 const STANDARD_PERMISSION_MAP = {
-  organisation_owner: ['*'], organisation_admin: ['dashboard.view','operations.view','operations.manage','rota.view','rota.create','rota.edit','rota.publish','rota.cancel','visits.view','visits.clock','visits.override','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','finance.view','finance.manage','family_portal.manage','organisation.settings.view','organisation.settings.manage','security.roles.view','security.roles.manage','security.users.view','security.users.manage','security.audit.view','security.sessions.manage','clients.view','clients.create','clients.edit','clients.archive','staff.view','staff.create','staff.edit','care_plans.view','care_plans.create','care_plans.edit','care_plans.archive','risks.view','risks.manage','documents.view','documents.manage','reports.view','data.export'],
+  organisation_owner: ['*'], organisation_admin: ['dashboard.view','operations.view','operations.manage','rota.view','rota.create','rota.edit','rota.publish','rota.cancel','rota.time_critical.override','visits.view','visits.clock','visits.override','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','finance.view','finance.manage','family_portal.manage','organisation.settings.view','organisation.settings.manage','security.roles.view','security.roles.manage','security.users.view','security.users.manage','security.audit.view','security.sessions.manage','clients.view','clients.create','clients.edit','clients.archive','staff.view','staff.create','staff.edit','care_plans.view','care_plans.create','care_plans.edit','care_plans.archive','risks.view','risks.manage','documents.view','documents.manage','reports.view','data.export'],
   branch_manager: ['dashboard.view','operations.view','operations.manage','rota.view','rota.create','rota.edit','rota.publish','visits.view','visits.clock','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','family_portal.manage','organisation.settings.view','security.roles.view','security.users.view','clients.view','clients.create','clients.edit','staff.view','staff.create','staff.edit','care_plans.view','care_plans.create','care_plans.edit','risks.view','risks.manage','documents.view','documents.manage','reports.view'],
   senior_carer: ['dashboard.view','operations.view','visits.view','visits.clock','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','clients.view','clients.edit','staff.view','care_plans.view','care_plans.create','care_plans.edit','risks.view','risks.manage','documents.view','documents.manage'],
   carer: ['dashboard.view','visits.view','visits.clock','tasks.view','medication.view','clients.view','staff.view','care_plans.view','risks.view','documents.view'],
