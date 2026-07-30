@@ -1,5 +1,5 @@
-/** CoreCare Enterprise 1.24.3 — eMAR and Body Map */
-const VERSION = "1.24.3";
+/** CoreCare Enterprise 1.25.0 — eMAR Operations */
+const VERSION = "1.25.0";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,7 +11,7 @@ export default {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/api/health") return health(env);
-      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.24.3 — eMAR and Body Map" });
+      if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: "CoreCare Enterprise 1.25.0 — eMAR Operations" });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
@@ -68,6 +68,11 @@ export default {
         if (url.pathname === "/api/medication" && request.method === "POST") return await permitted(env.DB, session, "medication.manage", () => saveMedication(request, env.DB, session));
         const medicationAdminMatch = url.pathname.match(/^\/api\/medication\/([^/]+)\/administer$/);
         if (medicationAdminMatch && request.method === "POST") return await permitted(env.DB, session, "medication.manage", () => administerMedication(request, env.DB, session, decodeURIComponent(medicationAdminMatch[1])));
+        if (url.pathname === "/api/medication/daily-mar" && request.method === "GET") return await permitted(env.DB, session, "medication.view", () => dailyMar(env.DB, session, url));
+        const medicationStockMatch = url.pathname.match(/^\/api\/medication\/([^/]+)\/stock$/);
+        if (medicationStockMatch && request.method === "POST") return await permitted(env.DB, session, "medication.manage", () => adjustMedicationStock(request, env.DB, session, decodeURIComponent(medicationStockMatch[1])));
+        const medicationCorrectionMatch = url.pathname.match(/^\/api\/medication\/administrations\/([^/]+)\/correct$/);
+        if (medicationCorrectionMatch && request.method === "POST") return await permitted(env.DB, session, "medication.manage", () => correctMedicationAdministration(request, env.DB, session, decodeURIComponent(medicationCorrectionMatch[1])));
         if (url.pathname === "/api/body-map" && request.method === "GET") return await permitted(env.DB, session, "clients.view", () => listBodyMap(env.DB, session, url));
         if (url.pathname === "/api/body-map" && request.method === "POST") return await permitted(env.DB, session, "care_plans.manage", () => createBodyMapRecord(request, env.DB, session));
         const bodyMapUpdateMatch = url.pathname.match(/^\/api\/body-map\/([^/]+)\/update$/);
@@ -1211,29 +1216,68 @@ async function ensureOrganisationClient(db,session,clientId){return db.prepare("
 async function listMedication(db,session,url){
   const clientId=clean(url.searchParams.get('clientId')); if(!clientId)return json({error:{code:'VALIDATION_ERROR',message:'Choose a client.'}},400);
   if(!await ensureOrganisationClient(db,session,clientId))return json({error:{code:'NOT_FOUND',message:'Client not found.'}},404);
-  const [meds,mar]=await Promise.all([
+  const [meds,mar,stock]=await Promise.all([
     db.prepare(`SELECT m.*,u.display_name AS created_by_name FROM medications m LEFT JOIN users u ON u.id=m.created_by AND u.organisation_id=m.organisation_id WHERE m.organisation_id=? AND m.client_id=? ORDER BY CASE m.status WHEN 'active' THEN 0 ELSE 1 END,m.name`).bind(session.organisation_id,clientId).all(),
-    db.prepare(`SELECT a.*,m.name AS medication_name,m.strength,m.dose,u.display_name AS recorded_by_name FROM medication_administrations a JOIN medications m ON m.id=a.medication_id AND m.organisation_id=a.organisation_id LEFT JOIN users u ON u.id=a.recorded_by AND u.organisation_id=a.organisation_id WHERE a.organisation_id=? AND a.client_id=? ORDER BY a.administered_at DESC LIMIT 250`).bind(session.organisation_id,clientId).all()
+    db.prepare(`SELECT a.*,m.name AS medication_name,m.strength,m.dose,m.is_prn,u.display_name AS recorded_by_name FROM medication_administrations a JOIN medications m ON m.id=a.medication_id AND m.organisation_id=a.organisation_id LEFT JOIN users u ON u.id=a.recorded_by AND u.organisation_id=a.organisation_id WHERE a.organisation_id=? AND a.client_id=? ORDER BY a.administered_at DESC LIMIT 250`).bind(session.organisation_id,clientId).all(),
+    db.prepare(`SELECT t.*,m.name AS medication_name,u.display_name AS recorded_by_name FROM medication_stock_transactions t JOIN medications m ON m.id=t.medication_id AND m.organisation_id=t.organisation_id LEFT JOIN users u ON u.id=t.recorded_by AND u.organisation_id=t.organisation_id WHERE t.organisation_id=? AND t.client_id=? ORDER BY t.created_at DESC LIMIT 250`).bind(session.organisation_id,clientId).all()
   ]);
-  return json({medications:(meds.results||[]).map(x=>({...x,scheduledTimes:safeJson(x.scheduled_times_json,[])})),administrations:mar.results||[]});
+  return json({medications:(meds.results||[]).map(x=>({...x,scheduledTimes:safeJson(x.scheduled_times_json,[])})),administrations:mar.results||[],stockTransactions:stock.results||[]});
 }
 async function saveMedication(request,db,session){
   const i=await readJson(request),clientId=clean(i.clientId),name=clean(i.name),dose=clean(i.dose); if(!clientId||!name||!dose)return json({error:{code:'VALIDATION_ERROR',message:'Client, medication name and dose are required.'}},400);
   if(!await ensureOrganisationClient(db,session,clientId))return json({error:{code:'NOT_FOUND',message:'Client not found.'}},404);
   const id=clean(i.id)||crypto.randomUUID(),times=Array.isArray(i.scheduledTimes)?i.scheduledTimes.map(clean).filter(Boolean):clean(i.scheduledTimes).split(',').map(x=>x.trim()).filter(Boolean);
-  await db.prepare(`INSERT INTO medications(id,organisation_id,client_id,name,strength,form,route,dose,instructions,frequency,scheduled_times_json,start_date,end_date,is_prn,prn_protocol,min_interval_minutes,max_dose_24h,stock_quantity,stock_unit,status,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,strength=excluded.strength,form=excluded.form,route=excluded.route,dose=excluded.dose,instructions=excluded.instructions,frequency=excluded.frequency,scheduled_times_json=excluded.scheduled_times_json,start_date=excluded.start_date,end_date=excluded.end_date,is_prn=excluded.is_prn,prn_protocol=excluded.prn_protocol,min_interval_minutes=excluded.min_interval_minutes,max_dose_24h=excluded.max_dose_24h,stock_quantity=excluded.stock_quantity,stock_unit=excluded.stock_unit,status=excluded.status,updated_at=CURRENT_TIMESTAMP`).bind(id,session.organisation_id,clientId,name,clean(i.strength),clean(i.form),clean(i.route),dose,clean(i.instructions),clean(i.frequency),JSON.stringify(times),clean(i.startDate)||null,clean(i.endDate)||null,i.isPrn?1:0,clean(i.prnProtocol),nullableNumber(i.minIntervalMinutes),clean(i.maxDose24h),nullableNumber(i.stockQuantity),clean(i.stockUnit),clean(i.status)||'active',session.user_id).run();
-  await audit(db,session.organisation_id,session.user_id,'medication.saved','medication',id,{clientId,name}); return json({ok:true,id},201);
+  const status=clean(i.status)||'active',discontinued=status==='discontinued';
+  await db.prepare(`INSERT INTO medications(id,organisation_id,client_id,name,strength,form,route,dose,instructions,frequency,scheduled_times_json,start_date,end_date,is_prn,prn_protocol,min_interval_minutes,max_dose_24h,stock_quantity,stock_unit,low_stock_threshold,status,discontinued_reason,discontinued_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,strength=excluded.strength,form=excluded.form,route=excluded.route,dose=excluded.dose,instructions=excluded.instructions,frequency=excluded.frequency,scheduled_times_json=excluded.scheduled_times_json,start_date=excluded.start_date,end_date=excluded.end_date,is_prn=excluded.is_prn,prn_protocol=excluded.prn_protocol,min_interval_minutes=excluded.min_interval_minutes,max_dose_24h=excluded.max_dose_24h,stock_quantity=excluded.stock_quantity,stock_unit=excluded.stock_unit,low_stock_threshold=excluded.low_stock_threshold,status=excluded.status,discontinued_reason=excluded.discontinued_reason,discontinued_at=excluded.discontinued_at,updated_at=CURRENT_TIMESTAMP`).bind(id,session.organisation_id,clientId,name,clean(i.strength),clean(i.form),clean(i.route),dose,clean(i.instructions),clean(i.frequency),JSON.stringify(times),clean(i.startDate)||null,clean(i.endDate)||null,i.isPrn?1:0,clean(i.prnProtocol),nullableNumber(i.minIntervalMinutes),clean(i.maxDose24h),nullableNumber(i.stockQuantity),clean(i.stockUnit),nullableNumber(i.lowStockThreshold)??5,status,discontinued?clean(i.discontinuedReason):null,discontinued?new Date().toISOString():null,session.user_id).run();
+  await audit(db,session.organisation_id,session.user_id,'medication.saved','medication',id,{clientId,name,status}); return json({ok:true,id},201);
 }
+function localDateString(value){const d=value?new Date(value):new Date();return Number.isNaN(d.getTime())?'':`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
 async function administerMedication(request,db,session,id){
   const med=await db.prepare('SELECT * FROM medications WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first(); if(!med)return json({error:{code:'NOT_FOUND',message:'Medication not found.'}},404);
   const i=await readJson(request),outcome=clean(i.outcome); if(!outcome)return json({error:{code:'VALIDATION_ERROR',message:'Choose an administration outcome.'}},400);
-  const stockChange=outcome==='administered'?-(Number(i.stockUsed)||0):0,adminId=crypto.randomUUID();
-  await db.batch([
-    db.prepare(`INSERT INTO medication_administrations(id,organisation_id,medication_id,client_id,visit_id,scheduled_at,administered_at,outcome,dose_given,reason,notes,stock_change,recorded_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(adminId,session.organisation_id,id,med.client_id,clean(i.visitId)||null,clean(i.scheduledAt)||null,clean(i.administeredAt)||new Date().toISOString(),outcome,clean(i.doseGiven)||med.dose,clean(i.reason),clean(i.notes),stockChange,session.user_id),
+  const allowed=['administered','prompted','refused','omitted','unavailable','hospitalised','asleep','missed']; if(!allowed.includes(outcome))return json({error:{code:'VALIDATION_ERROR',message:'Invalid administration outcome.'}},400);
+  if(med.is_prn&&outcome==='administered'&&!clean(i.prnReason||i.reason))return json({error:{code:'VALIDATION_ERROR',message:'Record why the PRN medication was required.'}},400);
+  const stockUsed=Math.max(0,Number(i.stockUsed)||0),stockChange=outcome==='administered'?-stockUsed:0,adminId=crypto.randomUUID(),administeredAt=clean(i.administeredAt)||new Date().toISOString(),scheduledAt=clean(i.scheduledAt)||null;
+  const balance=med.stock_quantity===null?null:Math.max(0,Number(med.stock_quantity)+stockChange);
+  const statements=[
+    db.prepare(`INSERT INTO medication_administrations(id,organisation_id,medication_id,client_id,visit_id,scheduled_at,scheduled_date,administered_at,outcome,dose_given,reason,notes,stock_change,prn_reason,prn_effectiveness,effectiveness_reviewed_at,recorded_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(adminId,session.organisation_id,id,med.client_id,clean(i.visitId)||null,scheduledAt,scheduledAt?localDateString(scheduledAt):localDateString(administeredAt),administeredAt,outcome,clean(i.doseGiven)||med.dose,clean(i.reason),clean(i.notes),stockChange,clean(i.prnReason),clean(i.prnEffectiveness),clean(i.prnEffectiveness)?new Date().toISOString():null,session.user_id),
     db.prepare(`UPDATE medications SET stock_quantity=CASE WHEN stock_quantity IS NULL THEN NULL ELSE MAX(0,stock_quantity+?) END,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(stockChange,id,session.organisation_id),
-    auditStatement(db,session.organisation_id,session.user_id,'medication.administered','medication_administration',adminId,{medicationId:id,outcome,clientId:med.client_id})
-  ]);
+    auditStatement(db,session.organisation_id,session.user_id,'medication.administered','medication_administration',adminId,{medicationId:id,outcome,clientId:med.client_id,scheduledAt})
+  ];
+  if(stockChange)statements.push(db.prepare(`INSERT INTO medication_stock_transactions(id,organisation_id,medication_id,client_id,transaction_type,quantity,balance_after,reason,administration_id,recorded_by) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,id,med.client_id,'administration',stockChange,balance,`eMAR: ${outcome}`,adminId,session.user_id));
+  try{await db.batch(statements);}catch(e){if(String(e?.message||e).includes('UNIQUE'))return json({error:{code:'DUPLICATE_ENTRY',message:'This scheduled dose already has an eMAR outcome.'}},409);throw e;}
   return json({ok:true,id:adminId},201);
+}
+async function dailyMar(db,session,url){
+  const clientId=clean(url.searchParams.get('clientId')),date=clean(url.searchParams.get('date'))||localDateString();
+  if(!clientId)return json({error:{code:'VALIDATION_ERROR',message:'Choose a client.'}},400);
+  if(!await ensureOrganisationClient(db,session,clientId))return json({error:{code:'NOT_FOUND',message:'Client not found.'}},404);
+  const [meds,entries]=await Promise.all([
+    db.prepare(`SELECT * FROM medications WHERE organisation_id=? AND client_id=? AND status='active' AND (start_date IS NULL OR start_date='' OR start_date<=?) AND (end_date IS NULL OR end_date='' OR end_date>=?) ORDER BY name`).bind(session.organisation_id,clientId,date,date).all(),
+    db.prepare(`SELECT a.*,m.name AS medication_name,m.strength,m.dose,m.is_prn,u.display_name AS recorded_by_name FROM medication_administrations a JOIN medications m ON m.id=a.medication_id AND m.organisation_id=a.organisation_id LEFT JOIN users u ON u.id=a.recorded_by AND u.organisation_id=a.organisation_id WHERE a.organisation_id=? AND a.client_id=? AND (a.scheduled_date=? OR substr(COALESCE(a.scheduled_at,a.administered_at),1,10)=?) ORDER BY COALESCE(a.scheduled_at,a.administered_at)`).bind(session.organisation_id,clientId,date,date).all()
+  ]);
+  const rows=[];
+  for(const m of meds.results||[]){
+    const times=safeJson(m.scheduled_times_json,[]);
+    if(m.is_prn){rows.push({kind:'prn',medication:m,scheduledAt:null,entry:null});continue;}
+    for(const time of times){const scheduledAt=`${date}T${time.length===5?time+':00':time}`;const entry=(entries.results||[]).find(e=>e.medication_id===m.id&&e.scheduled_at===scheduledAt&&!e.is_void);rows.push({kind:'scheduled',medication:m,scheduledAt,entry:entry||null});}
+    if(!times.length)rows.push({kind:'unscheduled',medication:m,scheduledAt:null,entry:null});
+  }
+  return json({date,rows,entries:entries.results||[]});
+}
+async function adjustMedicationStock(request,db,session,id){
+  const med=await db.prepare('SELECT * FROM medications WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();if(!med)return json({error:{code:'NOT_FOUND',message:'Medication not found.'}},404);
+  const i=await readJson(request),quantity=Number(i.quantity),type=clean(i.transactionType)||'adjustment',reason=clean(i.reason);if(!Number.isFinite(quantity)||quantity===0)return json({error:{code:'VALIDATION_ERROR',message:'Enter a non-zero stock quantity.'}},400);if(!reason)return json({error:{code:'VALIDATION_ERROR',message:'Enter a reason for the stock change.'}},400);
+  const current=Number(med.stock_quantity)||0,balance=Math.max(0,current+quantity),tid=crypto.randomUUID();
+  await db.batch([db.prepare('UPDATE medications SET stock_quantity=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?').bind(balance,id,session.organisation_id),db.prepare(`INSERT INTO medication_stock_transactions(id,organisation_id,medication_id,client_id,transaction_type,quantity,balance_after,reason,recorded_by) VALUES(?,?,?,?,?,?,?,?,?)`).bind(tid,session.organisation_id,id,med.client_id,type,quantity,balance,reason,session.user_id),auditStatement(db,session.organisation_id,session.user_id,'medication.stock_adjusted','medication',id,{quantity,balance,reason,type})]);return json({ok:true,balance},201);
+}
+async function correctMedicationAdministration(request,db,session,id){
+  const original=await db.prepare(`SELECT a.*,m.stock_quantity,m.client_id AS med_client_id FROM medication_administrations a JOIN medications m ON m.id=a.medication_id AND m.organisation_id=a.organisation_id WHERE a.id=? AND a.organisation_id=?`).bind(id,session.organisation_id).first();if(!original)return json({error:{code:'NOT_FOUND',message:'MAR entry not found.'}},404);if(original.is_void)return json({error:{code:'VALIDATION_ERROR',message:'This MAR entry has already been corrected.'}},400);
+  const i=await readJson(request),reason=clean(i.correctionReason);if(!reason)return json({error:{code:'VALIDATION_ERROR',message:'Enter the reason for correction.'}},400);
+  const replacementId=crypto.randomUUID(),outcome=clean(i.outcome)||original.outcome,stockUsed=Math.max(0,Number(i.stockUsed)||0),newChange=outcome==='administered'?-stockUsed:0,stockDelta=-Number(original.stock_change||0)+newChange,balance=original.stock_quantity===null?null:Math.max(0,Number(original.stock_quantity)+stockDelta);
+  const statements=[db.prepare('UPDATE medication_administrations SET is_void=1,correction_reason=? WHERE id=? AND organisation_id=?').bind(reason,id,session.organisation_id),db.prepare(`INSERT INTO medication_administrations(id,organisation_id,medication_id,client_id,visit_id,scheduled_at,scheduled_date,administered_at,outcome,dose_given,reason,notes,stock_change,prn_reason,prn_effectiveness,effectiveness_reviewed_at,corrected_from_id,correction_reason,recorded_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(replacementId,session.organisation_id,original.medication_id,original.client_id,original.visit_id,original.scheduled_at,original.scheduled_date,clean(i.administeredAt)||new Date().toISOString(),outcome,clean(i.doseGiven)||original.dose_given,clean(i.reason),clean(i.notes),newChange,clean(i.prnReason),clean(i.prnEffectiveness),clean(i.prnEffectiveness)?new Date().toISOString():null,id,reason,session.user_id),db.prepare('UPDATE medications SET stock_quantity=CASE WHEN stock_quantity IS NULL THEN NULL ELSE ? END,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?').bind(balance,original.medication_id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'medication.administration_corrected','medication_administration',replacementId,{originalId:id,reason,outcome})];
+  if(stockDelta)statements.push(db.prepare(`INSERT INTO medication_stock_transactions(id,organisation_id,medication_id,client_id,transaction_type,quantity,balance_after,reason,administration_id,recorded_by) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,original.medication_id,original.client_id,'correction',stockDelta,balance,reason,replacementId,session.user_id));
+  await db.batch(statements);return json({ok:true,id:replacementId},201);
 }
 async function listBodyMap(db,session,url){
   const clientId=clean(url.searchParams.get('clientId')); if(!clientId)return json({error:{code:'VALIDATION_ERROR',message:'Choose a client.'}},400);
