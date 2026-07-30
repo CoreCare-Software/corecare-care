@@ -224,7 +224,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.22.0';
+const CORECARE_FALLBACK_VERSION = '1.22.1';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -1762,9 +1762,7 @@ function wireRotaDragging(){document.querySelectorAll('[data-rota-drag]').forEac
 function wireRotaResize(){document.querySelectorAll('[data-rota-resize]').forEach(handle=>{handle.addEventListener('mousedown',e=>{e.preventDefault();e.stopPropagation();const id=handle.dataset.rotaResize,v=(rotaData.visits||[]).find(x=>x.id===id),card=handle.closest('.scheduler-visit'),startX=e.clientX,startWidth=card.offsetWidth;const move=ev=>{card.style.width=Math.max(42,startWidth+ev.clientX-startX)+'px'};const up=async ev=>{document.removeEventListener('mousemove',move);document.removeEventListener('mouseup',up);const mins=Math.max(15,Math.round(((startWidth+ev.clientX-startX)/ROTA_HOUR_WIDTH*60)/rotaSnapMinutes())*rotaSnapMinutes());await moveRotaVisit(id,v.staff_id,new Date(v.scheduled_start),mins)};document.addEventListener('mousemove',move);document.addEventListener('mouseup',up);});});}
 function setRotaView(view){rotaView=view;document.querySelectorAll('[data-rota-view]').forEach(b=>b.classList.toggle('active',b.dataset.rotaView===view));$('#rota-board-view').hidden=view!=='board';$('#rota-week-view').hidden=view!=='week';$('#rota-list-view').hidden=view!=='list';$('#rota-day-label').hidden=view!=='board';}
 function setRotaPlanningMode(enabled){const page=$('#rota-page');if(!page)return;page.classList.toggle('planning-board-mode',enabled);if(enabled){document.title='CoreCare · Full planning board';setTimeout(()=>$('.rota-planner-panel')?.scrollIntoView({block:'start'}),50);}else document.title='CoreCare';}
-function openRotaPlanningTab(){const url=new URL(location.href);url.hash='rota-planning';window.open(url.toString(),'corecare-rota-planning');}
 $('#rota-open-planner')?.addEventListener('click',()=>setRotaPlanningMode(true));
-$('#rota-open-planner-tab')?.addEventListener('click',openRotaPlanningTab);
 $('#rota-return-overview')?.addEventListener('click',()=>{setRotaPlanningMode(false);window.scrollTo({top:0,behavior:'smooth'});});
 if(location.hash==='#rota-planning'){setTimeout(()=>{document.querySelector('[data-page="rota"]')?.click();setRotaPlanningMode(true);},300);}
 $('#rota-new')?.addEventListener('click',async()=>{if(!rotaData.clients?.length)await loadRotaBoard();$('#rota-form')?.reset();$('#rota-dialog')?.showModal();});$('#rota-refresh')?.addEventListener('click',loadRotaBoard);$('#rota-week')?.addEventListener('change',loadRotaBoard);$('#rota-day')?.addEventListener('change',()=>{renderRotaVisualBoard();renderRotaIntelligence();renderPlannerCommandCentre();});$('#rota-status-filter')?.addEventListener('change',renderRotaBoard);$('#rota-staff-filter')?.addEventListener('change',renderRotaVisualBoard);$('#rota-prev-day')?.addEventListener('click',()=>changeRotaDay(-1));$('#rota-next-day')?.addEventListener('click',()=>changeRotaDay(1));$('#rota-today')?.addEventListener('click',()=>{const today=new Date(),m=new Date(today),d=(m.getDay()+6)%7;m.setDate(m.getDate()-d);$('#rota-week').value=m.toISOString().slice(0,10);loadRotaBoard().then(()=>{$('#rota-day').value=today.toISOString().slice(0,10);renderRotaVisualBoard();});});document.querySelectorAll('[data-rota-view]').forEach(b=>b.addEventListener('click',()=>setRotaView(b.dataset.rotaView)));
