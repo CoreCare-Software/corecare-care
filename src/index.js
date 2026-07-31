@@ -1,5 +1,5 @@
 /** CoreCare Enterprise 1.25.1 — Care-plan toggle stability */
-const VERSION = "1.25.3";
+const VERSION = "1.25.4";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;

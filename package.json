@@ -1,6 +1,6 @@
 {
   "name": "corecare",
-  "version": "1.25.3",
+  "version": "1.25.4",
   "private": true,
   "description": "CoreCare multi-tenant care management SaaS platform",
   "type": "module",
