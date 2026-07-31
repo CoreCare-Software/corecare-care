@@ -385,8 +385,5 @@ body[data-workspace="carer"] .organisation-workspace-action,body[data-workspace=
 /* v1.24.2 medication catalogue search */
 .medication-search-wrap{position:relative}.medication-search-results{position:absolute;z-index:1200;left:0;right:0;top:calc(100% + 4px);max-height:280px;overflow:auto;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 16px 40px rgba(17,47,43,.18);padding:6px}.medication-search-option{display:flex;width:100%;flex-direction:column;align-items:flex-start;gap:3px;border:0;background:#fff;padding:10px 12px;border-radius:8px;text-align:left;cursor:pointer;color:var(--ink)}.medication-search-option:hover,.medication-search-option:focus{background:var(--brand-soft);outline:2px solid transparent}.medication-search-option small{color:var(--muted)}.medication-search-empty{padding:12px;color:var(--muted);font-size:.9rem}
 
-/* CoreCare v1.24.6 — care-plan domain toggle stability */
-.care-plan-domain-fields.is-collapsed{display:none!important}
-#care-plan-dialog[open],#care-plan-dialog[open] #care-plan-form{visibility:visible!important;opacity:1!important}
-#care-plan-dialog[open] #care-plan-form{display:flex!important}
-#care-plan-dialog[open] .care-plan-builder-heading,#care-plan-dialog[open] .sticky-dialog-actions{visibility:visible!important}
+/* CoreCare v1.25.1 — stable care-plan domain toggles */
+.care-plan-domain.domain-disabled .care-domain-fields,.care-plan-domain .care-domain-fields.manually-collapsed{display:none!important}.care-plan-domain.domain-disabled{background:#f7f9f8;border-color:#d9e4dd}.care-plan-domain.domain-disabled .care-domain-heading{opacity:.78}

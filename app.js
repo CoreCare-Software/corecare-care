@@ -1249,29 +1249,7 @@ $('#archive-profile-client').addEventListener('click', archiveSelectedClient);
 
 $$('[data-client-tab]').forEach(button => button.addEventListener('click', () => showClientTab(button.dataset.clientTab)));
 $('#add-care-plan').addEventListener('click', () => openCarePlanDialog());
-document.addEventListener('change',event=>{
-  const toggle=event.target.closest?.('#care-plan-domain-list [data-domain-enabled]');
-  if(!toggle)return;
-  const dialog=$('#care-plan-dialog');
-  const form=$('#care-plan-form');
-  const card=toggle.closest('[data-care-domain]');
-  if(!card)return;
-  const fields=card.querySelector('.care-domain-fields');
-  const badge=card.querySelector('.care-domain-heading b');
-  const enabled=Boolean(toggle.checked);
-  card.classList.toggle('enabled',enabled);
-  card.classList.toggle('domain-collapsed',!enabled);
-  if(fields){fields.hidden=false;fields.classList.toggle('is-collapsed',!enabled);fields.setAttribute('aria-hidden',String(!enabled));}
-  if(badge)badge.textContent=enabled?'Included':'Not included';
-  // Defensive recovery: a domain switch must never hide or replace the care-plan modal itself.
-  if(form){form.hidden=false;form.removeAttribute('aria-hidden');}
-  if(dialog?.open){dialog.hidden=false;}
-  updateCarePlanProgress();
-  requestAnimationFrame(()=>{
-    const content=dialog?.querySelector('.care-plan-builder-content');
-    if(content)content.scrollTop=Math.min(content.scrollTop,Math.max(0,content.scrollHeight-content.clientHeight));
-  });
-});
+document.addEventListener('change',event=>{const toggle=event.target.closest?.('[data-domain-enabled]');if(!toggle)return;const card=toggle.closest('[data-care-domain]');if(!card)return;const fields=card.querySelector('.care-domain-fields'),badge=card.querySelector('.care-domain-heading b');card.classList.toggle('enabled',toggle.checked);if(fields)fields.hidden=!toggle.checked;if(badge)badge.textContent=toggle.checked?'Included':'Not included';updateCarePlanProgress();});
 document.addEventListener('click',event=>{const heading=event.target.closest?.('[data-domain-expand]');if(heading){const card=heading.closest('[data-care-domain]'),fields=card.querySelector('.care-domain-fields');if(card.querySelector('[data-domain-enabled]').checked)fields.hidden=!fields.hidden;}const jump=event.target.closest?.('[data-plan-jump]');if(jump){event.preventDefault();$('#'+jump.dataset.planJump)?.scrollIntoView({behavior:'smooth',block:'start'});}});
 $('#close-care-plan-dialog').addEventListener('click', () => $('#care-plan-dialog').close());
 $('#cancel-care-plan').addEventListener('click', () => $('#care-plan-dialog').close());
