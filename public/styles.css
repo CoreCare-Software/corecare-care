@@ -387,3 +387,12 @@ body[data-workspace="carer"] .organisation-workspace-action,body[data-workspace=
 
 /* v1.25.2 care-plan domain stability: never remove a domain panel from the dialog layout. */
 .care-plan-domain.not-included{background:#f4f6f5;border-color:#d9e0dc}.care-plan-domain.not-included .care-domain-fields{opacity:.5;background:#f6f8f7}.care-plan-domain.not-included .care-domain-fields textarea,.care-plan-domain.not-included .care-domain-fields input{cursor:not-allowed}.care-plan-domain.not-included .care-domain-heading b{color:#68766f!important}
+
+/* CoreCare v1.25.3 — Firefox-safe care-plan modal */
+body.care-plan-modal-open{overflow:hidden}
+.care-plan-modal{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:4vh 2vw;background:rgba(6,26,23,.58);backdrop-filter:blur(3px)}
+.care-plan-modal[hidden]{display:none!important}
+.care-plan-modal-panel{position:relative;margin:0;background:#fff;color:var(--ink);border:0}
+.care-plan-modal-panel.care-plan-builder-dialog{width:min(1180px,96vw);height:min(92vh,980px);max-width:none;max-height:92vh;overflow:hidden}
+.care-plan-modal-panel>form{height:100%;display:flex;flex-direction:column;padding:0}
+@media(max-width:760px){.care-plan-modal{padding:0}.care-plan-modal-panel.care-plan-builder-dialog{width:100vw;height:100vh;max-height:none;border-radius:0}}

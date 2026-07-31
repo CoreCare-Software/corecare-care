@@ -239,7 +239,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.23.1';
+const CORECARE_FALLBACK_VERSION = '1.25.3';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -1122,14 +1122,26 @@ function renderCarePlanDomains(sections=[]){
 }
 function updateCarePlanProgress(){const enabled=$$('#care-plan-domain-list [data-domain-enabled]:checked').length;setText('#care-plan-progress-count',`${enabled} / ${carePlanDomainDefinitions.length}`);}
 function collectCarePlanSections(){return $$('#care-plan-domain-list [data-care-domain]').map((card,index)=>{const value=name=>card.querySelector(`[data-domain-field="${name}"]`)?.value||'';return {category:card.dataset.careDomain,title:card.querySelector('.care-domain-heading strong')?.textContent||card.dataset.careDomain,enabled:card.querySelector('[data-domain-enabled]')?.checked!==false,assessedNeeds:value('assessedNeeds'),desiredOutcomes:value('desiredOutcomes'),supportInstructions:value('supportInstructions'),risksControls:value('risksControls'),personalPreferences:value('personalPreferences'),reviewDate:value('reviewDate'),sortOrder:index};}).filter(section=>section.enabled);}
+function openCarePlanModal(){
+  const modal=$('#care-plan-dialog');
+  if(!modal)return;
+  modal.hidden=false;
+  document.body.classList.add('care-plan-modal-open');
+}
+function closeCarePlanModal(){
+  const modal=$('#care-plan-dialog');
+  if(!modal)return;
+  modal.hidden=true;
+  document.body.classList.remove('care-plan-modal-open');
+}
 function openCarePlanDialog(id=''){
   const form=$('#care-plan-form');form.reset();form.elements.id.value=id;$('#care-plan-error').hidden=true;const item=carePlans.find(x=>x.id===id);
   $('#care-plan-dialog-title').textContent=id?'Review structured care plan':'Create structured care plan';
   if(item)Object.entries(item).forEach(([k,v])=>{const f=form.elements.namedItem(k);if(f&&!Array.isArray(v))f.value=v??'';});
   else {form.elements.title.value='Comprehensive care and support plan';form.elements.planType.value='Comprehensive care plan';form.elements.authorName.value=currentUser?.displayName||'';const d=new Date();form.elements.effectiveDate.value=d.toISOString().slice(0,10);d.setMonth(d.getMonth()+6);form.elements.reviewDate.value=d.toISOString().slice(0,10);}
-  renderCarePlanDomains(item?.sections||[]);$('#care-plan-dialog').showModal();setTimeout(()=>form.elements.title.focus(),50);
+  renderCarePlanDomains(item?.sections||[]);openCarePlanModal();setTimeout(()=>form.elements.title.focus(),50);
 }
-async function saveCarePlan(e){e.preventDefault();const form=e.currentTarget,data=Object.fromEntries(new FormData(form)),error=$('#care-plan-error');data.sections=collectCarePlanSections();error.hidden=true;if(!data.sections.length){error.textContent='Enable and complete at least one care and support domain.';error.hidden=false;return;}try{await api(data.id?`/api/care-plans/${encodeURIComponent(data.id)}`:`/api/clients/${encodeURIComponent(selectedClientId)}/care-plans`,{method:data.id?'PUT':'POST',body:JSON.stringify(data)});$('#care-plan-dialog').close();await loadClientWorkspace(selectedClientId);await Promise.all([loadDashboard(),loadAllCarePlans().catch(()=>{})]);}catch(x){error.textContent=x.message;error.hidden=false;}}
+async function saveCarePlan(e){e.preventDefault();const form=e.currentTarget,data=Object.fromEntries(new FormData(form)),error=$('#care-plan-error');data.sections=collectCarePlanSections();error.hidden=true;if(!data.sections.length){error.textContent='Enable and complete at least one care and support domain.';error.hidden=false;return;}try{await api(data.id?`/api/care-plans/${encodeURIComponent(data.id)}`:`/api/clients/${encodeURIComponent(selectedClientId)}/care-plans`,{method:data.id?'PUT':'POST',body:JSON.stringify(data)});closeCarePlanModal();await loadClientWorkspace(selectedClientId);await Promise.all([loadDashboard(),loadAllCarePlans().catch(()=>{})]);}catch(x){error.textContent=x.message;error.hidden=false;}}
 
 function renderRisks(){const el=$('#risk-list');if(!el)return;el.innerHTML=clientRisks.length?clientRisks.map(r=>`<article class="record-card risk-${r.severity.toLowerCase()}"><header><div><p class="eyebrow">${escapeHtml(r.category)}</p><h3>${escapeHtml(r.title)}</h3></div><span class="badge ${r.severity==='High'?'danger':r.severity==='Medium'?'active':'success'}">${escapeHtml(r.severity)}</span></header><div class="record-meta"><span>${escapeHtml(r.likelihood)} likelihood</span><span class="${dueClass(r.reviewDate)}">Review ${formatDate(r.reviewDate)}</span><span>${escapeHtml(r.status)}</span></div><p><strong>Controls:</strong> ${escapeHtml(r.controls||'None recorded')}</p><div class="record-actions"><button class="row-action" data-edit-risk="${escapeHtml(r.id)}">Edit</button></div></article>`).join(''):'<div class="empty-records">No risk assessments have been recorded.</div>';$$('[data-edit-risk]').forEach(b=>b.addEventListener('click',()=>openRiskDialog(b.dataset.editRisk)));}
 function openRiskDialog(id=''){const form=$('#risk-form');form.reset();form.elements.id.value=id;$('#risk-error').hidden=true;const item=clientRisks.find(x=>x.id===id);$('#risk-dialog-title').textContent=id?'Edit risk':'Add risk';if(item)Object.entries(item).forEach(([k,v])=>{const f=form.elements.namedItem(k);if(f)f.value=v??'';});$('#risk-dialog').showModal();}
@@ -1255,8 +1267,8 @@ $$('[data-client-tab]').forEach(button => button.addEventListener('click', () =>
 $('#add-care-plan').addEventListener('click', () => openCarePlanDialog());
 document.addEventListener('change',event=>{const toggle=event.target.closest?.('[data-domain-enabled]');if(!toggle)return;const card=toggle.closest('[data-care-domain]');if(!card)return;const fields=card.querySelector('.care-domain-fields'),badge=card.querySelector('.care-domain-heading b');card.classList.toggle('enabled',toggle.checked);card.classList.toggle('not-included',!toggle.checked);if(fields)fields.setAttribute('aria-disabled',toggle.checked?'false':'true');card.querySelectorAll('[data-domain-field]').forEach(field=>field.disabled=!toggle.checked);if(badge)badge.textContent=toggle.checked?'Included':'Not included';updateCarePlanProgress();});
 document.addEventListener('click',event=>{const heading=event.target.closest?.('[data-domain-expand]');if(heading){event.preventDefault();heading.closest('[data-care-domain]')?.querySelector('[data-domain-field]:not(:disabled)')?.focus();}const jump=event.target.closest?.('[data-plan-jump]');if(jump){event.preventDefault();$('#'+jump.dataset.planJump)?.scrollIntoView({behavior:'smooth',block:'start'});}});
-$('#close-care-plan-dialog').addEventListener('click', () => $('#care-plan-dialog').close());
-$('#cancel-care-plan').addEventListener('click', () => $('#care-plan-dialog').close());
+$('#close-care-plan-dialog').addEventListener('click', closeCarePlanModal);
+$('#cancel-care-plan').addEventListener('click', closeCarePlanModal);
 $('#care-plan-form').addEventListener('submit', saveCarePlan);
 $('#add-risk').addEventListener('click', () => openRiskDialog());
 $('#close-risk-dialog').addEventListener('click', () => $('#risk-dialog').close());
