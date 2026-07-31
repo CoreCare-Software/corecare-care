@@ -388,7 +388,7 @@ body[data-workspace="carer"] .organisation-workspace-action,body[data-workspace=
 /* v1.25.2 care-plan domain stability: never remove a domain panel from the dialog layout. */
 
 
-/* CoreCare v1.25.4 — stable care-plan domain controls */
+/* CoreCare v1.25.5 — collapsible stable care-plan domain controls */
 body.care-plan-modal-open{overflow:hidden}
 .care-plan-modal{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:4vh 2vw;background:rgba(6,26,23,.58);backdrop-filter:blur(3px)}
 .care-plan-modal[hidden]{display:none!important}
