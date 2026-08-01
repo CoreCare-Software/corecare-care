@@ -4,6 +4,8 @@ function setText(selector, value) { const node = $(selector); if (node) node.tex
 
 const loginView = $('#login-view');
 const appView = $('#app-view');
+const APP_EDITION = 'care';
+const PLATFORM_URL = 'https://platform.corecare.co.uk';
 const loginForm = $('#login-form');
 const loginError = $('#login-error');
 const sidebar = $('.sidebar');
@@ -329,6 +331,10 @@ function showPlatformView(targetId = 'platform-page', updateHistory = true) {
 
 async function showApplication(user) {
   currentUser = user || currentUser;
+  if (APP_EDITION === 'care' && currentUser?.isPlatformUser && !currentUser?.supportMode) {
+    window.location.replace(PLATFORM_URL);
+    return;
+  }
   loginView.hidden = true;
   appView.hidden = false;
   setDate();
