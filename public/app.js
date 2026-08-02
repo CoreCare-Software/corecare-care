@@ -114,12 +114,12 @@ const WORKSPACE_CONFIG = {
   manager: {
     label: 'Manager workspace',
     roles: ['organisation_owner','organisation_admin','branch_manager','owner','manager'],
-    pages: ['dashboard','operations','clients','staff','family','care','medication','visits','rota','tasks','incidents','finance','reports','settings']
+    pages: ['dashboard','operations','clients','staff','family','care','medication','visits','rota','tasks','incidents','finance','reports','settings','support']
   },
   coordinator: {
     label: 'Care coordinator workspace',
     roles: ['office_staff'],
-    pages: ['dashboard','clients','staff','care','visits','rota','tasks','incidents']
+    pages: ['dashboard','clients','staff','care','visits','rota','tasks','incidents','support']
   },
   senior: {
     label: 'Senior carer workspace',
@@ -148,13 +148,13 @@ const WORKSPACE_NAVIGATION = {
     ['Overview', [['dashboard','⌂','Organisation dashboard'],['operations','◆','Live operations']]],
     ['People', [['clients','◉','Clients'],['staff','◎','Staff'],['family','◇','Family portal']]],
     ['Care delivery', [['care','▤','Care plans'],['medication','✚','Medication'],['visits','◷','Visits']]],
-    ['Operations', [['rota','▦','Rota'],['tasks','✓','Tasks'],['incidents','!','Incidents'],['finance','£','Finance'],['reports','▥','Reports'],['settings','⚙','Settings']]]
+    ['Operations', [['rota','▦','Rota'],['tasks','✓','Tasks'],['incidents','!','Incidents'],['finance','£','Finance'],['reports','▥','Reports'],['support','?','Support'],['settings','⚙','Settings']]]
   ],
   coordinator: [
     ['Overview', [['dashboard','⌂','Coordinator dashboard']]],
     ['People', [['clients','◉','Clients'],['staff','◎','Staff']]],
     ['Care delivery', [['care','▤','Care plans'],['visits','◷','Visits']]],
-    ['Planning', [['rota','▦','Rota'],['tasks','✓','Tasks'],['incidents','!','Incidents']]]
+    ['Planning', [['rota','▦','Rota'],['tasks','✓','Tasks'],['incidents','!','Incidents'],['support','?','Support']]]
   ],
   senior: [
     ['Overview', [['dashboard','⌂','Senior dashboard']]],
@@ -174,7 +174,7 @@ const WORKSPACE_NAVIGATION = {
 };
 
 function moduleAllowsPage(page){
-  if(page==='dashboard') return true;
+  if(page==='dashboard'||page==='support') return true;
   if(currentUser?.isPlatformUser && currentUser?.supportMode) return true;
   return currentUser?.modules?.[page]===true;
 }
@@ -448,6 +448,7 @@ function showPage(page) {
     loadRotaBoard();
     return;
   }
+  if (page === 'support') { activatePage('#support-page'); pageKicker.textContent='CoreCare Connect'; pageTitle.textContent='Support'; loadOrganisationSupport().catch(showToastError); return; }
   if (page === 'medication') {
     activatePage('#medication-page'); pageKicker.textContent='Care delivery'; pageTitle.textContent='Medication'; loadMedicationModule().catch(showToastError); return;
   }
@@ -2134,3 +2135,16 @@ document.addEventListener('change',event=>{const input=event.target.closest?.('#
 document.addEventListener('keydown',event=>{const input=event.target.closest?.('#medication-form input[name="name"]');if(input){if(event.key==='Escape'){renderMedicationSearchResults('');return;}if(event.key==='ArrowDown'){const first=document.querySelector('#medication-search-results [data-medication-result]');if(first){event.preventDefault();first.focus();}}return;}const option=event.target.closest?.('[data-medication-result]');if(!option)return;if(event.key==='Enter'||event.key===' '){event.preventDefault();option.click();}else if(event.key==='ArrowDown'){event.preventDefault();option.nextElementSibling?.focus();}else if(event.key==='ArrowUp'){event.preventDefault();(option.previousElementSibling||medicationSearchInput())?.focus();}});
 document.addEventListener('click',event=>{const option=event.target.closest?.('[data-medication-result]');if(option){event.preventDefault();const match=CORECARE_MEDICINE_CATALOGUE.find(m=>m.name===option.dataset.medicationResult);applyMedicationCatalogueSelection(document.querySelector('#medication-form'),match);medicationSearchInput()?.focus();return;}if(!event.target.closest?.('.medication-search-wrap'))renderMedicationSearchResults('');});
 initialiseMedicationCatalogue();
+
+
+let organisationSupportTickets=[],activeOrganisationTicketId=null;
+async function loadOrganisationSupport(){const q=new URLSearchParams({status:$('#support-status-filter')?.value||'all',search:$('#support-search')?.value||''});const d=await api('/api/support/tickets?'+q);organisationSupportTickets=d.tickets||[];renderOrganisationSupport()}
+function renderOrganisationSupport(){const rows=organisationSupportTickets,open=rows.filter(x=>!['resolved','closed'].includes(x.status)).length,waiting=rows.filter(x=>x.status==='waiting_customer').length,resolved=rows.filter(x=>['resolved','closed'].includes(x.status)).length;$('#support-open-count').textContent=open;$('#support-waiting-count').textContent=waiting;$('#support-resolved-count').textContent=resolved;$('#support-ticket-table').innerHTML=rows.map(t=>`<tr><td><strong>${escapeHtml(t.ticket_number)}</strong><small>${escapeHtml(t.product_name||'CoreCare Care')}</small></td><td><strong>${escapeHtml(t.subject)}</strong><small>${t.message_count||0} replies</small></td><td><span class="badge ${t.priority==='critical'?'danger':t.priority==='high'?'warning':'neutral'}">${escapeHtml(t.priority)}</span></td><td><span class="badge ${['resolved','closed'].includes(t.status)?'success':'active'}">${escapeHtml(String(t.status).replaceAll('_',' '))}</span></td><td>${formatDateTime(t.updated_at)}</td><td><button class="row-action" data-org-ticket-open="${escapeHtml(t.id)}">Open</button></td></tr>`).join('');$('#support-empty').hidden=rows.length>0}
+$('#support-new-ticket')?.addEventListener('click',()=>{const f=$('#support-ticket-form');f.reset();$('#support-ticket-error').hidden=true;$('#support-ticket-dialog').showModal()});
+$('#support-refresh')?.addEventListener('click',()=>loadOrganisationSupport().catch(showToastError));
+$('#support-status-filter')?.addEventListener('change',()=>loadOrganisationSupport().catch(showToastError));
+$('#support-search')?.addEventListener('input',()=>{clearTimeout(window.__supportSearch);window.__supportSearch=setTimeout(()=>loadOrganisationSupport().catch(showToastError),250)});
+$('#support-ticket-form')?.addEventListener('submit',async e=>{e.preventDefault();const form=e.currentTarget,f=new FormData(form),err=$('#support-ticket-error');err.hidden=true;try{const payload={subject:f.get('subject'),priority:f.get('priority'),category:f.get('category'),module:f.get('module'),description:f.get('description'),pageUrl:location.href,browserInfo:navigator.userAgent,deviceInfo:`${navigator.platform||''} ${screen.width}x${screen.height}`};const created=await api('/api/support/tickets',{method:'POST',body:JSON.stringify(payload)});const file=form.elements.attachment.files[0];if(file){if(file.size>2*1024*1024)throw new Error('The attachment must be smaller than 2 MB.');const dataBase64=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]);r.onerror=reject;r.readAsDataURL(file)});await api(`/api/support/tickets/${created.id}/attachments`,{method:'POST',body:JSON.stringify({fileName:file.name,mimeType:file.type,sizeBytes:file.size,dataBase64})})}$('#support-ticket-dialog').close();showToast(`Ticket ${created.ticketNumber} sent to CoreCare Support.`);await loadOrganisationSupport();await openOrganisationTicket(created.id)}catch(ex){err.textContent=ex.message;err.hidden=false}});
+document.addEventListener('click',e=>{const b=e.target.closest?.('[data-org-ticket-open]');if(b)openOrganisationTicket(b.dataset.orgTicketOpen).catch(showToastError);const a=e.target.closest?.('[data-support-ticket-action]');if(a)organisationTicketAction(a.dataset.supportTicketAction).catch(showToastError)});
+async function openOrganisationTicket(id){activeOrganisationTicketId=id;const d=await api(`/api/support/tickets/${encodeURIComponent(id)}`),t=d.ticket;$('#org-ticket-number').textContent=t.ticket_number;$('#org-ticket-title').textContent=t.subject;$('#org-ticket-detail').innerHTML=`<section class="ticket-summary-card"><div class="ticket-meta"><span>${escapeHtml(t.priority)}</span><span>${escapeHtml(String(t.status).replaceAll('_',' '))}</span><span>${escapeHtml(t.category||'general')}</span><span>${escapeHtml(t.module||'General')}</span></div><p>${escapeHtml(t.description||'')}</p><small>Created ${formatDateTime(t.created_at)} · CoreCare ${escapeHtml(t.app_version||'')}</small></section><section><div class="subheading"><div><h3>Conversation</h3><p>Replies shared between your organisation and CoreCare Support.</p></div></div><div class="ticket-thread">${(d.messages||[]).map(m=>`<article class="ticket-message"><div><strong>${escapeHtml(m.author_name|| (m.message_type==='customer_reply'?'Organisation':'CoreCare Support'))}</strong><span>${formatDateTime(m.created_at)}</span></div><p>${escapeHtml(m.body)}</p></article>`).join('')||'<p class="muted">No replies yet.</p>'}</div><form id="org-ticket-reply-form" class="ticket-composer"><textarea name="body" rows="3" required placeholder="Reply to CoreCare Support"></textarea><button class="primary-button compact">Send reply</button></form></section><section><h3>Attachments</h3><div class="support-attachments">${(d.attachments||[]).map(a=>`<a class="secondary-button compact" href="/api/support/attachments/${encodeURIComponent(a.id)}" target="_blank">${escapeHtml(a.file_name)}</a>`).join('')||'<p class="muted">No attachments.</p>'}</div></section><div class="dialog-actions"><button class="secondary-button" data-support-ticket-action="${['resolved','closed'].includes(t.status)?'reopen':'close'}">${['resolved','closed'].includes(t.status)?'Reopen ticket':'Close ticket'}</button></div>`;$('#support-ticket-detail-dialog').showModal();$('#org-ticket-reply-form').onsubmit=async ev=>{ev.preventDefault();const f=new FormData(ev.currentTarget);await api(`/api/support/tickets/${activeOrganisationTicketId}/messages`,{method:'POST',body:JSON.stringify({body:f.get('body')})});await openOrganisationTicket(activeOrganisationTicketId);await loadOrganisationSupport()}}
+async function organisationTicketAction(action){await api(`/api/support/tickets/${activeOrganisationTicketId}`,{method:'PUT',body:JSON.stringify({action})});await openOrganisationTicket(activeOrganisationTicketId);await loadOrganisationSupport()}
