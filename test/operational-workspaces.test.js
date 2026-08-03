@@ -70,5 +70,7 @@ test('live rota, manager and family workspaces are wired through the Worker and 
   assert.doesNotMatch(html, /31 of 46 visits completed/);
   assert.match(app, /async function loadFamilyManagement/);
   assert.match(app, /async function loadFamilyPortalPage/);
+  assert.match(app, /workspaceKey\(\)===['"]family['"]&&page===['"]family['"]/);
+  assert.match(worker, /family:\s*\[\]/);
   assert.match(app, /async function publishRotaWeek/);
 });
