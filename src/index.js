@@ -1,4 +1,5 @@
 import { exchangePlatformAccess } from './platform-access.js';
+import { handlePlatformOrganisation } from './platform-organisations.js';
 
 /** CoreCare Care 1.28.1 — Secure sign-in experience */
 const VERSION = "1.28.1";
@@ -19,11 +20,16 @@ export default {
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
+      if (request.headers.get('x-corecare-product-key') && url.pathname === "/api/platform/organisations" && request.method === "POST") return handlePlatformOrganisation(request, env);
+      if (request.headers.get('x-corecare-product-key') && url.pathname.startsWith("/api/platform/organisations/") && request.method === "GET") return handlePlatformOrganisation(request, env, decodeURIComponent(url.pathname.slice("/api/platform/organisations/".length)));
 
       if (url.pathname.startsWith("/api/")) {
         if (!env.DB) return databaseRequired();
         const session = await requireSession(request, env.DB);
         if (session instanceof Response) return session;
+        if (session.support_mode && session.support_access_mode === 'read_only' && !['GET','HEAD','OPTIONS'].includes(request.method) && url.pathname !== '/api/platform/exit-support') {
+          return json({ error: { code: 'SUPPORT_MODE_READ_ONLY', message: 'This Platform support session is read-only.' } }, 403);
+        }
 
         if (url.pathname === "/api/auth/change-password" && request.method === "POST") return changePassword(request, env.DB, session);
         if (url.pathname === "/api/development/status") return developmentStatus(env, session);
