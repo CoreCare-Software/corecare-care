@@ -378,10 +378,11 @@ function applyAccessVisibility(){
   const platformWorkspace=isPlatformWorkspace();
   $$('.organisation-workspace-action').forEach(node=>{node.hidden=platformWorkspace || !['manager','coordinator'].includes(workspaceKey());});
   const visibility={
-    '#add-client':'clients.create','#add-staff':'staff.create','#edit-profile-client':'clients.edit','#archive-profile-client':'clients.archive',
-    '#operations-new-task':'tasks.manage','#tasks-new':'tasks.manage','#operations-record-incident':'incidents.manage','#incidents-new':'incidents.manage','#operations-add-handover':'operations.manage'
+    '#add-client':'clients.create','#add-staff':'staff.create','#edit-profile-client':'clients.edit','#archive-profile-client':'clients.archive'
   };
   Object.entries(visibility).forEach(([selector,permission])=>{const node=$(selector);if(node)node.hidden=!hasAccess(permission);});
+  const writeVisibility={'#operations-new-task':'tasks.manage','#tasks-new':'tasks.manage','#operations-record-incident':'incidents.manage','#incidents-new':'incidents.manage','#operations-add-handover':'operations.manage'};
+  Object.entries(writeVisibility).forEach(([selector,permission])=>{const node=$(selector);if(node)node.hidden=!canWriteOperations(permission);});
   $$('.quick-action[data-quick="client"]').forEach(node=>node.hidden=!hasAccess('clients.create'));
   $$('.quick-action[data-quick="staff"]').forEach(node=>node.hidden=!hasAccess('staff.create'));
 }
