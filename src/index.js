@@ -2,9 +2,9 @@ import { exchangePlatformAccess } from './platform-access.js';
 import { handlePlatformOrganisation } from './platform-organisations.js';
 import { carePlanReadiness, validateAdministration, validateBodyMap, validateMedicationProfile } from './clinical-records.js';
 
-/** CoreCare Care 1.29.0 — Tasks and incident management */
-const VERSION = "1.29.0";
-const RELEASE = "CoreCare Care 1.29.0 — Tasks and incident management";
+/** CoreCare Care 1.30.0 — Integrated clinical records */
+const VERSION = "1.30.0";
+const RELEASE = "CoreCare Care 1.30.0 — Integrated clinical records";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -301,7 +301,8 @@ async function login(request, env) {
     env.DB.prepare("INSERT INTO login_history(id,organisation_id,user_id,outcome,reason,ip_hint,user_agent) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(),user.organisation_id,user.id,"success","Password sign-in",ip,clean(request.headers.get("user-agent")).slice(0,250)),
     auditStatement(env.DB, user.organisation_id, user.id, "user.login", "user", user.id, { email: user.email })
   ]);
-  return json({ user: publicUser(user), expiresAt: expires.toISOString() }, 200, { "set-cookie": sessionCookie(token, expires) });
+  const access=await buildAccessProfile(env.DB,{...user,user_id:user.id,active_branch_id:user.home_branch_id});
+  return json({ user: {...publicUser(user),permissions:access.permissions,modules:access.modules}, expiresAt: expires.toISOString() }, 200, { "set-cookie": sessionCookie(token, expires) });
 }
 
 async function recordFailedLogin(db, key, email, ip, attempt) {
@@ -1271,7 +1272,7 @@ async function saveMedication(request,db,session){
     const existing=await db.prepare('SELECT id,client_id FROM medications WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();
     if(!existing)return notFound('Medication');
     if(existing.client_id!==clientId)return json({error:{code:'VALIDATION_ERROR',message:'A medication cannot be moved to another client.'}},400);
-    await db.prepare(`UPDATE medications SET name=?,strength=?,form=?,route=?,dose=?,instructions=?,frequency=?,scheduled_times_json=?,start_date=?,end_date=?,is_prn=?,prn_protocol=?,min_interval_minutes=?,max_dose_24h=?,stock_quantity=?,stock_unit=?,low_stock_threshold=?,status=?,discontinued_reason=?,discontinued_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(...fields,id,session.organisation_id).run();
+    await db.prepare(`UPDATE medications SET name=?,strength=?,form=?,route=?,dose=?,instructions=?,frequency=?,scheduled_times_json=?,start_date=?,end_date=?,is_prn=?,prn_protocol=?,min_interval_minutes=?,max_dose_24h=?,stock_unit=?,low_stock_threshold=?,status=?,discontinued_reason=?,discontinued_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(...fields.slice(0,14),...fields.slice(15),id,session.organisation_id).run();
   }else{
     await db.prepare(`INSERT INTO medications(id,organisation_id,client_id,name,strength,form,route,dose,instructions,frequency,scheduled_times_json,start_date,end_date,is_prn,prn_protocol,min_interval_minutes,max_dose_24h,stock_quantity,stock_unit,low_stock_threshold,status,discontinued_reason,discontinued_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,clientId,...fields,session.user_id).run();
   }
