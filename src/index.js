@@ -261,7 +261,7 @@ export default {
 };
 
 function health(env) {
-  return json({ ok: true, service: "corecare", version: VERSION, database: Boolean(env.DB), authentication: Boolean(env.DB), timestamp: new Date().toISOString() });
+  return json({ ok: true, service: "corecare", version: VERSION, database: Boolean(env.DB), authentication: Boolean(env.DB), platform: { configured: Boolean(env.CORECARE_PLATFORM && env.CORECARE_PRODUCT_KEY) }, timestamp: new Date().toISOString() });
 }
 
 async function login(request, env) {
