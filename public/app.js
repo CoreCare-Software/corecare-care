@@ -242,7 +242,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.28.1';
+const CORECARE_FALLBACK_VERSION = '1.28.2';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;

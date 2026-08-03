@@ -1,9 +1,9 @@
 import { exchangePlatformAccess } from './platform-access.js';
 import { handlePlatformOrganisation } from './platform-organisations.js';
 
-/** CoreCare Care 1.28.1 — Secure sign-in experience */
-const VERSION = "1.28.1";
-const RELEASE = "CoreCare Care 1.28.1 — Secure sign-in experience";
+/** CoreCare Care 1.28.2 — Owner support access repair */
+const VERSION = "1.28.2";
+const RELEASE = "CoreCare Care 1.28.2 — Owner support access repair";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;

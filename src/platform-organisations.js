@@ -20,7 +20,7 @@ async function careSummary(env, organisation) {
     env.DB.prepare("SELECT COUNT(*) total,SUM(CASE WHEN status='Active' THEN 1 ELSE 0 END) active FROM clients WHERE organisation_id=?1").bind(organisation.id).first(),
     env.DB.prepare("SELECT COUNT(*) total,SUM(CASE WHEN status='Active' THEN 1 ELSE 0 END) active FROM staff WHERE organisation_id=?1").bind(organisation.id).first(),
     env.DB.prepare("SELECT COUNT(*) total,SUM(CASE WHEN status='Active' THEN 1 ELSE 0 END) active FROM care_plans WHERE organisation_id=?1").bind(organisation.id).first(),
-    env.DB.prepare("SELECT COUNT(*) total,SUM(CASE WHEN status NOT IN ('resolved','closed') THEN 1 ELSE 0 END) open FROM platform_support_tickets WHERE organisation_id=?1 AND product_code='CARE'").bind(organisation.id).first(),
+    env.DB.prepare("SELECT COUNT(*) total,SUM(CASE WHEN status NOT IN ('resolved','closed') THEN 1 ELSE 0 END) open FROM platform_support_tickets WHERE organisation_id=?1 AND (source_product='CARE' OR product_id='product-care')").bind(organisation.id).first(),
   ]);
   return {
     productCode: PRODUCT_CODE,

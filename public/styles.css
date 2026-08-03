@@ -399,7 +399,7 @@ body.care-plan-modal-open{overflow:hidden}
 
 .support-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:18px 0}.support-kpis article{background:#fff;border:1px solid var(--border);border-radius:14px;padding:16px}.support-kpis span{display:block;color:var(--muted);font-size:.82rem}.support-kpis strong{font-size:1.8rem}.support-ticket-detail{display:grid;gap:18px}.ticket-summary-card,.support-ticket-detail>section{border:1px solid var(--border);border-radius:14px;padding:16px;background:#fff}.ticket-meta{display:flex;gap:8px;flex-wrap:wrap}.ticket-meta span{background:#eef5f2;border-radius:999px;padding:6px 10px}.ticket-thread{display:grid;gap:10px;max-height:340px;overflow:auto}.ticket-message{border-left:4px solid #0f766e;background:#f5faf8;border-radius:10px;padding:12px}.ticket-message div{display:flex;justify-content:space-between;gap:12px}.ticket-composer{display:grid;gap:10px;margin-top:12px}.support-attachments{display:flex;gap:8px;flex-wrap:wrap}@media(max-width:700px){.support-kpis{grid-template-columns:1fr}}
 
-/* CoreCare Care 1.28.1 — secure sign-in experience */
+/* CoreCare Care 1.28.2 — owner support access repair */
 .login-shell{min-height:100svh;grid-template-columns:minmax(390px,44%) 1fr}
 .login-panel{max-width:none;padding:clamp(1.75rem,4vw,4.5rem);align-items:flex-start}
 .login-panel>*{width:min(100%,480px)}
