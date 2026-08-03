@@ -1,8 +1,8 @@
 import { exchangePlatformAccess } from './platform-access.js';
 
-/** CoreCare Care 1.28.0 — Platform command-centre access */
-const VERSION = "1.28.0";
-const RELEASE = "CoreCare Care 1.28.0 — Platform command-centre access";
+/** CoreCare Care 1.28.1 — Secure sign-in experience */
+const VERSION = "1.28.1";
+const RELEASE = "CoreCare Care 1.28.1 — Secure sign-in experience";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;

@@ -74,20 +74,21 @@ let customerSuccessData = null;
 let visitsData = { visits: [], clients: [], staff: [], codes: [], stats: {} };
 
 async function api(url, options = {}) {
+  const { suppressAuthRedirect = false, ...requestOptions } = options;
   const response = await fetch(url, {
     credentials: 'same-origin',
     headers: {
       accept: 'application/json',
-      ...(options.body ? { 'content-type': 'application/json' } : {}),
-      ...(options.headers || {})
+      ...(requestOptions.body ? { 'content-type': 'application/json' } : {}),
+      ...(requestOptions.headers || {})
     },
-    ...options
+    ...requestOptions
   });
   let payload = {};
   try { payload = await response.json(); } catch {}
   if (response.status === 401) {
-    showLogin('Your session has expired. Sign in again.');
-    throw new Error('Your session has expired.');
+    if (!suppressAuthRedirect) showLogin('Your session has expired. Sign in again.');
+    throw new Error(payload?.error?.message || 'Your session has expired.');
   }
   if (!response.ok) throw new Error(payload?.error?.message || 'CoreCare could not complete the request.');
   return payload;
@@ -241,7 +242,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.28.0';
+const CORECARE_FALLBACK_VERSION = '1.28.1';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -402,13 +403,16 @@ function showLogin(message = '') {
   if (message) {
     loginError.textContent = message;
     loginError.hidden = false;
+  } else {
+    loginError.textContent = '';
+    loginError.hidden = true;
   }
   $('#email').focus();
 }
 
 async function restoreSession() {
   try {
-    const payload = await api('/api/auth/session');
+    const payload = await api('/api/auth/session', { suppressAuthRedirect: true });
     await showApplication(payload.user);
   } catch {
     showLogin();
@@ -1198,14 +1202,14 @@ loginForm.addEventListener('submit', async event => {
   submit.disabled = true;
   submit.textContent = 'Signing in…';
   try {
-    const payload = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: String(data.get('email') || '').trim().toLowerCase(), password: String(data.get('password') || '') }) });
+    const payload = await api('/api/auth/login', { method: 'POST', suppressAuthRedirect: true, body: JSON.stringify({ email: String(data.get('email') || '').trim().toLowerCase(), password: String(data.get('password') || '') }) });
     await showApplication(payload.user);
   } catch (error) {
     loginError.textContent = error.message;
     loginError.hidden = false;
   } finally {
     submit.disabled = false;
-    submit.textContent = 'Sign in to CoreCare';
+    submit.textContent = 'Sign in to CoreCare Care';
   }
 });
 

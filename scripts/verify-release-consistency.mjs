@@ -17,7 +17,7 @@ const checks = [
   },
   {
     file: '../public/index.html',
-    expected: [`app.js?v=${version}`]
+    expected: [`styles.css?v=${version}`, `app.js?v=${version}`]
   },
   {
     file: `../RELEASE-${version}.md`,

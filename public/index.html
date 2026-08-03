@@ -5,43 +5,49 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0f766e">
   <meta name="description" content="CoreCare care management platform">
-  <title>CoreCare</title>
-  <link rel="stylesheet" href="styles.css?v=1.26.0">
+  <title>Sign in | CoreCare Care</title>
+  <link rel="stylesheet" href="styles.css?v=1.28.1">
 </head>
 <body>
   <div id="login-view" class="login-shell">
     <section class="login-panel" aria-labelledby="login-title">
       <div class="brand lockup">
         <div class="brand-symbol" aria-hidden="true"><span></span><span></span></div>
-        <div><strong>CoreCare</strong><small>Care management platform</small></div>
+        <div><strong>CoreCare Care</strong><small>Care management, connected</small></div>
       </div>
       <div class="login-copy">
-        <p class="eyebrow">Secure workspace</p>
-        <h1 id="login-title">Care at the centre of everything.</h1>
-        <p>One clear place for people, visits, medication, quality and compliance.</p>
+        <p class="eyebrow">Secure sign in</p>
+        <h1 id="login-title">Welcome back.</h1>
+        <p>Sign in to your organisation's secure care workspace.</p>
       </div>
-      <form id="login-form" novalidate>
-        <label for="email">Email address</label>
-        <input id="email" name="email" type="email"  autocomplete="username" required>
-        <div class="password-label"><label for="password">Password</label><button id="toggle-password" type="button">Show</button></div>
-        <input id="password" name="password" type="password"  autocomplete="current-password" required>
-        <div class="form-options"><label class="checkbox"><input type="checkbox" checked> Remember me</label><button class="link-button" type="button">Forgot password?</button></div>
-        <p id="login-error" class="form-error" role="alert" hidden></p>
-        <button class="primary-button" type="submit">Sign in to CoreCare</button>
+      <form id="login-form" aria-describedby="login-security-note" novalidate>
+        <div class="login-field">
+          <label for="email">Email address</label>
+          <input id="email" name="email" type="email" autocomplete="username" inputmode="email" placeholder="name@organisation.co.uk" required>
+        </div>
+        <div class="login-field">
+          <div class="password-label"><label for="password">Password</label><button id="toggle-password" type="button" aria-controls="password">Show</button></div>
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+        </div>
+        <p class="login-access-help">Forgotten your password? Contact your organisation administrator.</p>
+        <p id="login-error" class="form-error" role="alert" aria-live="polite" hidden></p>
+        <button class="primary-button login-submit" type="submit">Sign in to CoreCare Care</button>
       </form>
-      <p class="legal-copy">Development version. Do not enter real personal or care information.</p>
+      <div id="login-security-note" class="login-security-note"><span aria-hidden="true">✓</span><p><strong>Protected access</strong><small>Secure sessions and audited activity help keep care information safe.</small></p></div>
+      <p class="legal-copy">Authorised users only. Use fictional information in development environments.</p>
     </section>
-    <aside class="login-art" aria-label="CoreCare platform highlights">
+    <aside class="login-art" aria-label="CoreCare Care workspace highlights">
       <div class="art-orbit orbit-one"></div><div class="art-orbit orbit-two"></div>
       <div class="art-content">
-        <span class="status-pill"><i></i> Platform online</span>
-        <p class="eyebrow light">Connected care operations</p>
-        <h2>See what matters. Act before it becomes urgent.</h2>
-        <div class="feature-grid">
-          <article><strong>46</strong><span>Visits today</span></article>
-          <article><strong>94%</strong><span>Compliance</span></article>
-          <article><strong>3</strong><span>Medication alerts</span></article>
-          <article><strong>15</strong><span>Team members</span></article>
+        <span class="status-pill"><i></i> Secure organisation access</span>
+        <p class="eyebrow light">CoreCare Care</p>
+        <h2>One calm workspace for safer, more connected care.</h2>
+        <p class="art-intro">Bring care planning, daily delivery and operational oversight together without losing sight of the person.</p>
+        <div class="feature-grid login-feature-grid">
+          <article><span class="feature-icon" aria-hidden="true">01</span><div><strong>Plan with confidence</strong><span>Person-centred plans, risks and review controls.</span></div></article>
+          <article><span class="feature-icon" aria-hidden="true">02</span><div><strong>Deliver with clarity</strong><span>Visits, medication and care records in one place.</span></div></article>
+          <article><span class="feature-icon" aria-hidden="true">03</span><div><strong>Stay ahead</strong><span>Live operations, alerts and rota visibility.</span></div></article>
+          <article><span class="feature-icon" aria-hidden="true">04</span><div><strong>Protect every record</strong><span>Role-based access with a complete audit trail.</span></div></article>
         </div>
       </div>
     </aside>
@@ -684,7 +690,7 @@
 <dialog id="support-ticket-detail-dialog" class="client-dialog wide-dialog"><div class="dialog-heading"><div><p class="eyebrow" id="org-ticket-number">Support ticket</p><h2 id="org-ticket-title">Ticket</h2></div><button type="button" data-close-dialog="support-ticket-detail-dialog">×</button></div><div id="org-ticket-detail" class="support-ticket-detail"></div></dialog>
 
 <script src="/vendor/qrcode.min.js"></script>
-<script src="app.js?v=1.28.0"></script>
+<script src="app.js?v=1.28.1"></script>
 
 </body>
 </html>
