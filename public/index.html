@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f766e">
   <meta name="description" content="CoreCare care management platform">
   <title>Sign in | CoreCare Care</title>
-  <link rel="stylesheet" href="styles.css?v=1.30.0">
+  <link rel="stylesheet" href="styles.css?v=1.31.0">
 </head>
 <body>
   <div id="login-view" class="login-shell">
@@ -267,16 +267,9 @@
             <section class="carer-metrics"><article><span>Visits today</span><strong id="carer-total">0</strong></article><article><span>Completed</span><strong id="carer-completed">0</strong></article><article><span>In progress</span><strong id="carer-progress">0</strong></article><article><span>Late / attention</span><strong id="carer-late">0</strong></article></section>
             <section class="carer-layout"><article class="panel carer-main"><div class="panel-heading"><div><p class="eyebrow">Allocated to me</p><h2>Today’s schedule</h2></div><button id="carer-open-clock" class="primary-button compact" type="button">Scan client code</button></div><div id="carer-visit-list" class="carer-visit-list"></div></article><aside class="panel"><div class="panel-heading"><div><p class="eyebrow">Completed care</p><h2>Recent visits</h2></div></div><div id="carer-history" class="carer-history"></div></aside></section>
           </section>
-          <div class="notice-banner"><div><strong>CoreCare development workspace</strong><span>This release adds organisation branding, terminology, configurable dashboards and a redesigned platform workspace. Continue using fictional information during development.</span></div><span class="badge">Sprint 10</span></div>
-          <section class="dev-status panel" aria-label="Development status">
-            <div class="panel-heading"><div><p class="eyebrow">Development mode</p><h2>Platform status</h2></div><span id="organisation-name" class="badge neutral">Organisation</span></div>
-            <div class="dev-status-grid">
-              <div><span>Database</span><strong id="dev-db">Checking…</strong></div>
-              <div><span>Authentication</span><strong id="dev-auth">Checking…</strong></div>
-              <div><span>Signed-in user</span><strong id="dev-user">Checking…</strong></div>
-              <div><span>Organisation</span><strong id="dev-org">Checking…</strong></div>
-              <div><span>Last health check</span><strong id="dev-checked">Checking…</strong></div>
-            </div>
+          <section class="manager-dashboard-hero" aria-labelledby="manager-dashboard-title">
+            <div><p class="eyebrow">Live management workspace</p><h2 id="manager-dashboard-title">Today at <span id="organisation-name">your organisation</span></h2><p id="manager-dashboard-briefing">Loading today’s care operation…</p><small id="manager-dashboard-detail">CoreCare is checking visits, clinical reviews, workforce compliance, tasks and incidents.</small></div>
+            <div class="manager-dashboard-actions"><button id="manager-dashboard-refresh" class="secondary-button compact" type="button">Refresh live data</button><button class="primary-button compact" type="button" data-page-link="rota">Open rota</button></div>
           </section>
 
           <section class="metrics" aria-label="Key figures">
@@ -288,27 +281,19 @@
 
           <section class="content-grid">
             <article class="panel span-two">
-              <div class="panel-heading"><div><p class="eyebrow">Live operations</p><h2>Today's visit progress</h2></div><button class="secondary-button">Open rota</button></div>
-              <div class="progress-summary"><div><strong>31 of 46 visits completed</strong><span>15 visits remaining today</span></div><strong>67%</strong></div>
-              <progress value="31" max="46">31 of 46</progress>
-              <div class="visit-list">
-                <div class="visit"><time>14:00</time><div class="person-avatar">ME</div><div><strong>Margaret Ellis</strong><span>Personal care · East Kirkby</span></div><span class="badge success">Completed</span></div>
-                <div class="visit"><time>15:00</time><div class="person-avatar">AB</div><div><strong>Arthur Bennett</strong><span>Medication and meal support · Spilsby</span></div><span class="badge active">In progress</span></div>
-                <div class="visit"><time>16:30</time><div class="person-avatar">JP</div><div><strong>Jean Parker</strong><span>Wellbeing visit · Horncastle</span></div><span class="badge neutral">Scheduled</span></div>
-              </div>
+              <div class="panel-heading"><div><p class="eyebrow">Live operations</p><h2>Today’s visit progress</h2></div><button class="secondary-button compact" type="button" data-page-link="visits">Open live visits</button></div>
+              <div class="progress-summary"><div><strong id="dash-visit-progress-label">Loading visits…</strong><span id="dash-visit-remaining">Checking the current service day</span></div><strong id="dash-visit-percent">0%</strong></div>
+              <progress id="dash-visit-progress" value="0" max="1">0%</progress>
+              <div id="dash-visit-list" class="visit-list"><div class="empty-state"><strong>Loading today’s visits</strong><span>CoreCare is reading the live rota.</span></div></div>
             </article>
 
             <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Attention</p><h2>Priority actions</h2></div><button class="icon-more">•••</button></div>
-              <ul class="action-list">
-                <li><span class="priority high"></span><div><strong>Care plan review overdue</strong><span>Margaret Ellis · 2 days</span></div><b>›</b></li>
-                <li><span class="priority medium"></span><div><strong>DBS renewal due</strong><span>Helen Foster · 14 days</span></div><b>›</b></li>
-                <li><span class="priority medium"></span><div><strong>Medication audit</strong><span>East Kirkby branch</span></div><b>›</b></li>
-              </ul>
+              <ul id="dash-priority-actions" class="action-list"><li><span class="priority medium"></span><div><strong>Loading priorities</strong><span>Checking live operational records.</span></div></li></ul>
             </article>
 
-            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Quality</p><h2>Compliance score</h2></div><span class="trend">↑ 2.1%</span></div>
-              <div class="ring" aria-label="94 percent compliant"><strong>94%</strong><span>Compliant</span></div>
-              <div class="key-row"><span>Training</span><strong>96%</strong></div><div class="key-row"><span>Care plan reviews</span><strong>91%</strong></div><div class="key-row"><span>Staff checks</span><strong>95%</strong></div>
+            <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Quality</p><h2>Compliance score</h2></div><span id="dash-compliance-note" class="trend">Live</span></div>
+              <div id="dash-compliance-ring" class="ring" aria-label="Compliance score"><strong id="dash-compliance-score">0%</strong><span>Compliant</span></div>
+              <div class="key-row"><span>Training</span><strong id="dash-training-score">0%</strong></div><div class="key-row"><span>Care plan reviews</span><strong id="dash-care-plan-score">0%</strong></div><div class="key-row"><span>Staff checks</span><strong id="dash-staff-check-score">0%</strong></div>
             </article>
 
             <article class="panel span-two"><div class="panel-heading"><div><p class="eyebrow">Recent activity</p><h2>Operational updates</h2></div><button class="text-button" data-page-link="settings">View audit history</button></div><div id="dashboard-activity" class="timeline"><div><p>Loading recent activity…</p></div></div></article>
@@ -317,9 +302,17 @@
 
 
 
+        <section id="family-page" class="page">
+          <div id="family-portal-content" class="family-portal-workspace">
+            <div class="empty-state"><strong>Loading the family portal</strong><span>CoreCare is checking the access that has been granted.</span></div>
+          </div>
+        </section>
+
+
         <section id="rota-page" class="page">
-          <div class="module-toolbar"><div><p class="eyebrow">Planning engine</p><h2>Scheduling board</h2><p>Build, allocate and publish the care rota. Scheduled visits flow directly into live operations and electronic call monitoring.</p></div><div class="toolbar-actions"><button id="rota-open-planner" class="primary-button compact">Open full planning board</button><button id="rota-refresh" class="secondary-button">Refresh</button><button id="rota-new" class="primary-button compact">+ Add rota visit</button></div></div>
-          <section class="client-stats rota-kpis rota-overview-only"><article class="kpi-primary"><span>Total visits</span><strong id="rota-total">0</strong></article><article><span>Unallocated</span><strong id="rota-unallocated">0</strong></article><article><span>Late</span><strong id="rota-late">0</strong></article><article><span>In progress</span><strong id="rota-progress">0</strong></article><article><span>Completed</span><strong id="rota-completed">0</strong></article></section>
+          <div class="module-toolbar"><div><p class="eyebrow">Planning engine</p><h2>Scheduling board</h2><p>Build, allocate and publish the care rota. Draft changes remain private until a permitted manager publishes the period.</p></div><div class="toolbar-actions"><button id="rota-publish-week" class="publish-rota-button" type="button" disabled>Publish week</button><button id="rota-open-planner" class="primary-button compact" type="button">Open full planning board</button><button id="rota-refresh" class="secondary-button" type="button">Refresh</button><button id="rota-new" class="primary-button compact" type="button">+ Add rota visit</button></div></div>
+          <div id="rota-publication-status" class="rota-publication-status rota-overview-only" role="status"><strong>No draft changes</strong><span>Published visits are visible to care workers and authorised family users.</span></div>
+          <section class="client-stats rota-kpis rota-overview-only"><article class="kpi-primary"><span>Total visits</span><strong id="rota-total">0</strong></article><article><span>Draft changes</span><strong id="rota-draft">0</strong></article><article><span>Ready to publish</span><strong id="rota-ready">0</strong></article><article><span>Unallocated</span><strong id="rota-unallocated">0</strong></article><article><span>Late</span><strong id="rota-late">0</strong></article><article><span>In progress</span><strong id="rota-progress">0</strong></article><article><span>Completed</span><strong id="rota-completed">0</strong></article></section>
           <section class="panel template-centre-panel rota-overview-only">
             <div class="panel-heading"><div><p class="eyebrow">Intelligent recurrence</p><h2>Template & recurrence centre</h2><p>Define each client’s regular calls, carers’ normal working patterns, preferred assignments and one-off exceptions.</p></div><div class="toolbar-actions"><button id="template-refresh" class="secondary-button compact">Refresh</button><button id="template-generate-open" class="primary-button compact">Generate week</button></div></div>
             <div class="template-tabs"><button class="active" data-template-tab="visits">Client visits</button><button data-template-tab="patterns">Carer patterns</button><button data-template-tab="exceptions">Exceptions</button><button data-template-tab="runs">Generation history</button></div>
@@ -717,7 +710,7 @@
 <dialog id="support-ticket-detail-dialog" class="client-dialog wide-dialog"><div class="dialog-heading"><div><p class="eyebrow" id="org-ticket-number">Support ticket</p><h2 id="org-ticket-title">Ticket</h2></div><button type="button" data-close-dialog="support-ticket-detail-dialog">×</button></div><div id="org-ticket-detail" class="support-ticket-detail"></div></dialog>
 
 <script src="/vendor/qrcode.min.js"></script>
-<script src="app.js?v=1.30.0"></script>
+<script src="app.js?v=1.31.0"></script>
 
 </body>
 </html>
