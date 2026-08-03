@@ -1,9 +1,9 @@
 import { exchangePlatformAccess } from './platform-access.js';
 import { handlePlatformOrganisation } from './platform-organisations.js';
 
-/** CoreCare Care 1.28.2 — Owner support access repair */
-const VERSION = "1.28.2";
-const RELEASE = "CoreCare Care 1.28.2 — Owner support access repair";
+/** CoreCare Care 1.29.0 — Tasks and incident management */
+const VERSION = "1.29.0";
+const RELEASE = "CoreCare Care 1.29.0 — Tasks and incident management";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -35,7 +35,7 @@ export default {
         if (url.pathname === "/api/development/status") return developmentStatus(env, session);
         if (url.pathname === "/api/dashboard" && request.method === "GET") return dashboardSummary(env.DB, session);
         if (url.pathname === "/api/carer/dashboard" && request.method === "GET") return await permitted(env.DB, session, "visits.view", () => carerDashboard(env.DB, session));
-        if (url.pathname === "/api/operations/board" && request.method === "GET") return requireManagementWorkspace(session) || operationsBoard(env.DB, session);
+        if (url.pathname === "/api/operations/board" && request.method === "GET") return operationsBoard(env.DB, session);
         if (url.pathname === "/api/rota" && request.method === "GET") return requireManagementWorkspace(session) || rotaBoard(env.DB, session, url);
         if (url.pathname === "/api/rota" && request.method === "POST") return requireManagementWorkspace(session) || createRotaVisit(request, env, session);
         if (url.pathname === "/api/rota/templates" && request.method === "GET") return listRotaTemplates(env.DB, session);
@@ -63,15 +63,15 @@ export default {
         const visitRecordMatch = url.pathname.match(/^\/api\/visits\/([^/]+)\/care-record$/);
         if (visitRecordMatch && request.method === "GET") return getVisitCareRecord(env.DB, session, decodeURIComponent(visitRecordMatch[1]));
         if (visitRecordMatch && request.method === "POST") return saveVisitCareRecord(request, env.DB, session, decodeURIComponent(visitRecordMatch[1]));
-        if (url.pathname === "/api/operations/tasks" && request.method === "POST") return createOperationsTask(request, env.DB, session);
+        if (url.pathname === "/api/operations/tasks" && request.method === "POST") return await permitted(env.DB, session, "tasks.manage", () => createOperationsTask(request, env.DB, session));
         const operationsTaskMatch = url.pathname.match(/^\/api\/operations\/tasks\/([^/]+)\/(complete|escalate)$/);
-        if (operationsTaskMatch && request.method === "POST") return updateOperationsTask(env.DB, session, decodeURIComponent(operationsTaskMatch[1]), operationsTaskMatch[2]);
-        if (url.pathname === "/api/operations/incidents" && request.method === "POST") return createOperationsIncident(request, env.DB, session);
+        if (operationsTaskMatch && request.method === "POST") return await permitted(env.DB, session, "tasks.manage", () => updateOperationsTask(env.DB, session, decodeURIComponent(operationsTaskMatch[1]), operationsTaskMatch[2]));
+        if (url.pathname === "/api/operations/incidents" && request.method === "POST") return await permitted(env.DB, session, "incidents.manage", () => createOperationsIncident(request, env.DB, session));
         const operationsIncidentMatch = url.pathname.match(/^\/api\/operations\/incidents\/([^/]+)\/review$/);
-        if (operationsIncidentMatch && request.method === "POST") return reviewOperationsIncident(request, env.DB, session, decodeURIComponent(operationsIncidentMatch[1]));
-        if (url.pathname === "/api/operations/handovers" && request.method === "POST") return createShiftHandover(request, env.DB, session);
+        if (operationsIncidentMatch && request.method === "POST") return await permitted(env.DB, session, "incidents.manage", () => reviewOperationsIncident(request, env.DB, session, decodeURIComponent(operationsIncidentMatch[1])));
+        if (url.pathname === "/api/operations/handovers" && request.method === "POST") return await permitted(env.DB, session, "operations.manage", () => createShiftHandover(request, env.DB, session));
         const handoverAckMatch = url.pathname.match(/^\/api\/operations\/handovers\/([^/]+)\/acknowledge$/);
-        if (handoverAckMatch && request.method === "POST") return acknowledgeShiftHandover(env.DB, session, decodeURIComponent(handoverAckMatch[1]));
+        if (handoverAckMatch && request.method === "POST") return await permitted(env.DB, session, "operations.manage", () => acknowledgeShiftHandover(env.DB, session, decodeURIComponent(handoverAckMatch[1])));
         if (url.pathname === "/api/care-plans" && request.method === "GET") return await permitted(env.DB, session, "care_plans.view", () => listAllCarePlans(env.DB, session, url));
         if (url.pathname === "/api/care-delivery/dashboard" && request.method === "GET") return await permitted(env.DB, session, "care_plans.view", () => careDeliveryDashboard(env.DB, session));
         if (url.pathname === "/api/medication" && request.method === "GET") return await permitted(env.DB, session, "medication.view", () => listMedication(env.DB, session, url));
@@ -846,6 +846,12 @@ let visit=session.staff_id
 
 async function operationsBoard(db, session) {
   const org=session.organisation_id;
+  const [canViewOperations,canViewTasks,canViewIncidents]=await Promise.all([
+    userHasPermission(db,session,'operations.view'),
+    userHasPermission(db,session,'tasks.view'),
+    userHasPermission(db,session,'incidents.view')
+  ]);
+  if(!canViewOperations&&!canViewTasks&&!canViewIncidents)return forbidden();
   const [tasks,incidents,handovers,clients,staff,careDue,riskDue]=await Promise.all([
     db.prepare(`SELECT t.*,c.first_name||' '||c.last_name client_name,s.first_name||' '||s.last_name staff_name FROM operations_tasks t LEFT JOIN clients c ON c.id=t.client_id AND c.organisation_id=t.organisation_id LEFT JOIN staff s ON s.id=t.assigned_staff_id AND s.organisation_id=t.organisation_id WHERE t.organisation_id=? ORDER BY CASE t.status WHEN 'escalated' THEN 1 WHEN 'overdue' THEN 2 WHEN 'open' THEN 3 ELSE 4 END,COALESCE(t.due_at,t.created_at) LIMIT 100`).bind(org).all(),
     db.prepare(`SELECT i.*,c.first_name||' '||c.last_name client_name FROM operations_incidents i LEFT JOIN clients c ON c.id=i.client_id AND c.organisation_id=i.organisation_id WHERE i.organisation_id=? ORDER BY CASE i.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 ELSE 3 END,i.created_at DESC LIMIT 50`).bind(org).all(),
@@ -855,11 +861,11 @@ async function operationsBoard(db, session) {
     db.prepare(`SELECT COUNT(*) count FROM care_plans WHERE organisation_id=? AND status='Active' AND date(review_date)<=date('now','+30 day')`).bind(org).first(),
     db.prepare(`SELECT COUNT(*) count FROM risk_assessments WHERE organisation_id=? AND status='Active' AND date(review_date)<=date('now','+30 day')`).bind(org).first()
   ]);
-  const taskRows=tasks.results||[], incidentRows=incidents.results||[];
+  const taskRows=(canViewOperations||canViewTasks)?tasks.results||[]:[], incidentRows=(canViewOperations||canViewIncidents)?incidents.results||[]:[], handoverRows=canViewOperations?handovers.results||[]:[];
   const now=Date.now(); taskRows.forEach(t=>{if(t.status==='open'&&t.due_at&&new Date(t.due_at).getTime()<now)t.status='overdue'});
-  const stats={open:taskRows.filter(x=>x.status==='open').length,overdue:taskRows.filter(x=>x.status==='overdue').length,completed:taskRows.filter(x=>x.status==='completed').length,escalated:taskRows.filter(x=>x.status==='escalated').length,incidentsOpen:incidentRows.filter(x=>x.status!=='closed').length,incidentsHigh:incidentRows.filter(x=>['high','critical'].includes(x.severity)&&x.status!=='closed').length,handoversUnread:(handovers.results||[]).filter(x=>!x.acknowledged_at).length,careDue:careDue?.count||0,riskDue:riskDue?.count||0,activeStaff:(staff.results||[]).length,activeClients:(clients.results||[]).length};
-  const timeline=[...taskRows.slice(0,20).map(x=>({type:'task',title:x.title,detail:`${x.status}${x.client_name?' · '+x.client_name:''}`,created_at:x.updated_at||x.created_at})),...incidentRows.slice(0,20).map(x=>({type:'incident',title:x.title,detail:`${x.severity} · ${x.status}`,created_at:x.updated_at||x.created_at})),...(handovers.results||[]).slice(0,10).map(x=>({type:'handover',title:`${x.shift} handover`,detail:x.summary,created_at:x.created_at}))].sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).slice(0,25);
-  return json({stats,tasks:taskRows,incidents:incidentRows,handovers:handovers.results||[],clients:clients.results||[],staff:staff.results||[],timeline});
+  const stats={open:taskRows.filter(x=>x.status==='open').length,overdue:taskRows.filter(x=>x.status==='overdue').length,completed:taskRows.filter(x=>x.status==='completed').length,escalated:taskRows.filter(x=>x.status==='escalated').length,incidentsOpen:incidentRows.filter(x=>x.status!=='closed').length,incidentsHigh:incidentRows.filter(x=>['high','critical'].includes(x.severity)&&x.status!=='closed').length,handoversUnread:handoverRows.filter(x=>!x.acknowledged_at).length,careDue:canViewOperations?careDue?.count||0:0,riskDue:canViewOperations?riskDue?.count||0:0,activeStaff:(staff.results||[]).length,activeClients:(clients.results||[]).length};
+  const timeline=[...taskRows.slice(0,20).map(x=>({type:'task',title:x.title,detail:`${x.status}${x.client_name?' · '+x.client_name:''}`,created_at:x.updated_at||x.created_at})),...incidentRows.slice(0,20).map(x=>({type:'incident',title:x.title,detail:`${x.severity} · ${x.status}`,created_at:x.updated_at||x.created_at})),...handoverRows.slice(0,10).map(x=>({type:'handover',title:`${x.shift} handover`,detail:x.summary,created_at:x.created_at}))].sort((a,b)=>String(b.created_at).localeCompare(String(a.created_at))).slice(0,25);
+  return json({stats,tasks:taskRows,incidents:incidentRows,handovers:handoverRows,clients:(canViewTasks||canViewIncidents||canViewOperations)?clients.results||[]:[],staff:(canViewTasks||canViewOperations)?staff.results||[]:[],timeline});
 }
 async function createOperationsTask(request,db,session){const i=await readJson(request),title=clean(i.title);if(!title)return json({error:{code:'VALIDATION_ERROR',message:'Enter a task title.'}},400);const id=crypto.randomUUID();await db.batch([db.prepare(`INSERT INTO operations_tasks(id,organisation_id,client_id,assigned_staff_id,title,description,category,priority,status,due_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,clean(i.clientId)||null,clean(i.staffId)||null,title,clean(i.description),clean(i.category)||'Care',['low','normal','high','critical'].includes(clean(i.priority))?clean(i.priority):'normal','open',clean(i.dueAt)||null,session.user_id),auditStatement(db,session.organisation_id,session.user_id,'operations.task_created','task',id,{title})]);return json({ok:true,id});}
 async function updateOperationsTask(db,session,id,action){const row=await db.prepare('SELECT title FROM operations_tasks WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();if(!row)return notFound('Task');const status=action==='complete'?'completed':'escalated',column=action==='complete'?'completed_at':'escalated_at';await db.batch([db.prepare(`UPDATE operations_tasks SET status=?,${column}=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(status,id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,`operations.task_${action}`,'task',id,{title:row.title})]);return json({ok:true});}

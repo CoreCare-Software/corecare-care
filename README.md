@@ -1,6 +1,6 @@
 # CoreCare Care
 
-CoreCare Care is a multi-tenant care-management web application deployed as a Cloudflare Worker with static browser assets and a Cloudflare D1 database. The current package version is `1.27.1`.
+CoreCare Care is a multi-tenant care-management web application deployed as a Cloudflare Worker with static browser assets and a Cloudflare D1 database. The current package version is `1.29.0`.
 
 > Development warning: use fictional test records only. This repository is not approved for live personal, medical, or care data.
 
@@ -9,7 +9,7 @@ CoreCare Care is a multi-tenant care-management web application deployed as a Cl
 - Organisation-scoped authentication, sessions, password controls, and audit logging.
 - Role, permission, module, branch, and support-mode access controls.
 - Client and staff records, care plans, risk assessments, and client documents.
-- Live operations, electronic call monitoring, rota planning, recurring visits, travel checks, and care delivery records.
+- Live operations, dedicated task and incident management, electronic call monitoring, rota planning, recurring visits, travel checks, and care delivery records.
 - Structured, versioned care plans with review and manager approval workflows.
 - Medication profiles, eMAR administration, stock history, and body-map records.
 - Organisation settings, branding, security administration, and CoreCare Connect support tickets.
@@ -48,4 +48,4 @@ The `0042_corecare_connect_support.sql` migration extends support tables shared 
 - `npm.cmd run verify:source` checks JavaScript syntax and release-version consistency.
 - `npm.cmd run check` performs a Cloudflare deployment dry run without publishing.
 
-There is not yet an automated behavioural test suite; build, migration, API, permission, and browser-flow tests remain development priorities.
+The Node test suite covers critical Platform access contracts and release-level source contracts. Broader API, migration, permission, and browser-flow coverage remains a development priority.
