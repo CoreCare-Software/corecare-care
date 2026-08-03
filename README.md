@@ -1,23 +1,51 @@
-# CoreCare v0.4.1 — Sprint 4B
+# CoreCare Care
 
-CoreCare is a developing care-management SaaS application deployed through GitHub and Cloudflare Workers.
+CoreCare Care is a multi-tenant care-management web application deployed as a Cloudflare Worker with static browser assets and a Cloudflare D1 database. The current package version is `1.27.1`.
 
-## Included in this release
+> Development warning: use fictional test records only. This repository is not approved for live personal, medical, or care data.
 
-- D1-backed user authentication
-- PBKDF2-SHA-256 password verification
-- Secure HTTP-only session cookies
-- Session expiry and logout
-- Organisation-scoped client API access
-- Role checks for client changes
-- Login and client audit events
-- Development platform-status panel
-- CoreCare version `0.4.1`
+## Current implementation
 
-## Database setup
+- Organisation-scoped authentication, sessions, password controls, and audit logging.
+- Role, permission, module, branch, and support-mode access controls.
+- Client and staff records, care plans, risk assessments, and client documents.
+- Live operations, electronic call monitoring, rota planning, recurring visits, travel checks, and care delivery records.
+- Structured, versioned care plans with review and manager approval workflows.
+- Medication profiles, eMAR administration, stock history, and body-map records.
+- Organisation settings, branding, security administration, and CoreCare Connect support tickets.
+- Platform administration APIs retained for the separate CoreCare Platform application.
 
-Apply both migrations in order. See `SETUP-D1.md` and `SETUP-AUTH.md`.
+## Repository layout
 
-## Development warning
+- `src/index.js` is the active Cloudflare Worker and JSON API entry point.
+- `public/` contains the deployed HTML, CSS, JavaScript, headers, and vendored QR-code asset.
+- `migrations/` contains the ordered D1 schema history.
+- `wrangler.jsonc` defines the Worker, static assets, and D1 bindings.
+- The similarly named JavaScript, HTML, and CSS files at the repository root are historical package copies; Wrangler does not deploy them.
 
-Use fictional test records only. CoreCare is not yet approved for live personal, medical or care data.
+## Development
+
+Requires Node.js 20 or later.
+
+```cmd
+npm.cmd ci
+npm.cmd run verify:source
+npm.cmd run check
+npm.cmd run dev
+```
+
+Apply database migrations only to the intended environment:
+
+```cmd
+npm.cmd run db:migrate:local
+npm.cmd run db:migrate:remote
+```
+
+The `0042_corecare_connect_support.sql` migration extends support tables shared with CoreCare Platform. Follow `INSTALL-CORECARE-CONNECT-1.27.0.md` when applying it to the shared remote database.
+
+## Verification
+
+- `npm.cmd run verify:source` checks JavaScript syntax and release-version consistency.
+- `npm.cmd run check` performs a Cloudflare deployment dry run without publishing.
+
+There is not yet an automated behavioural test suite; build, migration, API, permission, and browser-flow tests remain development priorities.
