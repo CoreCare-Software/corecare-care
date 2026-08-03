@@ -15,6 +15,12 @@
   "observability": {
     "enabled": true
   },
+  "services": [
+    {
+      "binding": "CORECARE_PLATFORM",
+      "service": "corecare-platform"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
@@ -22,5 +28,8 @@
       "database_id": "9d9bfe9a-ee79-48e7-817a-cadff90ccfcf",
       "remote": true
     }
-  ]
+  ],
+  "vars": {
+    "PLATFORM_ORIGIN": "https://corecare-platform.cselectricalservices11.workers.dev"
+  }
 }

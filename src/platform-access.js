@@ -38,11 +38,13 @@ export async function exchangePlatformAccess(request, env) {
   if (!origin || !env.CORECARE_PRODUCT_KEY) return json('Platform access is not configured for CoreCare Care.', 503);
   if (!code || url.searchParams.get('platform_origin') !== origin) return json('The Platform access request is invalid.', 400);
 
-  const exchange = await fetch(`${origin}/api/platform/access/exchange`, {
+  const exchangeUrl = `${origin}/api/platform/access/exchange`;
+  const exchangeInit = {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-corecare-product-key': env.CORECARE_PRODUCT_KEY },
     body: JSON.stringify({ code, product_code: PRODUCT_CODE }),
-  });
+  };
+  const exchange = env.CORECARE_PLATFORM?.fetch ? await env.CORECARE_PLATFORM.fetch(new Request(exchangeUrl,exchangeInit)) : await fetch(exchangeUrl,exchangeInit);
   const result = await exchange.json().catch(() => ({}));
   if (!exchange.ok) return json(result.error?.message || 'Platform rejected the access request.', exchange.status);
 
