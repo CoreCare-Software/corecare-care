@@ -1,6 +1,6 @@
 {
   "name": "corecare",
-  "version": "1.27.1",
+  "version": "1.28.0",
   "private": true,
   "description": "CoreCare multi-tenant care management SaaS platform",
   "type": "module",
@@ -8,6 +8,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "check": "wrangler deploy --dry-run",
+    "test": "node --test",
     "verify:source": "node --check src/index.js && node --check public/app.js && node scripts/verify-release-consistency.mjs",
     "db:migrate:local": "wrangler d1 migrations apply corecare --local",
     "db:migrate:remote": "wrangler d1 migrations apply corecare --remote"

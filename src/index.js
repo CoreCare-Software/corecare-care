@@ -1,6 +1,8 @@
-/** CoreCare Care 1.27.1 — CoreCare Connect support compatibility */
-const VERSION = "1.27.1";
-const RELEASE = "CoreCare Care 1.27.1 — CoreCare Connect support compatibility";
+import { exchangePlatformAccess } from './platform-access.js';
+
+/** CoreCare Care 1.28.0 — Platform command-centre access */
+const VERSION = "1.28.0";
+const RELEASE = "CoreCare Care 1.28.0 — Platform command-centre access";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -11,6 +13,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     try {
+      if (url.pathname === "/platform-access" && request.method === "GET") return exchangePlatformAccess(request, env);
       if (url.pathname === "/api/health") return health(env);
       if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: RELEASE });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
