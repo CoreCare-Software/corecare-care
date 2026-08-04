@@ -436,6 +436,7 @@ function setActiveWorkspaceNavigation(page){
 }
 
 function showPage(page) {
+  if(page!=='settings'&&$('#settings-page')?.classList.contains('active-page')&&hasUnsavedSettings()&&!confirm('You have unsaved settings changes. Leave this page without saving them?'))return;
   if(isPlatformWorkspace() && page!=='platform'){
     showToastError(new Error('Open an organisation through an authorised support session before accessing organisation records.'));
     showPage('platform');
@@ -455,7 +456,10 @@ function showPage(page) {
   }
   if (page === 'rota') {
     activatePage('#rota-page');
-    loadRotaBoard();
+    pageKicker.textContent = 'Planning engine';
+    pageTitle.textContent = 'Rota';
+    loadRotaBoard().catch(showToastError);
+    loadRoutingSettings();
     return;
   }
   if (page === 'support') { activatePage('#support-page'); pageKicker.textContent='CoreCare Connect'; pageTitle.textContent='Support'; loadOrganisationSupport().catch(showToastError); return; }
@@ -1350,9 +1354,15 @@ $('#toggle-password').addEventListener('click', event => {
 });
 
 $('#sign-out').addEventListener('click', async () => {
+  closeUserAccountMenu();
   try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
   showLogin();
 });
+
+function closeUserAccountMenu(){const menu=$('#user-account-menu'),trigger=$('#user-menu-trigger');if(menu)menu.hidden=true;if(trigger)trigger.setAttribute('aria-expanded','false');}
+$('#user-menu-trigger')?.addEventListener('click',event=>{event.stopPropagation();const menu=$('#user-account-menu'),trigger=event.currentTarget,opening=menu?.hidden!==false;if(menu)menu.hidden=!opening;trigger.setAttribute('aria-expanded',opening?'true':'false');});
+document.addEventListener('click',event=>{if(!event.target.closest?.('.user-menu'))closeUserAccountMenu();});
+document.addEventListener('keydown',event=>{if(event.key==='Escape')closeUserAccountMenu();});
 
 menuButton.addEventListener('click', () => {
   const open = sidebar.classList.toggle('open');
@@ -1429,7 +1439,7 @@ function openPasswordDialog(required = false) {
   passwordDialog.showModal();
 }
 
-$('#open-password').addEventListener('click', () => openPasswordDialog(false));
+$('#open-password').addEventListener('click', () => {closeUserAccountMenu();openPasswordDialog(false);});
 $('#cancel-password').addEventListener('click', () => passwordDialog.close());
 passwordDialog.addEventListener('cancel', event => { if (passwordDialog.dataset.required === 'true') event.preventDefault(); });
 passwordForm.addEventListener('submit', async event => {
@@ -1452,35 +1462,151 @@ passwordForm.addEventListener('submit', async event => {
   }
 });
 
+let currentSettingsSection='overview';
+let organisationSettingsProfile={};
+let settingsSecurityOverview={};
+let moduleSettingsDirty=false;
+
+function setupSettingsHub(){
+  const page=$('#settings-page');
+  if(!page||page.dataset.enhanced==='true')return;
+  page.dataset.enhanced='true';
+  page.classList.add('settings-hub-page');
+  const toolbar=page.querySelector(':scope > .module-toolbar');
+  const grid=page.querySelector(':scope > .settings-grid');
+  const brandingArticle=page.querySelector('.branding-studio');
+  const organisationForm=$('#organisation-form');
+  const brandingFields=organisationForm?.querySelector('.branding-fields');
+  const brandingPreview=$('#branding-preview');
+  const passwordCard=page.querySelector('#open-password')?.closest('article');
+  const platformPanel=$('#platform-admin-panel');
+  const branchPanel=page.querySelector('.admin-panel:not(#platform-admin-panel)');
+  const securityPanel=page.querySelector('.enterprise-security-panel');
+  const userPanel=page.querySelector('.client-panel.admin-panel');
+  const auditPanel=page.querySelector('.audit-panel');
+  const addBranch=$('#add-branch');
+  const commandSections=securityPanel?[...securityPanel.querySelectorAll('.security-command-grid > section')]:[];
+  const customRolesSection=commandSections[0];
+  const policySection=commandSections[1];
+  const metrics=securityPanel?.querySelector('.security-metrics');
+  const accessCard=securityPanel?.querySelector('.access-customiser');
+  const moduleCard=securityPanel?.querySelector('.module-customiser');
+  const effectiveCard=securityPanel?.querySelector('#effective-access-result')?.closest('.security-tool-card');
+  const routingCard=securityPanel?.querySelector('.routing-settings-card');
+  const emergencyCard=securityPanel?.querySelector('.emergency-card');
+  const historySection=securityPanel?.querySelector('#login-history-list')?.closest('.active-session-section');
+  const sessionsSection=securityPanel?.querySelector('#active-session-list')?.closest('.active-session-section');
+  const addUser=$('#add-user');
+  const addRole=$('#add-custom-role');
+
+  toolbar.innerHTML='<div><p class="eyebrow">Administration</p><h2>Organisation settings</h2><p>Choose an area to manage your organisation, people, access and accountability.</p></div>';
+  toolbar.insertAdjacentHTML('afterend',`<div class="settings-shell">
+    <aside class="settings-navigation"><div class="settings-navigation-heading"><span class="settings-org-mark">CC</span><div><strong id="settings-navigation-org">Organisation</strong><small>Management settings</small></div></div><nav aria-label="Settings sections">
+      <button class="settings-nav-item active" type="button" data-settings-target="overview" aria-selected="true"><span>⌂</span><b>Overview</b></button>
+      <button class="settings-nav-item" type="button" data-settings-target="organisation" aria-selected="false"><span>◆</span><b>Organisation</b></button>
+      <button class="settings-nav-item" type="button" data-settings-target="branding" aria-selected="false"><span>◈</span><b>Branding</b></button>
+      <button class="settings-nav-item" type="button" data-settings-target="locations" aria-selected="false"><span>⌖</span><b>Branches</b></button>
+      <button class="settings-nav-item" type="button" data-settings-target="access" data-settings-restricted aria-selected="false"><span>◎</span><b>Users & access</b></button>
+      <button class="settings-nav-item" type="button" data-settings-target="security" data-settings-restricted aria-selected="false"><span>◉</span><b>Security</b></button>
+      <button class="settings-nav-item" type="button" data-settings-target="modules" data-settings-restricted aria-selected="false"><span>▦</span><b>Modules</b></button>
+      <button class="settings-nav-item" type="button" data-settings-target="audit" aria-selected="false"><span>▤</span><b>Audit history</b></button>
+    </nav><div class="settings-family-note"><span>◇</span><p><b>Family access</b><small>Managed from the Family Portal.</small></p><button type="button" data-page-link="family">Open portal</button></div></aside>
+    <div class="settings-workspace">
+      <form id="settings-form-anchor" class="settings-form-anchor" aria-hidden="true"></form>
+      <section class="settings-view" data-settings-section="overview"><div class="settings-view-heading"><div><p class="eyebrow">Settings home</p><h2>Organisation overview</h2><p>See the current setup and go directly to the area you need.</p></div></div><div id="settings-overview-error" class="settings-section-error" hidden></div>
+        <div class="settings-overview-grid"><button type="button" data-settings-target="organisation"><span>Organisation</span><strong id="settings-overview-org">Not loaded</strong><small>Profile, contact and terminology</small></button><button type="button" data-settings-target="locations"><span>Branches</span><strong id="settings-overview-branches">—</strong><small>Active care locations</small></button><button type="button" data-settings-target="access"><span>Workforce access</span><strong id="settings-overview-users">—</strong><small>Non-family user accounts</small></button><button type="button" data-settings-target="security"><span>Security</span><strong id="settings-overview-security">Checking</strong><small id="settings-overview-security-detail">Sessions and sign-in policy</small></button></div>
+        <div class="settings-overview-actions"><article class="panel"><p class="eyebrow">Common tasks</p><h3>Manage the organisation</h3><div class="settings-action-list"><button type="button" data-settings-target="branding"><span>◈</span><div><b>Update branding</b><small>Logo, colours and dashboard presentation</small></div><em>›</em></button><button type="button" data-settings-target="access"><span>◎</span><div><b>Manage users and roles</b><small>Add users and review effective access</small></div><em>›</em></button><button type="button" data-settings-target="audit"><span>▤</span><div><b>Review recent changes</b><small>See accountable activity across CoreCare</small></div><em>›</em></button></div></article><article class="panel settings-boundaries"><p class="eyebrow">Where settings live</p><h3>Keep each workflow in context</h3><p><b>Family logins</b><span>Family Portal</span></p><p><b>Travel and routing</b><span>Rota</span></p><p><b>Your password</b><span>Profile menu</span></p><p><b>Finance connections</b><span>Finance</span></p></article></div>
+      </section>
+      <section class="settings-view" data-settings-section="organisation" hidden><div class="settings-view-heading"><div><p class="eyebrow">General setup</p><h2>Organisation</h2><p>Maintain identity, contact details, terminology and regional preferences.</p></div></div><div id="settings-organisation-error" class="settings-section-error" hidden></div><article class="panel settings-form-panel"><div id="settings-general-fields" class="form-grid compact-form"></div><div class="settings-save-bar"><span class="settings-unsaved" data-dirty-for="organisation-form" hidden>Unsaved changes</span><button class="primary-button compact" type="submit" form="organisation-form">Save organisation</button></div><p id="organisation-message" class="form-message" role="status" hidden></p></article><div id="settings-platform-panel-slot"></div></section>
+      <section class="settings-view" data-settings-section="branding" hidden><div class="settings-view-heading"><div><p class="eyebrow">Organisation experience</p><h2>Branding & portal</h2><p>Control how the organisation sees CoreCare and preview changes before saving.</p></div><span class="badge active">Live preview</span></div><div id="settings-branding-error" class="settings-section-error" hidden></div><article class="panel settings-form-panel"><div class="settings-branding-layout"><div><div id="settings-branding-fields" class="form-grid compact-form"></div><div class="settings-save-bar"><span class="settings-unsaved" data-dirty-for="organisation-form" hidden>Unsaved changes</span><button class="primary-button compact" type="submit" form="organisation-form">Save branding</button></div><p id="organisation-branding-message" class="form-message" role="status" hidden></p></div><div id="settings-branding-preview"></div></div></article></section>
+      <section class="settings-view" data-settings-section="locations" hidden><div class="settings-view-heading"><div><p class="eyebrow">Locations</p><h2>Branches</h2><p>Manage the care locations used by people, workforce and records.</p></div><div id="settings-location-actions" class="settings-heading-actions"></div></div><div id="settings-locations-error" class="settings-section-error" hidden></div><div id="settings-branches-slot"></div></section>
+      <section class="settings-view" data-settings-section="access" data-settings-restricted hidden><div class="settings-view-heading"><div><p class="eyebrow">Access control</p><h2>Users & access</h2><p>Manage workforce accounts, roles and individual permission exceptions.</p></div><div id="settings-access-actions" class="settings-heading-actions"></div></div><div id="settings-access-error" class="settings-section-error" hidden></div><div id="settings-access-content" class="settings-section-stack"><div id="settings-role-slot"></div><div id="settings-user-slot"></div><div id="settings-access-tools" class="settings-card-grid"></div></div></section>
+      <section class="settings-view" data-settings-section="security" data-settings-restricted hidden><div class="settings-view-heading"><div><p class="eyebrow">Protection</p><h2>Security & sessions</h2><p>Control active security features and monitor access to the organisation.</p></div></div><div id="settings-security-error" class="settings-section-error" hidden></div><div id="settings-security-metrics"></div><div id="settings-security-content" class="settings-section-stack"><div id="settings-policy-slot"></div><div id="settings-emergency-slot"></div><div id="settings-history-slot"></div><div id="settings-sessions-slot"></div></div></section>
+      <section class="settings-view" data-settings-section="modules" data-settings-restricted hidden><div class="settings-view-heading"><div><p class="eyebrow">Workspace visibility</p><h2>Organisation modules</h2><p>Choose which CoreCare areas are available across this organisation.</p></div></div><div id="settings-modules-error" class="settings-section-error" hidden></div><div id="settings-modules-slot"></div></section>
+      <section class="settings-view" data-settings-section="audit" hidden><div class="settings-view-heading"><div><p class="eyebrow">Accountability</p><h2>Audit history</h2><p>Review recent actions and changes recorded across the organisation.</p></div></div><div id="settings-audit-error" class="settings-section-error" hidden></div><div id="settings-audit-slot"></div></section>
+    </div></div>`);
+
+  const shell=toolbar.nextElementSibling,workspace=shell.querySelector('.settings-workspace');
+  if(organisationForm&&brandingFields){
+    organisationForm.id='organisation-form';organisationForm.className='settings-form-anchor';organisationForm.dataset.settingsDirty='true';
+    const generalNames=new Set(['name','shortName','contactEmail','contactPhone','website','termClient','termCarer','termBranch','timezone','weekStart','timeFormat']);
+    const generalTarget=$('#settings-general-fields'),brandTarget=$('#settings-branding-fields');
+    [...brandingFields.children].forEach(node=>{const controls=[...node.querySelectorAll('[name]')];if(!controls.length)return;controls.forEach(control=>control.setAttribute('form','organisation-form'));(controls.some(control=>generalNames.has(control.name))?generalTarget:brandTarget).append(node);});
+    if(brandingPreview)$('#settings-branding-preview').append(brandingPreview);
+    organisationForm.replaceChildren();workspace.querySelector('#settings-form-anchor').replaceWith(organisationForm);
+  }
+  if(platformPanel)$('#settings-platform-panel-slot').append(platformPanel);
+  if(branchPanel){branchPanel.querySelector('.panel-heading')?.remove();$('#settings-branches-slot').append(branchPanel);}
+  if(addUser)$('#settings-access-actions').append(addUser);
+  if(addRole)$('#settings-access-actions').append(addRole);
+  if(customRolesSection){customRolesSection.classList.add('panel','settings-card');$('#settings-role-slot').append(customRolesSection);}
+  if(userPanel)$('#settings-user-slot').append(userPanel);
+  if(accessCard)$('#settings-access-tools').append(accessCard);
+  if(effectiveCard)$('#settings-access-tools').append(effectiveCard);
+  if(metrics)$('#settings-security-metrics').append(metrics);
+  if(policySection){policySection.classList.add('panel','settings-card');$('#settings-policy-slot').append(policySection);}
+  if(emergencyCard)$('#settings-emergency-slot').append(emergencyCard);
+  if(historySection)$('#settings-history-slot').append(historySection);
+  if(sessionsSection)$('#settings-sessions-slot').append(sessionsSection);
+  if(moduleCard){$('#settings-modules-slot').append(moduleCard);const moduleSave=moduleCard.querySelector('#save-organisation-modules');if(moduleSave){const indicator=document.createElement('span');indicator.id='module-unsaved-indicator';indicator.className='settings-unsaved';indicator.textContent='Unsaved changes';indicator.hidden=true;moduleSave.before(indicator);}}
+  if(auditPanel)$('#settings-audit-slot').append(auditPanel);
+  if(addBranch)$('#settings-location-actions').append(addBranch);
+  routingCard?.remove();securityPanel?.remove();passwordCard?.remove();brandingArticle?.remove();grid?.remove();
+  const securityForm=$('#security-policy-form');
+  if(securityForm){securityForm.dataset.settingsDirty='true';const submit=securityForm.querySelector('[type="submit"]');if(submit){const bar=document.createElement('div');bar.className='settings-save-bar';bar.innerHTML='<span class="settings-unsaved" data-dirty-for="security-policy-form" hidden>Unsaved changes</span>';submit.before(bar);bar.append(submit);}['requireMfa','requireTrustedDevice','allowPasswordLogin'].forEach(name=>{const input=securityForm.elements[name];if(!input)return;input.disabled=true;const label=input.closest('label'),title=label?.querySelector('b'),help=label?.querySelector('small');label?.classList.add('settings-readiness-control');if(title&&!title.querySelector('.badge'))title.insertAdjacentHTML('beforeend',' <span class="badge neutral">Coming soon</span>');if(name==='allowPasswordLogin'&&help)help.textContent='Password sign-in remains required until another verified sign-in method is available.';});}
+  const routingForm=$('#routing-settings-form');if(routingForm)routingForm.dataset.settingsDirty='true';
+  $('#refresh-login-history')?.setAttribute('aria-label','Refresh login history');$('#refresh-sessions')?.setAttribute('aria-label','Refresh active sessions');$('#refresh-audit')?.setAttribute('aria-label','Refresh audit history');
+  const permissionUser=$('#permission-user'),effectiveUser=$('#effective-access-user');if(permissionUser)permissionUser.closest('label')?.querySelector('span')?.replaceChildren('User for access customisation');if(effectiveUser)effectiveUser.closest('label')?.querySelector('span')?.replaceChildren('User for access test');
+  page.addEventListener('click',event=>{const target=event.target.closest?.('[data-settings-target]');if(target){event.preventDefault();setSettingsSection(target.dataset.settingsTarget);return;}if(event.target.closest?.('[data-page-link="family"]'))showPage('family');});
+  document.addEventListener('input',trackSettingsFormChange,true);document.addEventListener('change',trackSettingsFormChange,true);
+  window.addEventListener('beforeunload',event=>{if(hasUnsavedSettings()){event.preventDefault();event.returnValue='';}});
+  setSettingsSection('overview',false);
+}
+
+function setSettingsSection(section,scroll=true){
+  const page=$('#settings-page'),view=page?.querySelector(`[data-settings-section="${section}"]`),nav=page?.querySelector(`.settings-nav-item[data-settings-target="${section}"]`);
+  if(!view||view.hidden===false&&currentSettingsSection===section)return;
+  if(nav?.hidden)return;
+  currentSettingsSection=section;
+  page.querySelectorAll('[data-settings-section]').forEach(item=>item.hidden=item!==view);
+  page.querySelectorAll('.settings-nav-item').forEach(item=>{const active=item===nav;item.classList.toggle('active',active);item.setAttribute('aria-selected',active?'true':'false');});
+  if(scroll)window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function serialiseSettingsForm(form){return JSON.stringify([...new FormData(form).entries()].map(([key,value])=>[key,String(value)]));}
+function syncSettingsDirtyUI(form){const dirty=form?.dataset.dirty==='true';document.querySelectorAll(`[data-dirty-for="${form.id}"]`).forEach(item=>item.hidden=!dirty);}
+function markSettingsFormClean(form){if(!form)return;form.dataset.baseline=serialiseSettingsForm(form);form.dataset.dirty='false';syncSettingsDirtyUI(form);}
+function trackSettingsFormChange(event){const form=event.target?.form||event.target?.closest?.('form[data-settings-dirty]');if(!form?.matches?.('form[data-settings-dirty]')||form.dataset.baseline==null)return;form.dataset.dirty=String(serialiseSettingsForm(form)!==form.dataset.baseline);syncSettingsDirtyUI(form);}
+function hasUnsavedSettings(){return moduleSettingsDirty||[...document.querySelectorAll('form[data-settings-dirty]')].some(form=>form.dataset.dirty==='true');}
+function showSettingsSectionError(section,error){const el=$(`#settings-${section}-error`);if(!el)return;el.textContent=error?.message||String(error||'Unable to load this settings area.');el.hidden=false;}
+function clearSettingsSectionError(section){const el=$(`#settings-${section}-error`);if(el){el.textContent='';el.hidden=true;}}
+function updateSettingsOverview(){setText('#settings-overview-org',organisationSettingsProfile.name||currentUser?.organisationName||'Organisation');setText('#settings-navigation-org',organisationSettingsProfile.short_name||organisationSettingsProfile.name||currentUser?.organisationName||'Organisation');setText('#settings-overview-branches',String(branches.filter(branch=>branch.status==='active').length));setText('#settings-overview-users',String(settingsUsers().filter(user=>user.status==='active').length));const emergency=Boolean(settingsSecurityOverview.emergencyMode);setText('#settings-overview-security',emergency?'Emergency active':'Protected');setText('#settings-overview-security-detail',emergency?'Emergency controls are enabled':`${settingsSecurityOverview.activeSessions||0} active session${Number(settingsSecurityOverview.activeSessions||0)===1?'':'s'}`);}
+
+setupSettingsHub();
+
 function applyOrganisationBranding(org){
   if(!org)return;
   if(org.primary_colour)document.documentElement.style.setProperty('--brand',org.primary_colour);
   const name=org.name||currentUser?.organisationName;
   if(name)document.title=`${name} · CoreCare`;
 }
-async function loadOrganisationProfile(){
-  const payload=await api('/api/organisation/profile'); const o=payload.organisation||{};
-  $('#organisation-input').value=o.name||''; $('#organisation-logo').value=o.logo_url||''; $('#organisation-colour').value=o.primary_colour||'#1f6f5f'; $('#organisation-contact-email').value=o.contact_email||''; $('#organisation-contact-phone').value=o.contact_phone||''; applyOrganisationBranding(o);
-}
 async function loadSettings() {
   if (!currentUser) return;
-  await loadOrganisationProfile();
-  const canAdmin = ['platform_owner','platform_admin','organisation_owner','organisation_admin'].includes(currentUser.accessLevel) || (['platform_owner','organisation_owner','organisation_admin'].includes(currentUser.accessLevel) || currentUser.role === 'owner');
-  $('#add-user').hidden = !canAdmin;
-  $('#add-branch').hidden = !canAdmin;
-  $('#platform-admin-panel').hidden = !currentUser.isPlatformUser || currentUser.supportMode;
-  try {
-    const [userPayload, branchPayload] = await Promise.all([api('/api/users'), api('/api/branches')]);
-    users = userPayload.users || [];
-    branches = branchPayload.branches || [];
-    renderUsers(); renderBranches(); populateBranchSelect();
-    await loadEnterpriseSecurity();
-    if(currentUser.isPlatformUser && !currentUser.supportMode) await loadOrganisations();
-    await loadAudit();
-  await loadOrganisationCustomisation();
-  } catch (error) {
-    $('#user-table-body').innerHTML = `<tr><td colspan="5">${escapeHtml(error.message)}</td></tr>`;
-  }
+  const canAdmin=['platform_owner','platform_admin','organisation_owner','organisation_admin'].includes(currentUser.accessLevel)||currentUser.role==='owner';
+  $('#add-user').hidden=!canAdmin;$('#add-branch').hidden=!canAdmin;$('#add-custom-role').hidden=!canAdmin;
+  $('#platform-admin-panel').hidden=!currentUser.isPlatformUser||currentUser.supportMode;
+  document.querySelectorAll('[data-settings-restricted]').forEach(item=>item.hidden=!canAdmin);
+  if(!canAdmin&&['access','security','modules'].includes(currentSettingsSection))setSettingsSection('overview');
+  ['overview','organisation','branding','locations','access','security','modules','audit'].forEach(clearSettingsSectionError);
+  const [profileResult,userResult,branchResult]=await Promise.allSettled([api('/api/organisation/profile'),api('/api/users'),api('/api/branches')]);
+  if(profileResult.status==='fulfilled')applyOrganisationSettingsProfile(profileResult.value.organisation||{});else{showSettingsSectionError('organisation',profileResult.reason);showSettingsSectionError('branding',profileResult.reason);}
+  if(userResult.status==='fulfilled'){users=userResult.value.users||[];renderUsers();populateCustomRoleSelect();}else{showSettingsSectionError('access',userResult.reason);$('#user-table-body').innerHTML=`<tr><td colspan="6">${escapeHtml(userResult.reason.message)}</td></tr>`;}
+  if(branchResult.status==='fulfilled'){branches=branchResult.value.branches||[];renderBranches();populateBranchSelect();}else showSettingsSectionError('locations',branchResult.reason);
+  const followUps=[loadAudit()];
+  if(canAdmin)followUps.push(loadEnterpriseSecurity());
+  if(currentUser.isPlatformUser&&!currentUser.supportMode)followUps.push(loadOrganisations().catch(error=>showSettingsSectionError('organisation',error)));
+  await Promise.allSettled(followUps);
+  updateSettingsOverview();
 }
 
 function settingsUsers(){return users.filter(user=>user.accessLevel!=='family');}
@@ -1536,24 +1662,32 @@ function updateBrandingPreview(){
   $('#preview-name').textContent=$('#organisation-input')?.value||'Organisation';$('#preview-short').textContent=$('#organisation-short-name')?.value||'Care management';$('#preview-welcome').textContent=$('#organisation-welcome')?.value||'Welcome to your care operations workspace';$('#preview-clients').textContent=($('#term-client')?.value||'Client')+'s';$('#preview-staff').textContent=($('#term-carer')?.value||'Carer')+'s';
   $('#preview-logo').textContent=initialsFromName($('#organisation-input')?.value||'CoreCare');
 }
-async function loadOrganisationCustomisation(){
-  const p=await api('/api/organisation/profile'),o=p.organisation||{};
+function applyOrganisationSettingsProfile(o={}){
+  organisationSettingsProfile=o;
   const set=(id,v)=>{const e=$(id);if(e)e.value=v||''};set('#organisation-input',o.name);set('#organisation-short-name',o.short_name);set('#organisation-logo',o.logo_url);set('#organisation-colour',o.primary_colour||'#1f6f5f');set('#organisation-secondary-colour',o.secondary_colour||'#0f172a');set('#organisation-contact-email',o.contact_email);set('#organisation-contact-phone',o.contact_phone);set('#organisation-website',o.website);set('#organisation-welcome',o.dashboard_welcome);set('#organisation-timezone',o.timezone||'Europe/London');set('#organisation-week-start',o.week_start||'monday');set('#organisation-time-format',o.time_format||'24h');set('#organisation-document-footer',o.document_footer);set('#organisation-invoice-footer',o.invoice_footer);set('#term-client',o.terminology?.client||'Client');set('#term-carer',o.terminology?.carer||'Carer');set('#term-branch',o.terminology?.branch||'Branch');
-  $$('input[name="dashboardWidget"]').forEach(x=>x.checked=(o.dashboardWidgets||[]).includes(x.value));updateBrandingPreview();applyOrganisationBranding(o);
+  $$('input[name="dashboardWidget"]').forEach(x=>x.checked=(o.dashboardWidgets||[]).includes(x.value));updateBrandingPreview();applyOrganisationBranding(o);markSettingsFormClean($('#organisation-form'));updateSettingsOverview();
 }
 function applyPortalBranding(o){document.documentElement.style.setProperty('--organisation-primary',o.primary_colour||'#1f6f5f');document.documentElement.style.setProperty('--organisation-secondary',o.secondary_colour||'#0f172a');const brand=document.querySelector('.sidebar-brand strong');if(brand)brand.textContent=o.short_name||o.name||'CoreCare';}
-$('#organisation-form').addEventListener('input',updateBrandingPreview);
-$('#organisation-form').addEventListener('submit',async event=>{event.preventDefault();const f=new FormData(event.currentTarget),data=Object.fromEntries(f);data.terminology={client:data.termClient,carer:data.termCarer,branch:data.termBranch};data.dashboardWidgets=f.getAll('dashboardWidget');const message=$('#organisation-message');message.hidden=true;try{const payload=await api('/api/organisation/profile',{method:'PUT',body:JSON.stringify(data)});currentUser.organisationName=payload.organisation.name;applyPortalBranding(payload.organisation);updateIdentity();message.textContent='Portal customisation saved.';message.hidden=false;}catch(error){message.textContent=error.message;message.hidden=false;}});
+$$('[form="organisation-form"]').forEach(control=>control.addEventListener('input',updateBrandingPreview));
+$('#organisation-form').addEventListener('submit',async event=>{event.preventDefault();const f=new FormData(event.currentTarget),data=Object.fromEntries(f);data.terminology={client:data.termClient,carer:data.termCarer,branch:data.termBranch};data.dashboardWidgets=f.getAll('dashboardWidget');data.emailSenderName=organisationSettingsProfile.email_sender_name||'';data.loginMessage=organisationSettingsProfile.login_message||'';data.documentHeader=organisationSettingsProfile.document_header||'';data.currency=organisationSettingsProfile.currency||'GBP';data.dateFormat=organisationSettingsProfile.date_format||'DD/MM/YYYY';data.sidebarOrder=organisationSettingsProfile.sidebarOrder||[];const messages=[$('#organisation-message'),$('#organisation-branding-message')].filter(Boolean);messages.forEach(message=>message.hidden=true);try{const payload=await api('/api/organisation/profile',{method:'PUT',body:JSON.stringify(data)});currentUser.organisationName=payload.organisation.name;applyOrganisationSettingsProfile(payload.organisation);applyPortalBranding(payload.organisation);updateIdentity();messages.forEach(message=>{message.textContent='Organisation settings saved.';message.className='form-message success';message.hidden=false;});}catch(error){messages.forEach(message=>{message.textContent=error.message;message.className='form-message error';message.hidden=false;});}});
 
 
 function populateCustomRoleSelect(){const select=$('#user-custom-role-select');if(!select)return;const current=select.value;select.innerHTML='<option value="">Use standard access level</option>'+customRoles.filter(r=>r.is_active!==0).map(r=>`<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)}</option>`).join('');select.value=current;}
 async function loadEnterpriseSecurity(){
   const canSee=['platform_owner','platform_admin','organisation_owner','organisation_admin'].includes(currentUser?.accessLevel);
-  const panel=$('.enterprise-security-panel');if(panel)panel.hidden=!canSee;if(!canSee)return;
-  const [overview,roles,permissions,policy,sessions]=await Promise.all([api('/api/security/overview'),api('/api/security/roles'),api('/api/security/permissions'),api('/api/security/policy'),api('/api/security/sessions')]);
-  customRoles=roles.roles||[];permissionCatalogue=permissions.permissions||[];
-  $('#security-role-count').textContent=overview.customRoles||0;$('#security-user-count').textContent=overview.activeUsers||0;$('#security-session-count').textContent=overview.activeSessions||0;$('#security-event-count').textContent=overview.securityEvents24h||0;
-  renderCustomRoles();populateCustomRoleSelect();renderActiveSessions(sessions);fillSecurityPolicy(policy.policy||{});renderUsers();populatePermissionUserSelect();await loadOrganisationModules();loadRoutingSettings();
+  document.querySelectorAll('[data-settings-restricted]').forEach(item=>item.hidden=!canSee);if(!canSee)return;
+  clearSettingsSectionError('access');clearSettingsSectionError('security');clearSettingsSectionError('modules');
+  const [overviewResult,rolesResult,permissionsResult,policyResult,sessionsResult]=await Promise.allSettled([api('/api/security/overview'),api('/api/security/roles'),api('/api/security/permissions'),api('/api/security/policy'),api('/api/security/sessions')]);
+  const failures=[];
+  if(overviewResult.status==='fulfilled'){const overview=overviewResult.value;settingsSecurityOverview={...settingsSecurityOverview,...overview};$('#security-role-count').textContent=overview.customRoles||0;$('#security-user-count').textContent=overview.activeUsers||0;$('#security-session-count').textContent=overview.activeSessions||0;$('#security-event-count').textContent=overview.securityEvents24h||0;}else failures.push(overviewResult.reason);
+  if(rolesResult.status==='fulfilled'){customRoles=rolesResult.value.roles||[];renderCustomRoles();populateCustomRoleSelect();}else{$('#custom-role-list').innerHTML=`<p class="form-error">${escapeHtml(rolesResult.reason.message)}</p>`;failures.push(rolesResult.reason);}
+  if(permissionsResult.status==='fulfilled')permissionCatalogue=permissionsResult.value.permissions||[];else failures.push(permissionsResult.reason);
+  if(policyResult.status==='fulfilled'){const policy=policyResult.value.policy||{};settingsSecurityOverview.emergencyMode=Boolean(policy.emergency_mode);fillSecurityPolicy(policy);}else failures.push(policyResult.reason);
+  if(sessionsResult.status==='fulfilled')renderActiveSessions(sessionsResult.value);else{$('#active-session-list').innerHTML=`<p class="form-error">${escapeHtml(sessionsResult.reason.message)}</p>`;failures.push(sessionsResult.reason);}
+  renderUsers();populatePermissionUserSelect();populateEffectiveAccessUsers();
+  await Promise.allSettled([loadOrganisationModules(),loadLoginHistory()]);
+  if(failures.length)showSettingsSectionError('security',new Error('Some security information could not be loaded. Refresh this section to try again.'));
+  updateSettingsOverview();
 }
 function renderCustomRoles(){const el=$('#custom-role-list');if(!el)return;el.innerHTML=customRoles.length?customRoles.map(r=>`<article class="role-card" data-edit-role="${escapeHtml(r.id)}"><div class="role-card-icon" style="--role-colour:${escapeHtml(r.colour||'#0f766e')}">${initialsFromName(r.name)}</div><div><strong>${escapeHtml(r.name)}</strong><p>${escapeHtml(r.description||'No description')}</p><small>${r.permission_count||0} permissions · ${r.user_count||0} users</small></div><button class="row-action">Manage</button></article>`).join(''):'<div class="empty-state"><strong>No custom roles yet</strong><span>Create a role for job-specific access without changing the built-in access levels.</span></div>';$$('[data-edit-role]').forEach(x=>x.addEventListener('click',()=>openRoleDialog(x.dataset.editRole)));}
 function renderPermissionGroups(selected=[]){const query=($('#permission-search')?.value||'').toLowerCase();const groups={};permissionCatalogue.filter(p=>!query||`${p.category} ${p.name} ${p.description}`.toLowerCase().includes(query)).forEach(p=>(groups[p.category]??=[]).push(p));$('#permission-groups').innerHTML=Object.entries(groups).map(([category,items])=>`<fieldset class="permission-group"><legend>${escapeHtml(category)} <span>${items.length}</span></legend>${items.map(p=>`<label class="permission-item ${p.risk_level}"><input type="checkbox" name="permission" value="${escapeHtml(p.permission_key)}" ${selected.includes(p.permission_key)?'checked':''}><span><b>${escapeHtml(p.name)}</b><small>${escapeHtml(p.description||'')}</small></span><em>${escapeHtml(p.risk_level)}</em></label>`).join('')}</fieldset>`).join('')||'<p class="muted">No permissions match your search.</p>';}
@@ -1565,15 +1699,17 @@ $('#clear-permissions')?.addEventListener('click',()=>$$('#permission-groups inp
 $('#select-safe-permissions')?.addEventListener('click',()=>$$('#permission-groups .permission-item:not(.critical) input').forEach(x=>x.checked=true));
 roleForm?.addEventListener('submit',async e=>{e.preventDefault();const f=new FormData(roleForm),data=Object.fromEntries(f);data.permissions=f.getAll('permission');try{if(data.id)await api(`/api/security/roles/${encodeURIComponent(data.id)}`,{method:'PUT',body:JSON.stringify(data)});else await api('/api/security/roles',{method:'POST',body:JSON.stringify(data)});roleDialog.close();await loadEnterpriseSecurity();}catch(error){$('#role-form-error').textContent=error.message;$('#role-form-error').hidden=false;}});
 $('#delete-role')?.addEventListener('click',async()=>{const id=roleForm.elements.id.value;if(!id||!confirm('Delete this custom role? Users will return to their standard access level.'))return;try{await api(`/api/security/roles/${encodeURIComponent(id)}`,{method:'DELETE'});roleDialog.close();await loadEnterpriseSecurity();}catch(error){$('#role-form-error').textContent=error.message;$('#role-form-error').hidden=false;}});
-function fillSecurityPolicy(p){const f=$('#security-policy-form');if(!f)return;f.elements.sessionHours.value=String(p.session_hours||12);f.elements.idleTimeoutMinutes.value=String(p.idle_timeout_minutes||60);f.elements.requireMfa.checked=Boolean(p.require_mfa);f.elements.requireTrustedDevice.checked=Boolean(p.require_trusted_device);f.elements.allowPasswordLogin.checked=p.allow_password_login!==0;}
-$('#security-policy-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=e.currentTarget,data={sessionHours:Number(f.elements.sessionHours.value),idleTimeoutMinutes:Number(f.elements.idleTimeoutMinutes.value),requireMfa:f.elements.requireMfa.checked,requireTrustedDevice:f.elements.requireTrustedDevice.checked,allowPasswordLogin:f.elements.allowPasswordLogin.checked},m=$('#security-policy-message');try{await api('/api/security/policy',{method:'PUT',body:JSON.stringify(data)});m.textContent='Security policy saved.';m.hidden=false;}catch(error){m.textContent=error.message;m.hidden=false;}});
+function fillSecurityPolicy(p){const f=$('#security-policy-form');if(!f)return;f.elements.sessionHours.value=String(p.session_hours||12);f.elements.idleTimeoutMinutes.value=String(p.idle_timeout_minutes||60);f.elements.requireMfa.checked=Boolean(p.require_mfa);f.elements.requireTrustedDevice.checked=Boolean(p.require_trusted_device);f.elements.allowPasswordLogin.checked=p.allow_password_login!==0;markSettingsFormClean(f);}
+$('#security-policy-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=e.currentTarget,data={sessionHours:Number(f.elements.sessionHours.value),idleTimeoutMinutes:Number(f.elements.idleTimeoutMinutes.value),requireMfa:f.elements.requireMfa.checked,requireTrustedDevice:f.elements.requireTrustedDevice.checked,allowPasswordLogin:f.elements.allowPasswordLogin.checked},m=$('#security-policy-message');m.hidden=true;try{const policy=await api('/api/security/policy',{method:'PUT',body:JSON.stringify(data)});fillSecurityPolicy(policy.policy||data);m.textContent='Security policy saved.';m.className='form-message success';m.hidden=false;}catch(error){m.textContent=error.message;m.className='form-message error';m.hidden=false;}});
 function renderActiveSessions(payload){const el=$('#active-session-list');if(!el)return;el.innerHTML=(payload.sessions||[]).map(s=>`<article class="session-row"><div class="session-device"><span>${/Mobile|Android|iPhone/i.test(s.user_agent||'')?'▯':'▣'}</span><div><strong>${escapeHtml(s.display_name)}</strong><small>${escapeHtml(s.email)} · ${escapeHtml((s.user_agent||'Unknown device').slice(0,90))}</small></div></div><div><b>${s.id===payload.currentSessionId?'Current session':'Active'}</b><small>${escapeHtml(s.ip_hint||'IP unavailable')} · last seen ${new Intl.DateTimeFormat('en-GB',{dateStyle:'short',timeStyle:'short'}).format(new Date(`${s.last_seen_at||s.created_at}Z`))}</small></div>${s.id===payload.currentSessionId?'<span class="badge success">This device</span>':`<button class="row-action danger-text" data-revoke-session="${escapeHtml(s.id)}">Revoke</button>`}</article>`).join('')||'<p class="muted">No active sessions.</p>';$$('[data-revoke-session]').forEach(x=>x.addEventListener('click',async()=>{if(!confirm('Revoke this session immediately?'))return;await api(`/api/security/sessions/${encodeURIComponent(x.dataset.revokeSession)}`,{method:'DELETE'});await refreshActiveSessions();}));}
 async function refreshActiveSessions(){const p=await api('/api/security/sessions');renderActiveSessions(p);$('#security-session-count').textContent=(p.sessions||[]).length;}
 $('#refresh-sessions')?.addEventListener('click',refreshActiveSessions);
 
 async function loadAudit() {
-  const payload = await api('/api/audit?limit=30');
-  $('#audit-list').innerHTML = (payload.events || []).map(event => `<div><time>${new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(`${event.created_at}Z`))}</time><div><strong>${escapeHtml(event.action.replaceAll('.', ' '))}</strong><span>${escapeHtml(event.user_name || event.user_email || 'System')} · ${escapeHtml(event.entity_type)}</span></div></div>`).join('') || '<p>No audit events yet.</p>';
+  clearSettingsSectionError('audit');
+  try{const payload = await api('/api/audit?limit=30');
+  $('#audit-list').innerHTML = (payload.events || []).map(event => `<div><time>${new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(`${event.created_at}Z`))}</time><div><strong>${escapeHtml(event.action.replaceAll('.', ' '))}</strong><span>${escapeHtml(event.user_name || event.user_email || 'System')} · ${escapeHtml(event.entity_type)}</span></div></div>`).join('') || '<p>No audit events yet.</p>';}
+  catch(error){showSettingsSectionError('audit',error);$('#audit-list').innerHTML='<p class="muted">Audit history is temporarily unavailable.</p>';throw error;}
 }
 
 $('#refresh-audit').addEventListener('click', loadAudit);
@@ -1675,9 +1811,9 @@ async function loadLoginHistory(){const el=$('#login-history-list');if(!el)retur
 $('#refresh-login-history')?.addEventListener('click',loadLoginHistory);
 $('#test-effective-access')?.addEventListener('click',async()=>{const userId=$('#effective-access-user')?.value,result=$('#effective-access-result');if(!userId){result.innerHTML='<p class="muted">Select a user first.</p>';return;}try{const p=await api(`/api/security/effective-access?userId=${encodeURIComponent(userId)}`),groups={};(p.permissions||[]).forEach(x=>(groups[x.category]??=[]).push(x));result.innerHTML=`<div class="effective-access-heading"><strong>${escapeHtml(p.user.display_name)}</strong><span>${p.permissions.length} permissions</span></div>`+Object.entries(groups).map(([g,items])=>`<details><summary>${escapeHtml(g)} <span>${items.length}</span></summary><div class="effective-permission-list">${items.map(x=>`<span class="permission-chip ${escapeHtml(x.risk_level)}">${escapeHtml(x.name)}</span>`).join('')}</div></details>`).join('')||'<p class="muted">No effective permissions.</p>';}catch(error){result.innerHTML=`<p class="muted">${escapeHtml(error.message)}</p>`;}});
 let emergencyModeEnabled=false;
-function updateEmergencyUI(policy={}){emergencyModeEnabled=Boolean(policy.emergency_mode);const badge=$('#emergency-mode-badge'),button=$('#toggle-emergency-mode'),reason=$('#emergency-mode-reason');if(badge){badge.textContent=emergencyModeEnabled?'Active':'Off';badge.className=`badge ${emergencyModeEnabled?'danger':'neutral'}`;}if(button){button.textContent=emergencyModeEnabled?'Disable emergency mode':'Enable emergency mode';}if(reason&&policy.emergency_reason)reason.value=policy.emergency_reason;}
+function updateEmergencyUI(policy={}){emergencyModeEnabled=Boolean(policy.emergency_mode);settingsSecurityOverview.emergencyMode=emergencyModeEnabled;const badge=$('#emergency-mode-badge'),button=$('#toggle-emergency-mode'),reason=$('#emergency-mode-reason');if(badge){badge.textContent=emergencyModeEnabled?'Active':'Off';badge.className=`badge ${emergencyModeEnabled?'danger':'neutral'}`;}if(button){button.textContent=emergencyModeEnabled?'Disable emergency mode':'Enable emergency mode';}if(reason&&policy.emergency_reason)reason.value=policy.emergency_reason;updateSettingsOverview();}
 $('#toggle-emergency-mode')?.addEventListener('click',async()=>{const reason=$('#emergency-mode-reason')?.value||'';if(!emergencyModeEnabled&&!confirm('Enable emergency mode? This records a critical security event.'))return;if(emergencyModeEnabled&&!confirm('Disable emergency mode and return to normal operation?'))return;try{const p=await api('/api/security/emergency-mode',{method:'PUT',body:JSON.stringify({enabled:!emergencyModeEnabled,reason})});updateEmergencyUI(p.policy||{});}catch(error){alert(error.message);}});
-const originalFillSecurityPolicy=fillSecurityPolicy;fillSecurityPolicy=function(p){originalFillSecurityPolicy(p);updateEmergencyUI(p);populateEffectiveAccessUsers();loadLoginHistory();};
+const originalFillSecurityPolicy=fillSecurityPolicy;fillSecurityPolicy=function(p){originalFillSecurityPolicy(p);updateEmergencyUI(p);populateEffectiveAccessUsers();};
 
 $('#executive-refresh')?.addEventListener('click',()=>loadPlatformWorkspace());
 $('#operations-refresh')?.addEventListener('click',loadPlatformHealth);
@@ -2102,10 +2238,10 @@ window.addEventListener('online',syncPendingVisitEvents);document.addEventListen
 
 
 function populatePermissionUserSelect(){const s=$('#permission-user');if(!s)return;const value=s.value;s.innerHTML='<option value="">Select a user</option>'+settingsUsers().filter(u=>u.status==='active').map(u=>`<option value="${escapeHtml(u.id)}">${escapeHtml(u.displayName)} · ${escapeHtml(roleLabel(u.accessLevel||u.role))}</option>`).join('');s.value=value;}
-async function loadRoutingSettings(){const form=$('#routing-settings-form');if(!form)return;try{const p=await api('/api/routing/settings'),s=p.settings||{};form.provider.value=s.provider||'manual';form.defaultTravelMinutes.value=s.default_travel_minutes??15;form.parkingBufferMinutes.value=s.parking_buffer_minutes??5;form.cacheDays.value=s.cache_days??90;form.blockConflicts.checked=s.block_conflicts!==0;setText('#routing-provider-status',p.mapboxConfigured?'Mapbox key configured':'Mapbox key not configured — manual fallback remains active');}catch(e){setText('#routing-provider-status',e.message);}}
-$('#routing-settings-form')?.addEventListener('submit',async e=>{e.preventDefault();const msg=$('#routing-settings-message');try{await api('/api/routing/settings',{method:'PUT',body:JSON.stringify(Object.fromEntries(new FormData(e.currentTarget)))});msg.textContent='Travel settings saved.';msg.hidden=false;await loadRoutingSettings();}catch(ex){msg.textContent=ex.message;msg.hidden=false;}});
-async function loadOrganisationModules(){const el=$('#organisation-module-list');if(!el)return;try{const p=await api('/api/security/modules');const labels={dashboard:'Dashboard',operations:'Live operations',clients:'Clients',staff:'Staff',family:'Family portal',care:'Care plans',medication:'Medication',visits:'Visits',rota:'Scheduling & rota',tasks:'Tasks',incidents:'Incidents',finance:'Finance',reports:'Reports',settings:'Settings'};el.innerHTML=(p.modules||[]).map(m=>`<label class="module-toggle ${m.enabled?'is-enabled':'is-disabled'}"><span class="module-icon">${({dashboard:'⌂',operations:'◆',clients:'●',staff:'◉',family:'◇',care:'▤',medication:'✚',visits:'◷',rota:'▦',tasks:'✓',incidents:'!',finance:'£',reports:'▥',settings:'⚙'})[m.module_key]||'•'}</span><span class="module-copy"><b>${escapeHtml(labels[m.module_key]||m.module_key)}</b><small>${m.enabled?'Visible to users with permission':'Hidden for everyone in this organisation'}</small></span><span class="switch-control"><input type="checkbox" data-module-key="${escapeHtml(m.module_key)}" ${m.enabled?'checked':''}><i></i></span></label>`).join('');el.querySelectorAll('[data-module-key]').forEach(x=>x.addEventListener('change',()=>x.closest('.module-toggle')?.classList.toggle('is-enabled',x.checked)));}catch(e){el.innerHTML=`<p class="muted">${escapeHtml(e.message)}</p>`;}}
-$('#save-organisation-modules')?.addEventListener('click',async()=>{const modules={};$$('[data-module-key]').forEach(x=>modules[x.dataset.moduleKey]=x.checked);const m=$('#module-save-message');try{await api('/api/security/modules',{method:'PUT',body:JSON.stringify({modules})});m.textContent='Organisation modules updated. Users will see the change next time they sign in.';m.hidden=false;}catch(e){m.textContent=e.message;m.hidden=false;}});
+async function loadRoutingSettings(){const form=$('#routing-settings-form');if(!form)return;try{const p=await api('/api/routing/settings'),s=p.settings||{};form.provider.value=s.provider||'manual';form.defaultTravelMinutes.value=s.default_travel_minutes??15;form.parkingBufferMinutes.value=s.parking_buffer_minutes??5;form.cacheDays.value=s.cache_days??90;form.blockConflicts.checked=s.block_conflicts!==0;setText('#routing-provider-status',p.mapboxConfigured?'Mapbox key configured':'Mapbox key not configured — manual fallback remains active');markSettingsFormClean(form);}catch(e){setText('#routing-provider-status',e.message);}}
+$('#routing-settings-form')?.addEventListener('submit',async e=>{e.preventDefault();const msg=$('#routing-settings-message');msg.hidden=true;try{await api('/api/routing/settings',{method:'PUT',body:JSON.stringify(Object.fromEntries(new FormData(e.currentTarget)))});msg.textContent='Travel settings saved.';msg.className='form-message success';msg.hidden=false;await loadRoutingSettings();}catch(ex){msg.textContent=ex.message;msg.className='form-message error';msg.hidden=false;}});
+async function loadOrganisationModules(){const el=$('#organisation-module-list');if(!el)return;clearSettingsSectionError('modules');try{const p=await api('/api/security/modules');const labels={dashboard:'Dashboard',operations:'Live operations',clients:'Clients',staff:'Staff',family:'Family portal',care:'Care plans',medication:'Medication',visits:'Visits',rota:'Scheduling & rota',tasks:'Tasks',incidents:'Incidents',finance:'Finance',reports:'Reports',settings:'Settings'};el.innerHTML=(p.modules||[]).map(m=>`<label class="module-toggle ${m.enabled?'is-enabled':'is-disabled'}"><span class="module-icon">${({dashboard:'⌂',operations:'◆',clients:'●',staff:'◉',family:'◇',care:'▤',medication:'✚',visits:'◷',rota:'▦',tasks:'✓',incidents:'!',finance:'£',reports:'▥',settings:'⚙'})[m.module_key]||'•'}</span><span class="module-copy"><b>${escapeHtml(labels[m.module_key]||m.module_key)}</b><small>${m.enabled?'Visible to users with permission':'Hidden for everyone in this organisation'}</small></span><span class="switch-control"><input type="checkbox" data-module-key="${escapeHtml(m.module_key)}" ${m.enabled?'checked':''}><i></i></span></label>`).join('');moduleSettingsDirty=false;const indicator=$('#module-unsaved-indicator');if(indicator)indicator.hidden=true;el.querySelectorAll('[data-module-key]').forEach(x=>x.addEventListener('change',()=>{x.closest('.module-toggle')?.classList.toggle('is-enabled',x.checked);moduleSettingsDirty=true;if(indicator)indicator.hidden=false;}));}catch(e){showSettingsSectionError('modules',e);el.innerHTML=`<p class="muted">${escapeHtml(e.message)}</p>`;}}
+$('#save-organisation-modules')?.addEventListener('click',async()=>{const modules={};$$('[data-module-key]').forEach(x=>modules[x.dataset.moduleKey]=x.checked);const m=$('#module-save-message');m.hidden=true;try{await api('/api/security/modules',{method:'PUT',body:JSON.stringify({modules})});moduleSettingsDirty=false;const indicator=$('#module-unsaved-indicator');if(indicator)indicator.hidden=true;m.textContent='Organisation modules updated. Users will see the change next time they sign in.';m.className='form-message success';m.hidden=false;}catch(e){m.textContent=e.message;m.className='form-message error';m.hidden=false;}});
 $('#load-user-permissions')?.addEventListener('click',async()=>{const userId=$('#permission-user')?.value,el=$('#user-permission-editor');if(!userId){el.innerHTML='<p class="muted">Select a user first.</p>';return;}try{const p=await api(`/api/security/users/${encodeURIComponent(userId)}/permissions`),state=Object.fromEntries((p.overrides||[]).map(x=>[x.permission_key,x.effect]));el.innerHTML=`<div class="effective-access-heading"><strong>${escapeHtml(p.user.display_name)}</strong><span>Individual overrides</span></div><div class="permission-override-grid">${permissionCatalogue.map(x=>`<div class="permission-override-row"><span><b>${escapeHtml(x.name)}</b><small>${escapeHtml(x.category)} · ${escapeHtml(x.description||'')}</small></span><div class="permission-segment"><label class="permission-state"><input type="radio" name="override-${escapeHtml(x.permission_key)}" value="inherit" ${!state[x.permission_key]?'checked':''}><span>Inherit</span></label><label class="permission-state allow"><input type="radio" name="override-${escapeHtml(x.permission_key)}" value="allow" ${state[x.permission_key]==='allow'?'checked':''}><span>Allow</span></label><label class="permission-state deny"><input type="radio" name="override-${escapeHtml(x.permission_key)}" value="deny" ${state[x.permission_key]==='deny'?'checked':''}><span>Deny</span></label></div></div>`).join('')}</div><button id="save-user-permissions" class="primary-button compact" type="button">Save user access</button><p id="user-permission-message" class="form-message" hidden></p>`;$('#save-user-permissions').addEventListener('click',async()=>{const allow=[],deny=[];permissionCatalogue.forEach(x=>{const checked=el.querySelector(`input[name="override-${CSS.escape(x.permission_key)}"]:checked`);if(checked?.value==='allow')allow.push(x.permission_key);if(checked?.value==='deny')deny.push(x.permission_key);});const msg=$('#user-permission-message');try{await api(`/api/security/users/${encodeURIComponent(userId)}/permissions`,{method:'PUT',body:JSON.stringify({allow,deny})});msg.textContent='User-specific access saved.';msg.hidden=false;}catch(e){msg.textContent=e.message;msg.hidden=false;}});}catch(e){el.innerHTML=`<p class="muted">${escapeHtml(e.message)}</p>`;}});
 
 $('#add-visit-requirement')?.addEventListener('click',()=>addVisitRequirement());

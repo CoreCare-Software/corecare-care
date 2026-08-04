@@ -30,6 +30,13 @@
       "database_name": "corecare",
       "database_id": "9d9bfe9a-ee79-48e7-817a-cadff90ccfcf",
       "remote": true
+    },
+    {
+      "binding": "CONTROL_DB",
+      "database_name": "corecare-care-control",
+      "database_id": "1e50a826-7976-4056-9e0f-54d2f4842b20",
+      "migrations_dir": "control-migrations",
+      "remote": true
     }
   ],
   "vars": {

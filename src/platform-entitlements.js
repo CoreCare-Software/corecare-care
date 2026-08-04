@@ -3,6 +3,7 @@ const DEFAULT_PRODUCT_VERSION = '1.32.1';
 const RETRY_MINUTES = [5, 15, 60, 360, 1_440];
 
 const clean = (value, maxLength = 1_000) => String(value ?? '').trim().slice(0, maxLength);
+const stateDatabase = env => env.CONTROL_DB;
 
 function platformOrigin(env) {
   try {
@@ -52,7 +53,7 @@ async function acknowledge(env, organisation, contract, status, error = '') {
 }
 
 async function markFailure(env, organisation, message, attempt) {
-  await env.DB.prepare(`INSERT INTO corecare_platform_entitlements
+  await stateDatabase(env).prepare(`INSERT INTO corecare_platform_entitlements
     (external_organisation_id,platform_organisation_id,sync_status,last_error,attempt_count,next_attempt_at,last_requested_at,updated_at)
     VALUES(?,?,'failed',?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
     ON CONFLICT(external_organisation_id) DO UPDATE SET platform_organisation_id=excluded.platform_organisation_id,
@@ -71,7 +72,7 @@ async function syncOrganisation(env, organisation) {
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(clean(payload.error?.message || `Platform entitlement request returned HTTP ${response.status}`, 1_000));
     contract = validateEntitlementContract(payload, organisation);
-    await env.DB.prepare(`INSERT INTO corecare_platform_entitlements
+    await stateDatabase(env).prepare(`INSERT INTO corecare_platform_entitlements
       (external_organisation_id,platform_organisation_id,contract_version,contract_checksum,features_json,details_json,sync_status,last_error,attempt_count,next_attempt_at,last_requested_at,applied_at,updated_at)
       VALUES(?,?,?,?,?,?,'applied_pending_ack',NULL,0,NULL,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
       ON CONFLICT(external_organisation_id) DO UPDATE SET platform_organisation_id=excluded.platform_organisation_id,
@@ -81,7 +82,7 @@ async function syncOrganisation(env, organisation) {
         applied_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP`)
       .bind(organisation.external_organisation_id, organisation.platform_organisation_id, clean(contract.version, 200), clean(contract.checksum, 500), JSON.stringify(contract.features), JSON.stringify(contract.details)).run();
     await acknowledge(env, organisation, contract, 'applied');
-    await env.DB.prepare(`UPDATE corecare_platform_entitlements SET sync_status='applied',acknowledged_at=CURRENT_TIMESTAMP,
+    await stateDatabase(env).prepare(`UPDATE corecare_platform_entitlements SET sync_status='applied',acknowledged_at=CURRENT_TIMESTAMP,
       last_error=NULL,attempt_count=0,next_attempt_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE external_organisation_id=?`).bind(organisation.external_organisation_id).run();
     return { organisationId: organisation.external_organisation_id, status: 'applied', checksum: contract.checksum };
   } catch (error) {
@@ -93,14 +94,16 @@ async function syncOrganisation(env, organisation) {
 }
 
 export async function syncPlatformEntitlements(env, { limit = 25 } = {}) {
-  if (!env.DB || !env.CORECARE_PRODUCT_KEY || !platformOrigin(env)) return { configured: false, attempted: 0, applied: 0, failed: 0 };
-  const rows = await env.DB.prepare(`SELECT o.id external_organisation_id,o.id platform_organisation_id,
-    COALESCE(e.attempt_count,0) attempt_count FROM organisations o
-    LEFT JOIN corecare_platform_entitlements e ON e.external_organisation_id=o.id
-    WHERE o.status='active' AND (e.next_attempt_at IS NULL OR datetime(e.next_attempt_at)<=CURRENT_TIMESTAMP)
-    ORDER BY COALESCE(e.next_attempt_at,o.created_at),o.id LIMIT ?`).bind(Math.max(1, Math.min(Number(limit) || 25, 100))).all();
+  if (!env.DB || !stateDatabase(env) || !env.CORECARE_PRODUCT_KEY || !platformOrigin(env)) return { configured: false, attempted: 0, applied: 0, failed: 0 };
+  const maximum = Math.max(1, Math.min(Number(limit) || 25, 100));
+  const rows = await env.DB.prepare(`SELECT o.id external_organisation_id,o.id platform_organisation_id
+    FROM organisations o WHERE o.status='active' ORDER BY o.created_at,o.id LIMIT ?`).bind(maximum).all();
   const results = [];
-  for (const organisation of rows.results || []) results.push(await syncOrganisation(env, organisation));
+  for (const organisation of rows.results || []) {
+    const state = await stateDatabase(env).prepare('SELECT attempt_count,next_attempt_at FROM corecare_platform_entitlements WHERE external_organisation_id=?').bind(organisation.external_organisation_id).first();
+    if (state?.next_attempt_at && new Date(state.next_attempt_at) > new Date()) continue;
+    results.push(await syncOrganisation(env, { ...organisation, attempt_count: Number(state?.attempt_count || 0) }));
+  }
   return { configured: true, attempted: results.length, applied: results.filter(result => result.status === 'applied').length, failed: results.filter(result => result.status === 'failed').length, results };
 }
 

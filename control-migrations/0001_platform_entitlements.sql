@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS corecare_platform_entitlements (
   applied_at TEXT,
   acknowledged_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY(external_organisation_id) REFERENCES organisations(id)
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE INDEX IF NOT EXISTS idx_care_entitlements_retry ON corecare_platform_entitlements(sync_status,next_attempt_at);
+
+CREATE INDEX IF NOT EXISTS idx_care_entitlements_retry
+  ON corecare_platform_entitlements(sync_status,next_attempt_at);
