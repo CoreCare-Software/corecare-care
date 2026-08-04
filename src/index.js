@@ -22,7 +22,7 @@ export default {
       if (url.pathname === "/platform-access" && request.method === "GET") return exchangePlatformAccess(request, env);
       if (url.pathname === "/api/health") return health(env);
       if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: RELEASE });
-      if (url.pathname === "/auth/portal-login" && request.method === "POST") return portalLogin(request, env, "CARE");
+      if (["/auth/portal-login", "/api/auth/portal-login"].includes(url.pathname) && request.method === "POST") return portalLogin(request, env, "CARE");
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
