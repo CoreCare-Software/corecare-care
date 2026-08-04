@@ -1,6 +1,6 @@
 # CoreCare Care
 
-CoreCare Care is a multi-tenant care-management web application deployed as a Cloudflare Worker with static browser assets and a Cloudflare D1 database. The current package version is `1.32.0`.
+CoreCare Care is a multi-tenant care-management web application deployed as a Cloudflare Worker with static browser assets and a Cloudflare D1 database. The current package version is `1.32.1`.
 
 > Development warning: use fictional test records only. This repository is not approved for live personal, medical, or care data.
 
@@ -14,7 +14,8 @@ CoreCare Care is a multi-tenant care-management web application deployed as a Cl
 - Live operational, quality, incident and permitted finance reports with controlled CSV export.
 - Structured, versioned care plans with review and manager approval workflows.
 - Medication profiles, eMAR administration, stock history, and body-map records.
-- Organisation settings, branding, security administration, and CoreCare Connect support tickets.
+- A self-contained Family Portal for creating family logins, linking relatives to clients, controlling shared record types, resetting temporary passwords, and disabling access.
+- Organisation settings, branding, security administration, and CoreCare Connect support tickets; family logins are managed in the Family Portal rather than general user settings.
 - Platform administration APIs retained for the separate CoreCare Platform application.
 
 ## Repository layout

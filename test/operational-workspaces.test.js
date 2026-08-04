@@ -74,3 +74,21 @@ test('live rota, manager and family workspaces are wired through the Worker and 
   assert.match(worker, /family:\s*\[\]/);
   assert.match(app, /async function publishRotaWeek/);
 });
+
+test('family login creation and management stay inside the Family Portal', () => {
+  assert.match(worker, /"\/api\/family-access\/accounts"/);
+  assert.match(worker, /async function createFamilyAccount/);
+  assert.match(worker, /async function updateFamilyAccount/);
+  assert.match(worker, /access_level='family'/);
+  assert.match(worker, /VALUES \(\?,\?,\?,\?,\?,'family'/);
+  assert.match(worker, /family_portal\.manage/);
+  assert.match(worker, /async function revokeFamilyAccess[\s\S]*c\.branch_id=\?/);
+  assert.match(app, /id="family-account-dialog"/);
+  assert.match(app, /id="family-account-settings-dialog"/);
+  assert.match(app, /api\('\/api\/family-access\/accounts'/);
+  assert.match(app, /function settingsUsers\(\)\{return users\.filter\(user=>user\.accessLevel!=='family'\);\}/);
+  assert.match(app, /settingsUsers\(\)\.filter\(u=>u\.status==='active'\)/);
+  assert.doesNotMatch(app, /data-page-link="settings">Create family login/);
+  assert.doesNotMatch(app, /Create a family login in Settings/);
+  assert.doesNotMatch(html, /<option value="family">Family member<\/option>/);
+});

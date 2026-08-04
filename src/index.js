@@ -1,12 +1,13 @@
 import { exchangePlatformAccess } from './platform-access.js';
 import { handlePlatformOrganisation } from './platform-organisations.js';
+import { syncPlatformEntitlements } from './platform-entitlements.js';
 import { carePlanReadiness, validateAdministration, validateBodyMap, validateMedicationProfile } from './clinical-records.js';
 import { assessRotaPublication, calculateLiveDashboard, normaliseFamilyAccess } from './operational-workspaces.js';
 import { calculateFinanceMetrics, calculateReportSummary, incidentReference, normaliseFinanceTransaction, normaliseIncidentReport, normaliseIncidentReview, normaliseInvoice, validateFinanceSettings } from './business-workspaces.js';
 
-/** CoreCare Care 1.32.0 — Incidents, basic finance and live reports */
-const VERSION = "1.32.0";
-const RELEASE = "CoreCare Care 1.32.0 — Incidents, basic finance and live reports";
+/** CoreCare Care 1.32.1 — Family access in one place */
+const VERSION = "1.32.1";
+const RELEASE = "CoreCare Care 1.32.1 — Family access in one place";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -194,6 +195,13 @@ export default {
           if (request.method === "GET") return await permitted(env.DB, session, "family_portal.manage", () => listFamilyAccess(env.DB, session));
           if (request.method === "POST") return await permitted(env.DB, session, "family_portal.manage", () => saveFamilyAccess(request, env.DB, session));
         }
+        if (url.pathname === "/api/family-access/accounts") {
+          if (request.method === "GET") return await permitted(env.DB, session, "family_portal.manage", () => listFamilyAccounts(env.DB, session));
+          if (request.method === "POST") return await permitted(env.DB, session, "family_portal.manage", () => createFamilyAccount(request, env.DB, session));
+          return methodNotAllowed(["GET", "POST"]);
+        }
+        const familyAccountMatch = url.pathname.match(/^\/api\/family-access\/accounts\/([^/]+)$/);
+        if (familyAccountMatch && request.method === "PUT") return await permitted(env.DB, session, "family_portal.manage", () => updateFamilyAccount(request, env.DB, session, decodeURIComponent(familyAccountMatch[1])));
         const familyAccessMatch = url.pathname.match(/^\/api\/family-access\/([^/]+)$/);
         if (familyAccessMatch && request.method === "DELETE") return await permitted(env.DB, session, "family_portal.manage", () => revokeFamilyAccess(env.DB, session, decodeURIComponent(familyAccessMatch[1])));
         if (url.pathname === "/api/staff") {
@@ -273,6 +281,9 @@ export default {
       console.error("CoreCare request failed", error);
       return json({ error: { code: "INTERNAL_ERROR", message: "CoreCare could not complete the request." } }, 500);
     }
+  },
+  scheduled(_event, env, context) {
+    context.waitUntil(syncPlatformEntitlements(env));
   }
 };
 
@@ -1850,14 +1861,51 @@ async function updateOrganisationProfile(request,db,session){
 async function listBranches(db,session){const r=await db.prepare("SELECT * FROM branches WHERE organisation_id=? ORDER BY status,name COLLATE NOCASE").bind(session.organisation_id).all();return json({branches:r.results});}
 async function createBranch(request,db,session){if(!hasRole(session,["owner","manager","organisation_owner","organisation_admin"]))return forbidden();const i=await readJson(request),name=clean(i.name);if(!name)return json({error:{code:"VALIDATION_ERROR",message:"Enter a branch name."}},400);const id=crypto.randomUUID();await db.batch([db.prepare("INSERT INTO branches(id,organisation_id,name,code,address,phone,email,status) VALUES(?,?,?,?,?,?,?,?)").bind(id,session.organisation_id,name,clean(i.code),clean(i.address),clean(i.phone),clean(i.email),"active"),auditStatement(db,session.organisation_id,session.user_id,"branch.created","branch",id,{name})]);return json({branch:{id,name,status:"active"}},201);}
 async function updateBranch(request,db,session,id){if(!hasRole(session,["owner","manager","organisation_owner","organisation_admin"]))return forbidden();const i=await readJson(request),name=clean(i.name),status=clean(i.status)||"active";if(!name)return json({error:{code:"VALIDATION_ERROR",message:"Enter a branch name."}},400);if(!["active","inactive"].includes(status))return json({error:{code:"VALIDATION_ERROR",message:"Choose a valid branch status."}},400);const existing=await db.prepare("SELECT id,name,code,address,phone,email,status FROM branches WHERE id=? AND organisation_id=? LIMIT 1").bind(id,session.organisation_id).first();if(!existing)return json({error:{code:"NOT_FOUND",message:"Branch not found."}},404);await db.batch([db.prepare("UPDATE branches SET name=?,code=?,address=?,phone=?,email=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(name,clean(i.code),clean(i.address),clean(i.phone),clean(i.email),status,id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,"branch.updated","branch",id,{before:existing,after:{name,code:clean(i.code),address:clean(i.address),phone:clean(i.phone),email:clean(i.email),status}})]);return json({ok:true});}
-function familyAccessView(row){return {id:row.id,userId:row.user_id,clientId:row.client_id,displayName:row.display_name,email:row.email,clientName:[row.preferred_name||row.first_name,row.last_name].filter(Boolean).join(' '),status:row.status,canViewProfile:Boolean(row.can_view_profile),canViewVisits:Boolean(row.can_view_visits),canViewCareUpdates:Boolean(row.can_view_care_updates),canViewDocuments:Boolean(row.can_view_documents),canViewMedication:Boolean(row.can_view_medication),createdAt:row.created_at};}
+function familyAccessView(row){return {id:row.id,userId:row.user_id,clientId:row.client_id,displayName:row.display_name,email:row.email,userStatus:row.user_status||'active',clientName:[row.preferred_name||row.first_name,row.last_name].filter(Boolean).join(' '),status:row.status,canViewProfile:Boolean(row.can_view_profile),canViewVisits:Boolean(row.can_view_visits),canViewCareUpdates:Boolean(row.can_view_care_updates),canViewDocuments:Boolean(row.can_view_documents),canViewMedication:Boolean(row.can_view_medication),createdAt:row.created_at};}
 async function listFamilyAccess(db,session){
-  const r=await db.prepare(`SELECT f.*,u.display_name,u.email,c.first_name,c.last_name,c.preferred_name FROM family_client_access f JOIN users u ON u.id=f.user_id AND u.organisation_id=f.organisation_id JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.organisation_id=? ORDER BY CASE f.status WHEN 'active' THEN 0 ELSE 1 END,u.display_name,c.last_name`).bind(session.organisation_id).all();
+  const branch=activeBranch(session),restricted=branchRestricted(session);
+  const r=await db.prepare(`SELECT f.*,u.display_name,u.email,u.status user_status,c.first_name,c.last_name,c.preferred_name FROM family_client_access f JOIN users u ON u.id=f.user_id AND u.organisation_id=f.organisation_id JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.organisation_id=? ${restricted?'AND c.branch_id=?':''} ORDER BY CASE f.status WHEN 'active' THEN 0 ELSE 1 END,u.display_name,c.last_name`).bind(session.organisation_id,...(restricted?[branch]:[])).all();
   return json({links:(r.results||[]).map(familyAccessView)});
+}
+async function listFamilyAccounts(db,session){
+  const branch=activeBranch(session),restricted=branchRestricted(session);
+  const r=await db.prepare(`SELECT DISTINCT u.id,u.email,u.display_name,u.role,u.access_level,u.home_branch_id,u.status,u.must_change_password,u.last_login_at,u.created_at FROM users u LEFT JOIN family_client_access f ON f.user_id=u.id AND f.organisation_id=u.organisation_id LEFT JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE u.organisation_id=? AND u.access_level='family' ${restricted?'AND (u.home_branch_id=? OR c.branch_id=?)':''} ORDER BY CASE u.status WHEN 'active' THEN 0 ELSE 1 END,u.display_name COLLATE NOCASE`).bind(session.organisation_id,...(restricted?[branch,branch]:[])).all();
+  return json({accounts:(r.results||[]).map(toUser)});
+}
+function strongTemporaryPassword(password){return password.length>=12&&/[A-Z]/.test(password)&&/[a-z]/.test(password)&&/[0-9]/.test(password);}
+async function createFamilyAccount(request,db,session){
+  const input=await readJson(request),email=clean(input.email).toLowerCase(),name=clean(input.displayName),password=String(input.temporaryPassword||''),clientId=clean(input.clientId),flags=normaliseFamilyAccess(input);
+  if(!name||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!strongTemporaryPassword(password))return json({error:{code:'VALIDATION_ERROR',message:'Enter a name, valid email and temporary password of at least 12 characters with upper-case, lower-case and a number.'}},400);
+  const restricted=branchRestricted(session),branch=activeBranch(session);
+  const client=await db.prepare(`SELECT id,branch_id FROM clients WHERE id=? AND organisation_id=? ${restricted?'AND branch_id=?':''} AND archived_at IS NULL`).bind(clientId,session.organisation_id,...(restricted?[branch]:[])).first();
+  if(!client)return json({error:{code:'VALIDATION_ERROR',message:'Choose an active client from this organisation or branch.'}},400);
+  const secured=await hashPassword(password),userId=crypto.randomUUID(),accessId=crypto.randomUUID(),role=legacyRole('family');
+  try{
+    await db.batch([
+      db.prepare("INSERT INTO users (id,organisation_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password) VALUES (?,?,?,?,?,'family',?,?,?,?, 'active',1)").bind(userId,session.organisation_id,email,name,role,client.branch_id||null,secured.hash,secured.salt,PASSWORD_ITERATIONS),
+      db.prepare("INSERT INTO family_client_access(id,organisation_id,user_id,client_id,can_view_profile,can_view_visits,can_view_care_updates,can_view_documents,can_view_medication,status) VALUES(?,?,?,?,?,?,?,?,?,'active')").bind(accessId,session.organisation_id,userId,client.id,flags.canViewProfile?1:0,flags.canViewVisits?1:0,flags.canViewCareUpdates?1:0,flags.canViewDocuments?1:0,flags.canViewMedication?1:0),
+      auditStatement(db,session.organisation_id,session.user_id,'family.account_created','user',userId,{email,clientId:client.id}),
+      auditStatement(db,session.organisation_id,session.user_id,'family.access_granted','family_client_access',accessId,{userId,clientId:client.id,...flags})
+    ]);
+  }catch(error){if(String(error).includes('UNIQUE'))return json({error:{code:'EMAIL_EXISTS',message:'A user with that email already exists.'}},409);throw error;}
+  return json({account:{id:userId,email,displayName:name,role,accessLevel:'family',branchId:client.branch_id||null,status:'active',mustChangePassword:true},access:{id:accessId,userId,clientId:client.id,...flags}},201);
+}
+async function updateFamilyAccount(request,db,session,id){
+  const input=await readJson(request),name=clean(input.displayName),status=clean(input.status),password=String(input.temporaryPassword||''),restricted=branchRestricted(session),branch=activeBranch(session);
+  if(!name||!['active','disabled'].includes(status)||(password&&!strongTemporaryPassword(password)))return json({error:{code:'VALIDATION_ERROR',message:'Enter a name and valid status. A new temporary password must have at least 12 characters with upper-case, lower-case and a number.'}},400);
+  const account=await db.prepare(`SELECT u.id,u.email FROM users u WHERE u.id=? AND u.organisation_id=? AND u.access_level='family' ${restricted?'AND (u.home_branch_id=? OR EXISTS (SELECT 1 FROM family_client_access f JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.user_id=u.id AND f.organisation_id=u.organisation_id AND c.branch_id=?))':''}`).bind(id,session.organisation_id,...(restricted?[branch,branch]:[])).first();
+  if(!account)return notFound('Family account');
+  const statements=[];
+  if(password){const secured=await hashPassword(password);statements.push(db.prepare("UPDATE users SET display_name=?,status=?,password_hash=?,password_salt=?,password_iterations=?,must_change_password=1,password_changed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND access_level='family'").bind(name,status,secured.hash,secured.salt,PASSWORD_ITERATIONS,id,session.organisation_id));}
+  else statements.push(db.prepare("UPDATE users SET display_name=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND access_level='family'").bind(name,status,id,session.organisation_id));
+  if(status==='disabled'||password)statements.push(db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id));
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,'family.account_updated','user',id,{email:account.email,status,passwordReset:Boolean(password)}));
+  await db.batch(statements);return json({ok:true});
 }
 async function saveFamilyAccess(request,db,session){
   const i=await readJson(request),userId=clean(i.userId),clientId=clean(i.clientId),flags=normaliseFamilyAccess(i);
-  const user=await db.prepare("SELECT id FROM users WHERE id=? AND organisation_id=? AND access_level='family' AND status='active'").bind(userId,session.organisation_id).first(),client=await db.prepare(`SELECT id FROM clients WHERE id=? AND organisation_id=? ${branchRestricted(session)?'AND branch_id=?':''} AND archived_at IS NULL`).bind(clientId,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first();
+  const restricted=branchRestricted(session),branch=activeBranch(session);
+  const user=await db.prepare(`SELECT u.id FROM users u WHERE u.id=? AND u.organisation_id=? AND u.access_level='family' AND u.status='active' ${restricted?'AND (u.home_branch_id=? OR EXISTS (SELECT 1 FROM family_client_access f JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.user_id=u.id AND f.organisation_id=u.organisation_id AND c.branch_id=?))':''}`).bind(userId,session.organisation_id,...(restricted?[branch,branch]:[])).first(),client=await db.prepare(`SELECT id FROM clients WHERE id=? AND organisation_id=? ${restricted?'AND branch_id=?':''} AND archived_at IS NULL`).bind(clientId,session.organisation_id,...(restricted?[branch]:[])).first();
   if(!user||!client)return json({error:{code:"VALIDATION_ERROR",message:"Choose an active family user and client from this organisation or branch."}},400);
   const existing=await db.prepare(`SELECT id FROM family_client_access WHERE organisation_id=? AND user_id=? AND client_id=?`).bind(session.organisation_id,userId,clientId).first(),id=existing?.id||crypto.randomUUID();
   await db.batch([
@@ -1867,7 +1915,8 @@ async function saveFamilyAccess(request,db,session){
   return json({ok:true,id,flags},existing?200:201);
 }
 async function revokeFamilyAccess(db,session,id){
-  const row=await db.prepare(`SELECT id,user_id,client_id FROM family_client_access WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id).first();if(!row)return notFound('Family access');
+  const restricted=branchRestricted(session),branch=activeBranch(session);
+  const row=await db.prepare(`SELECT f.id,f.user_id,f.client_id FROM family_client_access f JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.id=? AND f.organisation_id=? ${restricted?'AND c.branch_id=?':''}`).bind(id,session.organisation_id,...(restricted?[branch]:[])).first();if(!row)return notFound('Family access');
   await db.batch([db.prepare(`UPDATE family_client_access SET status='revoked' WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'family.access_revoked','family_client_access',id,{userId:row.user_id,clientId:row.client_id})]);return json({ok:true});
 }
 async function familyPortal(db,session){
