@@ -12,7 +12,7 @@ This consolidated release strengthens the live care workflows without changing t
 - Linked body-map escalation and stronger high-severity incident closure, safeguarding and duty-of-candour evidence.
 - Atomic invoice numbering and broader controlled reporting exports.
 - Private R2-backed client document uploads with authenticated staff and family downloads.
-- Current Cloudflare compatibility, structured observability and hourly maintenance scheduling.
+- Current Cloudflare compatibility, structured observability and hourly maintenance coordinated through the existing Platform health poll.
 
 ## Release boundary
 

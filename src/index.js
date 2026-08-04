@@ -20,7 +20,10 @@ export default {
     const requestId = clean(request.headers.get("cf-ray")) || crypto.randomUUID();
     try {
       if (url.pathname === "/platform-access" && request.method === "GET") return exchangePlatformAccess(request, env);
-      if (url.pathname === "/api/health") return health(env);
+      if (url.pathname === "/api/health") {
+        if (env.DB) context.waitUntil(maybeRunScheduledMaintenance(env));
+        return health(env);
+      }
       if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: RELEASE });
       if (["/auth/portal-login", "/api/auth/portal-login"].includes(url.pathname) && request.method === "POST") return portalLogin(request, env, "CARE");
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
@@ -292,7 +295,7 @@ export default {
     }
   },
   async scheduled(controller, env, context) {
-    context.waitUntil(runScheduledMaintenance(env, controller.scheduledTime));
+    context.waitUntil(maybeRunScheduledMaintenance(env, controller.scheduledTime));
   }
 };
 
@@ -322,6 +325,32 @@ async function runScheduledMaintenance(env, scheduledTime) {
   const failures = results.filter(result => result.status === "rejected").map(result => String(result.reason));
   const event = { message: "scheduled maintenance completed", scheduledAt: startedAt, jobs: results.length, failures };
   if (failures.length) console.error(JSON.stringify(event)); else console.log(JSON.stringify(event));
+  return { ok: failures.length === 0, ...event };
+}
+
+async function maybeRunScheduledMaintenance(env, scheduledTime = Date.now()) {
+  if (!env.DB) return { ok: false, skipped: true, reason: "database_not_configured" };
+  const claimed = await env.DB.prepare(`UPDATE system_maintenance_state
+    SET last_started_at=CURRENT_TIMESTAMP,status='running',error_message=NULL,updated_at=CURRENT_TIMESTAMP
+    WHERE job_key='hourly' AND (last_started_at IS NULL OR datetime(last_started_at)<=datetime('now','-55 minutes'))
+    RETURNING job_key,last_started_at`).first();
+  if (!claimed) return { ok: true, skipped: true, reason: "already_run" };
+  try {
+    const result = await runScheduledMaintenance(env, scheduledTime);
+    const status = result.ok ? "succeeded" : "failed";
+    const errorMessage = result.failures?.length ? result.failures.join(" | ").slice(0, 1_000) : null;
+    await env.DB.prepare(`UPDATE system_maintenance_state
+      SET last_completed_at=CURRENT_TIMESTAMP,status=?,error_message=?,updated_at=CURRENT_TIMESTAMP
+      WHERE job_key='hourly'`).bind(status, errorMessage).run();
+    return result;
+  } catch (error) {
+    const message = clean(error?.message || error).slice(0, 1_000);
+    await env.DB.prepare(`UPDATE system_maintenance_state
+      SET last_completed_at=CURRENT_TIMESTAMP,status='failed',error_message=?,updated_at=CURRENT_TIMESTAMP
+      WHERE job_key='hourly'`).bind(message).run().catch(() => null);
+    console.error(JSON.stringify({ message: "scheduled maintenance failed", error: message }));
+    return { ok: false, skipped: false, failures: [message] };
+  }
 }
 
 function portalOriginAllowed(request) {

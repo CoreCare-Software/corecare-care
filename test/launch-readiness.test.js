@@ -6,6 +6,7 @@ const worker = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8')
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 const migration = readFileSync(new URL('../migrations/0044_launch_readiness.sql', import.meta.url), 'utf8');
+const maintenanceMigration = readFileSync(new URL('../migrations/0045_platform_coordinated_maintenance.sql', import.meta.url), 'utf8');
 const config = JSON.parse(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8'));
 
 test('launch migration enforces branch boundaries and governance evidence', () => {
@@ -27,6 +28,9 @@ test('worker applies branch, session, eMAR and incident safety controls', () => 
   assert.match(worker, /duty_of_candour_completed_at/);
   assert.match(worker, /client_visit_codes[\s\S]*expires_at/);
   assert.match(worker, /runScheduledMaintenance/);
+  assert.match(worker, /UPDATE system_maintenance_state[\s\S]*datetime\('now','-55 minutes'\)/);
+  assert.match(maintenanceMigration, /CREATE TABLE IF NOT EXISTS system_maintenance_state/);
+  assert.equal(config.triggers, undefined);
 });
 
 test('private documents use authenticated R2 storage and safe file detection', () => {

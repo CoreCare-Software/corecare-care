@@ -44,7 +44,7 @@ npm.cmd run db:migrate:local
 npm.cmd run db:migrate:remote
 ```
 
-The `0042_corecare_connect_support.sql` migration extends support tables shared with CoreCare Platform. Follow `INSTALL-CORECARE-CONNECT-1.27.0.md` when applying it to the shared remote database. Migration `0043_incidents_finance_reports.sql` adds the incident investigation trail and organisation finance records used by release 1.32.0. Migration `0044_launch_readiness.sql` adds branch-boundary enforcement, expiring visit verification codes, controlled-medicine witness evidence and stronger incident closure records.
+The `0042_corecare_connect_support.sql` migration extends support tables shared with CoreCare Platform. Follow `INSTALL-CORECARE-CONNECT-1.27.0.md` when applying it to the shared remote database. Migration `0043_incidents_finance_reports.sql` adds the incident investigation trail and organisation finance records used by release 1.32.0. Migration `0044_launch_readiness.sql` adds branch-boundary enforcement, expiring visit verification codes, controlled-medicine witness evidence and stronger incident closure records. Migration `0045_platform_coordinated_maintenance.sql` lets the existing Platform health poll claim Care's hourly maintenance safely without consuming another account-level cron trigger.
 
 ## Verification
 
