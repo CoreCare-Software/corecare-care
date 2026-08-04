@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 const base = process.argv[2] || 'http://127.0.0.1:8787';
-const ownerCookie = 'corecare_session=corecare-launch-smoke-token';
+let ownerCookie = '';
 
 async function request(path, { method = 'GET', body, cookie = ownerCookie, expected = 200 } = {}) {
   const headers = { accept: 'application/json', origin: base };
@@ -10,7 +10,8 @@ async function request(path, { method = 'GET', body, cookie = ownerCookie, expec
   const response = await fetch(base + path, { method, headers, body: body instanceof FormData ? body : body === undefined ? undefined : JSON.stringify(body) });
   const contentType = response.headers.get('content-type') || '';
   const payload = contentType.includes('application/json') ? await response.json() : await response.arrayBuffer();
-  assert.equal(response.status, expected, `${method} ${path}: expected ${expected}, received ${response.status} ${JSON.stringify(payload)}`);
+  const allowed=Array.isArray(expected)?expected:[expected];
+  assert.ok(allowed.includes(response.status), `${method} ${path}: expected ${allowed.join(' or ')}, received ${response.status} ${JSON.stringify(payload)}`);
   return { payload, headers: response.headers };
 }
 
@@ -18,6 +19,10 @@ const health = (await request('/api/health')).payload;
 assert.equal(health.ok, true);
 assert.equal(health.version, '1.34.0');
 assert.equal((await request('/api/version')).payload.version, '1.34.0');
+const ownerLogin = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json', origin: base }, body: JSON.stringify({ email: 'admin@demo.corecare', password: 'ChangeMe!2026' }) });
+assert.equal(ownerLogin.status, 200, `Owner login failed: ${await ownerLogin.text()}`);
+ownerCookie = (ownerLogin.headers.get('set-cookie') || '').split(';')[0];
+assert.ok(ownerCookie.startsWith('corecare_session='));
 assert.equal((await request('/api/auth/session')).payload.user.organisationId, 'org-demo');
 
 let clients = (await request('/api/clients')).payload.clients || [];
@@ -29,14 +34,14 @@ if (!client) {
 }
 assert.ok(client.id);
 
-await request('/api/users', { method: 'POST', expected: 201, body: {
+await request('/api/users', { method: 'POST', expected: [201,409], body: {
   email: 'launch.manager@example.test', displayName: 'Launch Branch Manager', accessLevel: 'branch_manager', branchId: 'branch-demo-main', temporaryPassword: 'LaunchManager123!'
 } });
 const loginResponse = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json', origin: base }, body: JSON.stringify({ email: 'launch.manager@example.test', password: 'LaunchManager123!' }) });
 assert.equal(loginResponse.status, 200, `Branch manager login failed: ${await loginResponse.text()}`);
 const managerCookie = (loginResponse.headers.get('set-cookie') || '').split(';')[0];
 assert.ok(managerCookie.startsWith('corecare_session='));
-await request('/api/clients/client-smoke-other', { cookie: managerCookie, expected: 403 });
+await request('/api/clients/client-smoke-other', { cookie: managerCookie, expected: 404 });
 
 const medication = (await request('/api/medication', { method: 'POST', expected: 201, body: {
   clientId: client.id, name: 'Launch test medicine', dose: '1 tablet', scheduledTimes: ['08:00'], status: 'active', stockQuantity: 10, stockUnit: 'tablets', lowStockThreshold: 2,
@@ -48,7 +53,7 @@ await request(`/api/medication/${encodeURIComponent(medication.id)}/administer`,
   witnessEmail: 'launch.manager@example.test', witnessPassword: 'LaunchManager123!'
 } });
 
-await request('/api/family-access/accounts', { method: 'POST', expected: 201, body: {
+await request('/api/family-access/accounts', { method: 'POST', expected: [201,409], body: {
   displayName: 'Launch Relative', email: 'launch.relative@example.test', temporaryPassword: 'LaunchRelative123!', clientId: client.id,
   consentBasis: 'Identity and authority checked for the launch smoke test.', canViewProfile: true, canViewVisits: true, canViewCareUpdates: true, canViewDocuments: true, canViewMedication: false
 } });

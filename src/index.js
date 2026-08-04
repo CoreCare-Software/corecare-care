@@ -432,7 +432,7 @@ async function requireSession(request, db) {
     WHERE s.token_hash=? AND s.expires_at>CURRENT_TIMESTAMP LIMIT 1`).bind(await sha256Base64(token)).first();
   if (!row || row.status !== "active") return unauthorised();
   const idleMinutes = Math.max(5, Math.min(1440, Number(row.idle_timeout_minutes) || 60));
-  if (row.last_seen_at && Date.now() - new Date(row.last_seen_at).getTime() > idleMinutes * 60000) {
+  if (row.last_seen_at && Date.now() - databaseTimestampMs(row.last_seen_at) > idleMinutes * 60000) {
     await db.batch([
       db.prepare("DELETE FROM sessions WHERE id=?").bind(row.session_id),
       db.prepare("INSERT INTO login_history(id,organisation_id,user_id,outcome,reason,ip_hint,user_agent) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(), row.organisation_id, row.user_id, "expired", "Idle timeout", clean(request.headers.get("cf-connecting-ip")).slice(0,64), clean(request.headers.get("user-agent")).slice(0,250)),
@@ -1563,6 +1563,7 @@ function methodNotAllowed(allow) { return json({ error: { code: "METHOD_NOT_ALLO
 function publicUser(row) { return { id: row.user_id || row.id, staffId: row.staff_id || null, organisationId: row.organisation_id, organisationName: row.organisation_name, branchId: row.active_branch_id || row.home_branch_id || null, branchName: row.branch_name || null, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, isPlatformUser: Boolean(row.is_platform_user), supportMode: Boolean(row.support_mode), supportOriginOrganisationId: row.support_origin_organisation_id || null, supportStartedAt: row.support_started_at || null, supportReason: row.support_reason || null, supportAccessMode: row.support_access_mode || null, mustChangePassword: Boolean(row.must_change_password) }; }
 function toUser(row) { return { id: row.id, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, branchId: row.home_branch_id || null, customRoleId: row.custom_role_id || null, customRoleName: row.custom_role_name || null, status: row.status, mustChangePassword: Boolean(row.must_change_password), lastLoginAt: row.last_login_at, createdAt: row.created_at }; }
 function clean(value) { return String(value ?? "").trim(); }
+function databaseTimestampMs(value) { const text=clean(value);return new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(text)?`${text.replace(' ','T')}Z`:text).getTime(); }
 async function readJson(request) { try { return await request.json(); } catch { return {}; } }
 async function audit(db, organisationId, userId, action, entityType, entityId, detail) { await auditStatement(db, organisationId, userId, action, entityType, entityId, detail).run(); }
 function auditStatement(db, organisationId, userId, action, entityType, entityId, detail) { return db.prepare("INSERT INTO audit_log (id,organisation_id,user_id,action,entity_type,entity_id,detail_json) VALUES (?,?,?,?,?,?,?)").bind(crypto.randomUUID(), organisationId, userId || null, action, entityType, entityId || null, JSON.stringify(detail || {})); }

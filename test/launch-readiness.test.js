@@ -20,6 +20,7 @@ test('launch migration enforces branch boundaries and governance evidence', () =
 test('worker applies branch, session, eMAR and incident safety controls', () => {
   assert.match(worker, /enforceBranchScope/);
   assert.match(worker, /idle_timeout_minutes/);
+  assert.match(worker, /databaseTimestampMs\(row\.last_seen_at\)/);
   assert.match(worker, /EMAR_REQUIRED/);
   assert.match(worker, /medicationWitness/);
   assert.match(worker, /require_independent_care_plan_approval/);
