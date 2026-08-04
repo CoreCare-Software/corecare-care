@@ -4,10 +4,11 @@ import { syncPlatformEntitlements } from './platform-entitlements.js';
 import { carePlanReadiness, validateAdministration, validateBodyMap, validateMedicationProfile } from './clinical-records.js';
 import { assessRotaPublication, calculateLiveDashboard, normaliseFamilyAccess } from './operational-workspaces.js';
 import { calculateFinanceMetrics, calculateReportSummary, incidentReference, normaliseFinanceTransaction, normaliseIncidentReport, normaliseIncidentReview, normaliseInvoice, validateFinanceSettings } from './business-workspaces.js';
+import { LAUNCH_GOVERNANCE_DOMAINS, deriveLaunchDomainStatus, deriveOverallLaunchStatus, launchGovernanceDomain, validateLaunchSignoff } from './launch-governance.js';
 
-/** CoreCare Care 1.34.0 — Launch readiness */
-const VERSION = "1.34.0";
-const RELEASE = "CoreCare Care 1.34.0 — Launch readiness";
+/** CoreCare Care 1.35.0 — Controlled launch governance */
+const VERSION = "1.35.0";
+const RELEASE = "CoreCare Care 1.35.0 — Controlled launch governance";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -20,10 +21,7 @@ export default {
     const requestId = clean(request.headers.get("cf-ray")) || crypto.randomUUID();
     try {
       if (url.pathname === "/platform-access" && request.method === "GET") return exchangePlatformAccess(request, env);
-      if (url.pathname === "/api/health") {
-        if (env.DB) context.waitUntil(maybeRunScheduledMaintenance(env));
-        return health(env);
-      }
+      if (url.pathname === "/api/health") return health(env);
       if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: RELEASE });
       if (["/auth/portal-login", "/api/auth/portal-login"].includes(url.pathname) && request.method === "POST") return portalLogin(request, env, "CARE");
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
@@ -160,6 +158,11 @@ export default {
         if (url.pathname === "/api/platform/exit-support" && request.method === "POST") return exitSupportMode(env.DB, session);
         if (url.pathname === "/api/organisation/profile" && request.method === "GET") return getOrganisationProfile(env.DB, session);
         if (url.pathname === "/api/organisation/profile" && request.method === "PUT") return updateOrganisationProfile(request, env.DB, session);
+        if (url.pathname === "/api/launch-governance" && request.method === "GET") return getLaunchGovernance(env, session);
+        const launchSignoffMatch = url.pathname.match(/^\/api\/launch-governance\/([^/]+)\/signoff$/);
+        if (launchSignoffMatch && request.method === "POST") return updateLaunchGovernanceSignoff(request, env.DB, session, decodeURIComponent(launchSignoffMatch[1]));
+        const launchGovernanceMatch = url.pathname.match(/^\/api\/launch-governance\/([^/]+)$/);
+        if (launchGovernanceMatch && request.method === "PUT") return updateLaunchGovernanceDomain(request, env.DB, session, decodeURIComponent(launchGovernanceMatch[1]));
         if (url.pathname === "/api/security/permissions" && request.method === "GET") return listPermissionCatalogue(env.DB, session);
         if (url.pathname === "/api/security/roles") {
           if (request.method === "GET") return listCustomRoles(env.DB, session);
@@ -293,9 +296,6 @@ export default {
       console.error(JSON.stringify({ message: "CoreCare request failed", requestId, method: request.method, path: url.pathname, error: error instanceof Error ? error.message : String(error) }));
       return json({ error: { code: "INTERNAL_ERROR", message: "CoreCare could not complete the request.", requestId } }, 500, { "x-request-id": requestId });
     }
-  },
-  async scheduled(controller, env, context) {
-    context.waitUntil(maybeRunScheduledMaintenance(env, controller.scheduledTime));
   }
 };
 
@@ -2168,13 +2168,108 @@ async function familyPortal(db,session){
 
 
 // Sprint 12 — completed enterprise security services
+async function launchGovernanceAccess(db,session){
+  const administrator=canManageSecurity(session);
+  const canView=administrator||await userHasPermission(db,session,'governance.launch.view');
+  const canManage=administrator||await userHasPermission(db,session,'governance.launch.manage');
+  const canApprove=administrator||await userHasPermission(db,session,'governance.launch.approve');
+  return {canView,canManage,canApprove};
+}
+
+function launchGovernanceOutput(definition,record={},states=[]){
+  const byKey=new Map(states.map(state=>[state.check_key,state]));
+  const checks=definition.checks.map(([key,label])=>{
+    const state=byKey.get(key)||{};
+    return {key,label,completed:Boolean(state.completed),evidenceNote:state.evidence_note||'',completedBy:state.completed_by_name||'',completedAt:state.completed_at||null};
+  });
+  const status=deriveLaunchDomainStatus(record,checks);
+  return {
+    key:definition.key,title:definition.title,description:definition.description,status,
+    ownerName:record.owner_name||'',ownerRole:record.owner_role||'',evidenceSummary:record.evidence_summary||'',evidenceReference:record.evidence_reference||'',
+    approvedByName:record.approved_by_name||'',approvedByRole:record.approved_by_role||'',approvedAt:record.approved_at||null,reviewDueAt:record.review_due_at||null,
+    updatedAt:record.updated_at||null,checks,completedChecks:checks.filter(check=>check.completed).length,totalChecks:checks.length
+  };
+}
+
+async function getLaunchGovernance(env,session){
+  const db=env.DB,access=await launchGovernanceAccess(db,session);
+  if(!access.canView)return forbidden();
+  const [recordsResult,checksResult,branchGuards,unsupportedPolicy,admins,passwords,maintenance]=await Promise.all([
+    db.prepare('SELECT * FROM organisation_launch_governance WHERE organisation_id=? ORDER BY domain_key').bind(session.organisation_id).all(),
+    db.prepare(`SELECT c.*,u.display_name completed_by_name FROM organisation_launch_governance_checks c LEFT JOIN users u ON u.id=c.completed_by WHERE c.organisation_id=? ORDER BY c.domain_key,c.check_key`).bind(session.organisation_id).all(),
+    db.prepare("SELECT COUNT(*) total FROM sqlite_master WHERE type='trigger' AND name LIKE 'branch_guard_%'").first(),
+    db.prepare('SELECT COUNT(*) total FROM organisation_security_policies WHERE organisation_id=? AND (require_mfa<>0 OR require_trusted_device<>0 OR allow_password_login<>1)').bind(session.organisation_id).first(),
+    db.prepare("SELECT COUNT(*) total FROM users WHERE organisation_id=? AND status='active' AND access_level IN ('platform_owner','organisation_owner','organisation_admin','branch_manager')").bind(session.organisation_id).first(),
+    db.prepare("SELECT COUNT(*) total FROM users WHERE organisation_id=? AND status='active' AND access_level!='family' AND must_change_password=1").bind(session.organisation_id).first(),
+    db.prepare("SELECT status,last_started_at,last_completed_at,error_message FROM system_maintenance_state WHERE job_key='hourly'").first()
+  ]);
+  const recordMap=new Map((recordsResult.results||[]).map(record=>[record.domain_key,record]));
+  const allChecks=checksResult.results||[];
+  const domains=LAUNCH_GOVERNANCE_DOMAINS.map(definition=>launchGovernanceOutput(definition,recordMap.get(definition.key),allChecks.filter(state=>state.domain_key===definition.key)));
+  const overallStatus=deriveOverallLaunchStatus(domains),approved=domains.filter(domain=>domain.status==='approved').length,ready=domains.filter(domain=>domain.status==='ready_for_signoff').length;
+  const technicalEvidence=[
+    {key:'release',label:'Release version',passed:true,detail:`CoreCare Care ${VERSION}`},
+    {key:'database',label:'Production database binding',passed:Boolean(env.DB),detail:env.DB?'Configured':'Not configured'},
+    {key:'storage',label:'Private document storage',passed:Boolean(env.CLIENT_FILES),detail:env.CLIENT_FILES?'R2 binding configured':'R2 binding missing'},
+    {key:'branch_guards',label:'Database branch safeguards',passed:Number(branchGuards?.total||0)>=14,detail:`${Number(branchGuards?.total||0)} active triggers`},
+    {key:'auth_policy',label:'Implemented authentication policy',passed:Number(unsupportedPolicy?.total||0)===0,detail:Number(unsupportedPolicy?.total||0)===0?'No unsupported flags enabled':'Unsupported flags require review'},
+    {key:'admin_resilience',label:'Active management accounts',passed:Number(admins?.total||0)>=2,detail:`${Number(admins?.total||0)} active manager or owner accounts`},
+    {key:'password_onboarding',label:'Temporary workforce passwords',passed:Number(passwords?.total||0)===0,detail:Number(passwords?.total||0)===0?'No outstanding forced changes':`${Number(passwords?.total||0)} password change${Number(passwords?.total||0)===1?'':'s'} outstanding`},
+    {key:'maintenance',label:'Hourly maintenance',passed:maintenance?.status==='succeeded',detail:maintenance?.status==='succeeded'?`Last completed ${maintenance.last_completed_at}`:`Status: ${maintenance?.status||'not run'}`}
+  ];
+  return json({version:VERSION,generatedAt:new Date().toISOString(),overallStatus,summary:{approved,ready,inProgress:domains.filter(domain=>domain.status==='in_progress').length,total:domains.length,technicalPassed:technicalEvidence.filter(item=>item.passed).length,technicalTotal:technicalEvidence.length},domains,technicalEvidence,permissions:access});
+}
+
+async function updateLaunchGovernanceDomain(request,db,session,domainKey){
+  const access=await launchGovernanceAccess(db,session);if(!access.canManage)return forbidden();
+  const definition=launchGovernanceDomain(domainKey);if(!definition)return notFound('Launch-governance domain');
+  const input=await readJson(request),ownerName=clean(input.ownerName).slice(0,160),ownerRole=clean(input.ownerRole).slice(0,160),evidenceSummary=clean(input.evidenceSummary).slice(0,10000),evidenceReference=clean(input.evidenceReference).slice(0,1000),inputChecks=input.checks&&typeof input.checks==='object'?input.checks:{};
+  const checks=definition.checks.map(([key])=>{const state=inputChecks[key]||{},completed=Boolean(state.completed),evidenceNote=clean(state.evidenceNote).slice(0,2000);return {key,completed,evidenceNote};});
+  const incompleteEvidence=checks.find(check=>check.completed&&check.evidenceNote.length<3);if(incompleteEvidence)return json({error:{code:'EVIDENCE_NOTE_REQUIRED',message:'Add an evidence note for every completed criterion.'}},400);
+  const record={owner_name:ownerName,owner_role:ownerRole,evidence_summary:evidenceSummary,evidence_reference:evidenceReference};
+  const status=deriveLaunchDomainStatus(record,checks);
+  const statements=[db.prepare(`INSERT INTO organisation_launch_governance(organisation_id,domain_key,owner_name,owner_role,evidence_summary,evidence_reference,status,updated_by)
+    VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(organisation_id,domain_key) DO UPDATE SET owner_name=excluded.owner_name,owner_role=excluded.owner_role,evidence_summary=excluded.evidence_summary,evidence_reference=excluded.evidence_reference,status=excluded.status,approved_by=NULL,approved_by_name=NULL,approved_by_role=NULL,approved_at=NULL,review_due_at=NULL,declaration_text=NULL,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,definition.key,ownerName,ownerRole,evidenceSummary,evidenceReference,status,session.user_id)];
+  for(const check of checks)statements.push(db.prepare(`INSERT INTO organisation_launch_governance_checks(organisation_id,domain_key,check_key,completed,evidence_note,completed_by,completed_at)
+    VALUES(?,?,?,?,?,?,CASE WHEN ?=1 THEN CURRENT_TIMESTAMP ELSE NULL END)
+    ON CONFLICT(organisation_id,domain_key,check_key) DO UPDATE SET completed=excluded.completed,evidence_note=excluded.evidence_note,completed_by=CASE WHEN excluded.completed=1 THEN excluded.completed_by ELSE NULL END,completed_at=CASE WHEN excluded.completed=1 THEN CURRENT_TIMESTAMP ELSE NULL END,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,definition.key,check.key,check.completed?1:0,check.evidenceNote,check.completed?session.user_id:null,check.completed?1:0));
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,'launch_governance.evidence_updated','launch_governance',definition.key,{status,completed:checks.filter(check=>check.completed).length,total:checks.length,evidenceReference}));
+  await db.batch(statements);return json({ok:true,status});
+}
+
+async function updateLaunchGovernanceSignoff(request,db,session,domainKey){
+  const access=await launchGovernanceAccess(db,session);if(!access.canApprove)return forbidden();
+  const definition=launchGovernanceDomain(domainKey);if(!definition)return notFound('Launch-governance domain');
+  const input=await readJson(request),action=clean(input.action)||'approve';
+  const record=await db.prepare('SELECT * FROM organisation_launch_governance WHERE organisation_id=? AND domain_key=?').bind(session.organisation_id,definition.key).first();if(!record)return json({error:{code:'EVIDENCE_REQUIRED',message:'Save the evidence record before sign-off.'}},409);
+  if(action==='reopen'){
+    const reason=clean(input.reason).slice(0,1000);if(reason.length<8)return json({error:{code:'REASON_REQUIRED',message:'Enter a clear reason for reopening this approval.'}},400);
+    const checksResult=await db.prepare('SELECT completed FROM organisation_launch_governance_checks WHERE organisation_id=? AND domain_key=?').bind(session.organisation_id,definition.key).all();
+    const checks=(checksResult.results||[]).map(check=>({completed:Boolean(check.completed)})),status=deriveLaunchDomainStatus({...record,status:''},checks);
+    await db.batch([db.prepare(`UPDATE organisation_launch_governance SET status=?,approved_by=NULL,approved_by_name=NULL,approved_by_role=NULL,approved_at=NULL,review_due_at=NULL,declaration_text=NULL,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND domain_key=?`).bind(status,session.user_id,session.organisation_id,definition.key),auditStatement(db,session.organisation_id,session.user_id,'launch_governance.reopened','launch_governance',definition.key,{reason})]);
+    return json({ok:true,status});
+  }
+  if(action!=='approve')return badRequest('Choose approve or reopen.');
+  if(input.declaration!==true)return json({error:{code:'DECLARATION_REQUIRED',message:'Confirm the accountable sign-off declaration.'}},400);
+  const signatoryRole=clean(input.signatoryRole).slice(0,160);if(signatoryRole.length<3)return json({error:{code:'SIGNATORY_ROLE_REQUIRED',message:'Enter the accountable role under which you are signing.'}},400);
+  const reviewDueAt=clean(input.reviewDueAt);if(reviewDueAt&&!/^\d{4}-\d{2}-\d{2}$/.test(reviewDueAt))return badRequest('Enter a valid review date.');
+  const checksResult=await db.prepare('SELECT check_key,completed,evidence_note FROM organisation_launch_governance_checks WHERE organisation_id=? AND domain_key=?').bind(session.organisation_id,definition.key).all();
+  const checks=definition.checks.map(([key])=>{const state=(checksResult.results||[]).find(item=>item.check_key===key)||{};return {key,completed:Boolean(state.completed),evidenceNote:state.evidence_note||''};});
+  const recordsResult=await db.prepare('SELECT domain_key,status FROM organisation_launch_governance WHERE organisation_id=?').bind(session.organisation_id).all(),recordMap=new Map((recordsResult.results||[]).map(item=>[item.domain_key,item]));
+  const prerequisites=LAUNCH_GOVERNANCE_DOMAINS.map(domain=>({key:domain.key,status:recordMap.get(domain.key)?.status||'not_started'}));
+  const validation=validateLaunchSignoff(definition,{...record,status:''},checks,prerequisites);if(validation)return json({error:{code:'SIGNOFF_NOT_READY',message:validation}},409);
+  const declarationText=`I confirm that the ${definition.title.toLowerCase()} evidence has been reviewed, is accurate for this organisation and is approved under my stated accountable role.`;
+  await db.batch([db.prepare(`UPDATE organisation_launch_governance SET status='approved',approved_by=?,approved_by_name=?,approved_by_role=?,approved_at=CURRENT_TIMESTAMP,review_due_at=?,declaration_text=?,updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND domain_key=?`).bind(session.user_id,session.display_name||session.email,signatoryRole,reviewDueAt||null,declarationText,session.user_id,session.organisation_id,definition.key),auditStatement(db,session.organisation_id,session.user_id,'launch_governance.approved','launch_governance',definition.key,{signatoryRole,reviewDueAt:reviewDueAt||null,declaration:declarationText})]);
+  return json({ok:true,status:'approved'});
+}
+
 const STANDARD_PERMISSION_MAP = {
-  organisation_owner: ['*'], organisation_admin: ['dashboard.view','operations.view','operations.manage','rota.view','rota.create','rota.edit','rota.publish','rota.cancel','rota.time_critical.override','visits.view','visits.clock','visits.override','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','finance.view','finance.manage','family_portal.manage','organisation.settings.view','organisation.settings.manage','security.roles.view','security.roles.manage','security.users.view','security.users.manage','security.audit.view','security.sessions.manage','clients.view','clients.create','clients.edit','clients.archive','staff.view','staff.create','staff.edit','care_plans.view','care_plans.create','care_plans.edit','care_plans.archive','risks.view','risks.manage','documents.view','documents.manage','reports.view','data.export'],
-  branch_manager: ['dashboard.view','operations.view','operations.manage','rota.view','rota.create','rota.edit','rota.publish','visits.view','visits.clock','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','family_portal.manage','organisation.settings.view','security.roles.view','security.users.view','clients.view','clients.create','clients.edit','staff.view','staff.create','staff.edit','care_plans.view','care_plans.create','care_plans.edit','risks.view','risks.manage','documents.view','documents.manage','reports.view'],
+  organisation_owner: ['*'], organisation_admin: ['dashboard.view','operations.view','operations.manage','rota.view','rota.create','rota.edit','rota.publish','rota.cancel','rota.time_critical.override','visits.view','visits.clock','visits.override','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','finance.view','finance.manage','family_portal.manage','organisation.settings.view','organisation.settings.manage','governance.launch.view','governance.launch.manage','governance.launch.approve','security.roles.view','security.roles.manage','security.users.view','security.users.manage','security.audit.view','security.sessions.manage','clients.view','clients.create','clients.edit','clients.archive','staff.view','staff.create','staff.edit','care_plans.view','care_plans.create','care_plans.edit','care_plans.archive','risks.view','risks.manage','documents.view','documents.manage','reports.view','data.export'],
+  branch_manager: ['dashboard.view','operations.view','operations.manage','rota.view','rota.create','rota.edit','rota.publish','visits.view','visits.clock','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','family_portal.manage','organisation.settings.view','governance.launch.view','security.roles.view','security.users.view','clients.view','clients.create','clients.edit','staff.view','staff.create','staff.edit','care_plans.view','care_plans.create','care_plans.edit','risks.view','risks.manage','documents.view','documents.manage','reports.view'],
   senior_carer: ['dashboard.view','operations.view','visits.view','visits.clock','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','clients.view','clients.edit','staff.view','care_plans.view','care_plans.create','care_plans.edit','risks.view','risks.manage','documents.view','documents.manage'],
   carer: ['dashboard.view','visits.view','visits.clock','tasks.view','medication.view','clients.view','staff.view','care_plans.view','risks.view','documents.view'],
   office_staff: ['dashboard.view','operations.view','rota.view','rota.create','rota.edit','rota.publish','visits.view','tasks.view','tasks.manage','incidents.view','family_portal.manage','organisation.settings.view','clients.view','clients.create','clients.edit','staff.view','staff.create','staff.edit','reports.view'],
-  auditor: ['dashboard.view','operations.view','rota.view','visits.view','medication.view','tasks.view','incidents.view','finance.view','organisation.settings.view','security.roles.view','security.users.view','security.audit.view','clients.view','staff.view','care_plans.view','risks.view','documents.view','reports.view'],
+  auditor: ['dashboard.view','operations.view','rota.view','visits.view','medication.view','tasks.view','incidents.view','finance.view','organisation.settings.view','governance.launch.view','security.roles.view','security.users.view','security.audit.view','clients.view','staff.view','care_plans.view','risks.view','documents.view','reports.view'],
   family: [], platform_owner: ['*'], platform_admin: ['*']
 };
 function canManageSecurity(session){return session.is_platform_user || ['organisation_owner','organisation_admin'].includes(session.access_level) || session.role==='owner';}

@@ -1,6 +1,29 @@
 const PRODUCT_CODE = 'CARE';
+const PASSWORD_ITERATIONS = 100000;
 const clean = (value, maxLength = 500) => String(value ?? '').trim().slice(0, maxLength);
 const json = (payload, status = 200) => Response.json(payload, { status, headers: { 'cache-control': 'no-store' } });
+
+function base64(bytes) { let value = ''; for (const byte of bytes) value += String.fromCharCode(byte); return btoa(value); }
+async function passwordRecord(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const hash = new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: PASSWORD_ITERATIONS }, key, 256));
+  return { hash: base64(hash), salt: base64(salt) };
+}
+
+async function upsertInitialUser(env, organisation, branchId, input) {
+  if (!input) return null;
+  const email = clean(input.email, 320).toLowerCase(), name = clean(input.name, 240) || email, password = String(input.password || '');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 12 || password.length > 128) return { error: json({ error: { code: 'INVALID_INITIAL_USER', message: 'A valid owner email and secure password are required.' } }, 400) };
+  const secured = await passwordRecord(password), existing = await env.DB.prepare('SELECT id FROM users WHERE organisation_id=?1 AND lower(email)=lower(?2) LIMIT 1').bind(organisation.id, email).first();
+  if (existing) {
+    await env.DB.prepare(`UPDATE users SET display_name=?1,role='owner',access_level='organisation_owner',home_branch_id=?2,password_hash=?3,password_salt=?4,password_iterations=?5,status='active',must_change_password=0,password_changed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?6`).bind(name, branchId, secured.hash, secured.salt, PASSWORD_ITERATIONS, existing.id).run();
+    return { id: existing.id, email, created: false };
+  }
+  const id = crypto.randomUUID();
+  await env.DB.prepare(`INSERT INTO users(id,organisation_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password,password_changed_at) VALUES(?1,?2,?3,?4,'owner','organisation_owner',?5,?6,?7,?8,'active',0,CURRENT_TIMESTAMP)`).bind(id, organisation.id, email, name, branchId, secured.hash, secured.salt, PASSWORD_ITERATIONS).run();
+  return { id, email, created: true };
+}
 
 async function authorised(request, env) {
   const supplied = clean(request.headers.get('x-corecare-product-key'), 4_000);
@@ -53,8 +76,11 @@ export async function handlePlatformOrganisation(request, env, requestedExternal
     organisation = await env.DB.prepare('SELECT id,name,status FROM organisations WHERE id=?1 OR id=?2 LIMIT 1').bind(platformId, externalId).first();
     const branch = await env.DB.prepare("SELECT id FROM branches WHERE organisation_id=?1 AND status='active' ORDER BY created_at LIMIT 1").bind(organisation.id).first();
     if (!branch) await env.DB.prepare("INSERT INTO branches(id,organisation_id,name,code,status) VALUES(?1,?2,'Main Branch','MAIN','active')").bind(`${organisation.id}-main`, organisation.id).run();
+    const activeBranch = branch?.id || `${organisation.id}-main`;
+    const initialUser = await upsertInitialUser(env, organisation, activeBranch, input.initialUser);
+    if (initialUser?.error) return initialUser.error;
     const productSummary = await careSummary(env, organisation);
-    return json({ ok: true, protocol: 'corecare-platform-organisation/1', organisation: { id: platformId, external_id: organisation.id, name: organisation.name, status: organisation.status }, summary: productSummary.metrics }, 201);
+    return json({ ok: true, protocol: 'corecare-platform-organisation/1', organisation: { id: platformId, external_id: organisation.id, name: organisation.name, status: organisation.status }, initialUser, summary: productSummary.metrics }, 201);
   }
   if (request.method === 'GET' && requestedExternalId) {
     const organisation = await env.DB.prepare('SELECT id,name,status FROM organisations WHERE id=?1 LIMIT 1').bind(requestedExternalId).first();

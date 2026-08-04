@@ -245,7 +245,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.34.0';
+const CORECARE_FALLBACK_VERSION = '1.35.0';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -1468,6 +1468,7 @@ let currentSettingsSection='overview';
 let organisationSettingsProfile={};
 let settingsSecurityOverview={};
 let moduleSettingsDirty=false;
+let launchGovernanceData={domains:[],technicalEvidence:[],summary:{},permissions:{}};
 
 function setupSettingsHub(){
   const page=$('#settings-page');
@@ -1511,12 +1512,13 @@ function setupSettingsHub(){
       <button class="settings-nav-item" type="button" data-settings-target="access" data-settings-restricted aria-selected="false"><span>◎</span><b>Users & access</b></button>
       <button class="settings-nav-item" type="button" data-settings-target="security" data-settings-restricted aria-selected="false"><span>◉</span><b>Security</b></button>
       <button class="settings-nav-item" type="button" data-settings-target="modules" data-settings-restricted aria-selected="false"><span>▦</span><b>Modules</b></button>
+      <button class="settings-nav-item" type="button" data-settings-target="governance" data-settings-governance aria-selected="false"><span>G</span><b>Launch governance</b></button>
       <button class="settings-nav-item" type="button" data-settings-target="audit" aria-selected="false"><span>▤</span><b>Audit history</b></button>
     </nav><div class="settings-family-note"><span>◇</span><p><b>Family access</b><small>Managed from the Family Portal.</small></p><button type="button" data-page-link="family">Open portal</button></div></aside>
     <div class="settings-workspace">
       <form id="settings-form-anchor" class="settings-form-anchor" aria-hidden="true"></form>
       <section class="settings-view" data-settings-section="overview"><div class="settings-view-heading"><div><p class="eyebrow">Settings home</p><h2>Organisation overview</h2><p>See the current setup and go directly to the area you need.</p></div></div><div id="settings-overview-error" class="settings-section-error" hidden></div>
-        <div class="settings-overview-grid"><button type="button" data-settings-target="organisation"><span>Organisation</span><strong id="settings-overview-org">Not loaded</strong><small>Profile, contact and terminology</small></button><button type="button" data-settings-target="locations"><span>Branches</span><strong id="settings-overview-branches">—</strong><small>Active care locations</small></button><button type="button" data-settings-target="access"><span>Workforce access</span><strong id="settings-overview-users">—</strong><small>Non-family user accounts</small></button><button type="button" data-settings-target="security"><span>Security</span><strong id="settings-overview-security">Checking</strong><small id="settings-overview-security-detail">Sessions and sign-in policy</small></button></div>
+        <div class="settings-overview-grid"><button type="button" data-settings-target="organisation"><span>Organisation</span><strong id="settings-overview-org">Not loaded</strong><small>Profile, contact and terminology</small></button><button type="button" data-settings-target="locations"><span>Branches</span><strong id="settings-overview-branches">—</strong><small>Active care locations</small></button><button type="button" data-settings-target="access"><span>Workforce access</span><strong id="settings-overview-users">—</strong><small>Non-family user accounts</small></button><button type="button" data-settings-target="security"><span>Security</span><strong id="settings-overview-security">Checking</strong><small id="settings-overview-security-detail">Sessions and sign-in policy</small></button><button type="button" data-settings-target="governance" data-settings-governance><span>Launch readiness</span><strong id="settings-overview-governance">Not started</strong><small id="settings-overview-governance-detail">Evidence and accountable sign-off</small></button></div>
         <div class="settings-overview-actions"><article class="panel"><p class="eyebrow">Common tasks</p><h3>Manage the organisation</h3><div class="settings-action-list"><button type="button" data-settings-target="branding"><span>◈</span><div><b>Update branding</b><small>Logo, colours and dashboard presentation</small></div><em>›</em></button><button type="button" data-settings-target="access"><span>◎</span><div><b>Manage users and roles</b><small>Add users and review effective access</small></div><em>›</em></button><button type="button" data-settings-target="audit"><span>▤</span><div><b>Review recent changes</b><small>See accountable activity across CoreCare</small></div><em>›</em></button></div></article><article class="panel settings-boundaries"><p class="eyebrow">Where settings live</p><h3>Keep each workflow in context</h3><p><b>Family logins</b><span>Family Portal</span></p><p><b>Travel and routing</b><span>Rota</span></p><p><b>Your password</b><span>Profile menu</span></p><p><b>Finance connections</b><span>Finance</span></p></article></div>
       </section>
       <section class="settings-view" data-settings-section="organisation" hidden><div class="settings-view-heading"><div><p class="eyebrow">General setup</p><h2>Organisation</h2><p>Maintain identity, contact details, terminology and regional preferences.</p></div></div><div id="settings-organisation-error" class="settings-section-error" hidden></div><article class="panel settings-form-panel"><div id="settings-general-fields" class="form-grid compact-form"></div><div class="settings-save-bar"><span class="settings-unsaved" data-dirty-for="organisation-form" hidden>Unsaved changes</span><button class="primary-button compact" type="submit" form="organisation-form">Save organisation</button></div><p id="organisation-message" class="form-message" role="status" hidden></p></article><div id="settings-platform-panel-slot"></div></section>
@@ -1525,7 +1527,9 @@ function setupSettingsHub(){
       <section class="settings-view" data-settings-section="access" data-settings-restricted hidden><div class="settings-view-heading"><div><p class="eyebrow">Access control</p><h2>Users & access</h2><p>Manage workforce accounts, roles and individual permission exceptions.</p></div><div id="settings-access-actions" class="settings-heading-actions"></div></div><div id="settings-access-error" class="settings-section-error" hidden></div><div id="settings-access-content" class="settings-section-stack"><div id="settings-role-slot"></div><div id="settings-user-slot"></div><div id="settings-access-tools" class="settings-card-grid"></div></div></section>
       <section class="settings-view" data-settings-section="security" data-settings-restricted hidden><div class="settings-view-heading"><div><p class="eyebrow">Protection</p><h2>Security & sessions</h2><p>Control active security features and monitor access to the organisation.</p></div></div><div id="settings-security-error" class="settings-section-error" hidden></div><div id="settings-security-metrics"></div><div id="settings-security-content" class="settings-section-stack"><div id="settings-policy-slot"></div><div id="settings-emergency-slot"></div><div id="settings-history-slot"></div><div id="settings-sessions-slot"></div></div></section>
       <section class="settings-view" data-settings-section="modules" data-settings-restricted hidden><div class="settings-view-heading"><div><p class="eyebrow">Workspace visibility</p><h2>Organisation modules</h2><p>Choose which CoreCare areas are available across this organisation.</p></div></div><div id="settings-modules-error" class="settings-section-error" hidden></div><div id="settings-modules-slot"></div></section>
+      <section class="settings-view launch-governance-view" data-settings-section="governance" data-settings-governance hidden><div class="settings-view-heading"><div><p class="eyebrow">Controlled launch</p><h2>Launch governance</h2><p>Collect evidence, assign accountable owners and record authenticated organisational sign-off.</p></div><div class="settings-heading-actions"><button id="launch-governance-refresh" type="button" class="secondary-button compact">Refresh</button><button id="launch-governance-print" type="button" class="secondary-button compact">Print evidence pack</button></div></div><div id="settings-governance-error" class="settings-section-error" hidden></div><div id="launch-governance-content" class="launch-governance-content"><div class="empty-state"><strong>Loading launch governance</strong><span>Checking evidence and technical readiness.</span></div></div></section>
       <section class="settings-view" data-settings-section="audit" hidden><div class="settings-view-heading"><div><p class="eyebrow">Accountability</p><h2>Audit history</h2><p>Review recent actions and changes recorded across the organisation.</p></div></div><div id="settings-audit-error" class="settings-section-error" hidden></div><div id="settings-audit-slot"></div></section>
+      <dialog id="launch-signoff-dialog" class="client-dialog"><form id="launch-signoff-form"><div class="dialog-heading"><div><p class="eyebrow">Authenticated approval</p><h2 id="launch-signoff-title">Approve launch evidence</h2></div><button type="button" data-close-launch-signoff aria-label="Close">×</button></div><input name="domainKey" type="hidden"><div class="form-grid"><label class="wide">Accountable signatory role *<input name="signatoryRole" required maxlength="160" placeholder="e.g. Clinical safety lead"></label><label>Review due date<input name="reviewDueAt" type="date"></label><label class="wide check-row launch-declaration"><input name="declaration" type="checkbox" required> I confirm that I am authorised to approve this evidence for the organisation and that it is accurate.</label></div><p class="family-security-note">CoreCare records your authenticated identity, stated role, time and declaration in the audit history. This is an organisational decision, not approval by CoreCare.</p><p id="launch-signoff-error" class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-close-launch-signoff>Cancel</button><button type="submit" class="primary-button">Record approval</button></div></form></dialog>
     </div></div>`);
 
   const shell=toolbar.nextElementSibling,workspace=shell.querySelector('.settings-workspace');
@@ -1582,7 +1586,16 @@ function trackSettingsFormChange(event){const form=event.target?.form||event.tar
 function hasUnsavedSettings(){return moduleSettingsDirty||[...document.querySelectorAll('form[data-settings-dirty]')].some(form=>form.dataset.dirty==='true');}
 function showSettingsSectionError(section,error){const el=$(`#settings-${section}-error`);if(!el)return;el.textContent=error?.message||String(error||'Unable to load this settings area.');el.hidden=false;}
 function clearSettingsSectionError(section){const el=$(`#settings-${section}-error`);if(el){el.textContent='';el.hidden=true;}}
-function updateSettingsOverview(){setText('#settings-overview-org',organisationSettingsProfile.name||currentUser?.organisationName||'Organisation');setText('#settings-navigation-org',organisationSettingsProfile.short_name||organisationSettingsProfile.name||currentUser?.organisationName||'Organisation');setText('#settings-overview-branches',String(branches.filter(branch=>branch.status==='active').length));setText('#settings-overview-users',String(settingsUsers().filter(user=>user.status==='active').length));const emergency=Boolean(settingsSecurityOverview.emergencyMode);setText('#settings-overview-security',emergency?'Emergency active':'Protected');setText('#settings-overview-security-detail',emergency?'Emergency controls are enabled':`${settingsSecurityOverview.activeSessions||0} active session${Number(settingsSecurityOverview.activeSessions||0)===1?'':'s'}`);}
+function updateSettingsOverview(){
+  setText('#settings-overview-org',organisationSettingsProfile.name||currentUser?.organisationName||'Organisation');
+  setText('#settings-navigation-org',organisationSettingsProfile.short_name||organisationSettingsProfile.name||currentUser?.organisationName||'Organisation');
+  setText('#settings-overview-branches',String(branches.filter(branch=>branch.status==='active').length));
+  setText('#settings-overview-users',String(settingsUsers().filter(user=>user.status==='active').length));
+  const emergency=Boolean(settingsSecurityOverview.emergencyMode);setText('#settings-overview-security',emergency?'Emergency active':'Protected');setText('#settings-overview-security-detail',emergency?'Emergency controls are enabled':`${settingsSecurityOverview.activeSessions||0} active session${Number(settingsSecurityOverview.activeSessions||0)===1?'':'s'}`);
+  const governanceLabels={not_started:'Not started',in_progress:'In progress',ready_for_signoff:'Ready for sign-off',approved:'Approved'};
+  setText('#settings-overview-governance',governanceLabels[launchGovernanceData.overallStatus]||'Not started');
+  setText('#settings-overview-governance-detail',`${Number(launchGovernanceData.summary?.approved||0)} of ${Number(launchGovernanceData.summary?.total||8)} domains approved`);
+}
 
 setupSettingsHub();
 
@@ -1595,21 +1608,80 @@ function applyOrganisationBranding(org){
 async function loadSettings() {
   if (!currentUser) return;
   const canAdmin=['platform_owner','platform_admin','organisation_owner','organisation_admin'].includes(currentUser.accessLevel)||currentUser.role==='owner';
+  const canViewGovernance=canAdmin||hasAccess('governance.launch.view');
   $('#add-user').hidden=!canAdmin;$('#add-branch').hidden=!canAdmin;$('#add-custom-role').hidden=!canAdmin;
   $('#platform-admin-panel').hidden=!currentUser.isPlatformUser||currentUser.supportMode;
   document.querySelectorAll('.settings-nav-item[data-settings-restricted]').forEach(item=>item.hidden=!canAdmin);
-  if(!canAdmin&&['access','security','modules'].includes(currentSettingsSection))setSettingsSection('overview');
-  ['overview','organisation','branding','locations','access','security','modules','audit'].forEach(clearSettingsSectionError);
+  document.querySelectorAll('[data-settings-governance]').forEach(item=>item.hidden=!canViewGovernance);
+  if((!canAdmin&&['access','security','modules'].includes(currentSettingsSection))||(!canViewGovernance&&currentSettingsSection==='governance'))setSettingsSection('overview');
+  ['overview','organisation','branding','locations','access','security','modules','governance','audit'].forEach(clearSettingsSectionError);
   const [profileResult,userResult,branchResult]=await Promise.allSettled([api('/api/organisation/profile'),api('/api/users'),api('/api/branches')]);
   if(profileResult.status==='fulfilled')applyOrganisationSettingsProfile(profileResult.value.organisation||{});else{showSettingsSectionError('organisation',profileResult.reason);showSettingsSectionError('branding',profileResult.reason);}
   if(userResult.status==='fulfilled'){users=userResult.value.users||[];renderUsers();populateCustomRoleSelect();}else{showSettingsSectionError('access',userResult.reason);$('#user-table-body').innerHTML=`<tr><td colspan="6">${escapeHtml(userResult.reason.message)}</td></tr>`;}
   if(branchResult.status==='fulfilled'){branches=branchResult.value.branches||[];renderBranches();populateBranchSelect();}else showSettingsSectionError('locations',branchResult.reason);
   const followUps=[loadAudit()];
   if(canAdmin)followUps.push(loadEnterpriseSecurity());
+  if(canViewGovernance)followUps.push(loadLaunchGovernance());
   if(currentUser.isPlatformUser&&!currentUser.supportMode)followUps.push(loadOrganisations().catch(error=>showSettingsSectionError('organisation',error)));
   await Promise.allSettled(followUps);
   updateSettingsOverview();
 }
+
+function launchGovernanceStatusLabel(status){return ({not_started:'Not started',in_progress:'In progress',ready_for_signoff:'Ready for sign-off',approved:'Approved'})[status]||'Not started';}
+function launchGovernanceStatusClass(status){return status==='approved'?'success':status==='ready_for_signoff'?'active':status==='in_progress'?'warning':'neutral';}
+function launchGovernanceDate(value){if(!value)return '';const date=new Date(String(value).includes('T')?value:`${value}Z`);return Number.isNaN(date.getTime())?String(value):new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:String(value).includes(':')?'short':undefined}).format(date);}
+
+function renderLaunchGovernance(){
+  const host=$('#launch-governance-content');if(!host)return;
+  const data=launchGovernanceData,summary=data.summary||{},permissions=data.permissions||{},domains=data.domains||[],allPrerequisitesApproved=domains.filter(domain=>domain.key!=='production_acceptance').every(domain=>domain.status==='approved');
+  const technical=(data.technicalEvidence||[]).map(item=>`<article class="launch-technical-item ${item.passed?'passed':'attention'}"><span>${item.passed?'✓':'!'}</span><div><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.detail)}</small></div></article>`).join('');
+  const domainCards=domains.map(domain=>{
+    const approved=domain.status==='approved',editable=Boolean(permissions.canManage&&!approved),canApprove=Boolean(permissions.canApprove&&domain.status==='ready_for_signoff'&&(domain.key!=='production_acceptance'||allPrerequisitesApproved));
+    const disabled=editable?'':' disabled';
+    const checks=domain.checks.map(check=>`<div class="launch-criterion ${check.completed?'complete':''}"><label><input type="checkbox" data-launch-check="${escapeHtml(check.key)}" ${check.completed?'checked':''}${disabled}><span><b>${escapeHtml(check.label)}</b><small>${check.completedBy?`Completed by ${escapeHtml(check.completedBy)}${check.completedAt?` · ${escapeHtml(launchGovernanceDate(check.completedAt))}`:''}`:'Record the evidence used for this decision.'}</small></span></label><input type="text" data-launch-check-note="${escapeHtml(check.key)}" value="${escapeHtml(check.evidenceNote)}" placeholder="Evidence note, test reference or policy section" maxlength="2000"${disabled}></div>`).join('');
+    const signoff=approved?`<div class="launch-approval"><span>✓</span><div><strong>Approved by ${escapeHtml(domain.approvedByName||'authorised user')}</strong><small>${escapeHtml(domain.approvedByRole||'Accountable role')} · ${escapeHtml(launchGovernanceDate(domain.approvedAt))}${domain.reviewDueAt?` · Review ${escapeHtml(launchGovernanceDate(domain.reviewDueAt))}`:''}</small></div></div>`:'';
+    const actions=permissions.canManage||permissions.canApprove?`<div class="settings-save-bar">${editable?'<button type="submit" class="secondary-button compact">Save evidence</button>':''}${canApprove?`<button type="button" class="primary-button compact" data-launch-approve="${escapeHtml(domain.key)}">Record approval</button>`:''}${approved&&permissions.canApprove?`<button type="button" class="secondary-button compact" data-launch-reopen="${escapeHtml(domain.key)}">Reopen review</button>`:''}</div>`:'';
+    return `<article class="panel launch-domain-card ${approved?'approved':''}"><form data-launch-domain-form="${escapeHtml(domain.key)}" data-settings-dirty><div class="launch-domain-heading"><div><p class="eyebrow">${domain.completedChecks} of ${domain.totalChecks} criteria</p><h3>${escapeHtml(domain.title)}</h3><p>${escapeHtml(domain.description)}</p></div><span class="badge ${launchGovernanceStatusClass(domain.status)}">${escapeHtml(launchGovernanceStatusLabel(domain.status))}</span></div><div class="form-grid compact-form launch-owner-grid"><label>Accountable owner<input name="ownerName" value="${escapeHtml(domain.ownerName)}" placeholder="Named person" maxlength="160"${disabled}></label><label>Owner role<input name="ownerRole" value="${escapeHtml(domain.ownerRole)}" placeholder="e.g. Data protection officer" maxlength="160"${disabled}></label><label class="wide">Evidence summary<textarea name="evidenceSummary" rows="3" maxlength="10000" placeholder="Summarise what was reviewed, the outcome and any controlled limitations."${disabled}>${escapeHtml(domain.evidenceSummary)}</textarea></label><label class="wide">Evidence reference<input name="evidenceReference" value="${escapeHtml(domain.evidenceReference)}" placeholder="Policy, DPIA, test pack, meeting record or secure document reference" maxlength="1000"${disabled}></label></div><div class="launch-criteria">${checks}</div>${signoff}${domain.key==='production_acceptance'&&!allPrerequisitesApproved?'<p class="family-security-note">Final go/no-go approval unlocks only after every prerequisite domain is approved.</p>':''}${actions}</form></article>`;
+  }).join('');
+  host.innerHTML=`<section class="launch-readiness-hero panel"><div><p class="eyebrow">Organisation decision</p><h3>${escapeHtml(launchGovernanceStatusLabel(data.overallStatus))}</h3><p>CoreCare records and protects the evidence. Only authorised people in your organisation can provide the required approval.</p></div><div class="launch-summary-metrics"><div><strong>${Number(summary.approved||0)}</strong><span>Approved</span></div><div><strong>${Number(summary.ready||0)}</strong><span>Ready</span></div><div><strong>${Number(summary.inProgress||0)}</strong><span>In progress</span></div><div><strong>${Number(summary.technicalPassed||0)}/${Number(summary.technicalTotal||0)}</strong><span>Technical checks</span></div></div></section><section class="panel launch-technical-panel"><div class="panel-heading"><div><p class="eyebrow">Live evidence</p><h3>Technical readiness</h3><p>Read-only checks generated from the current production configuration and database.</p></div><span class="badge ${Number(summary.technicalPassed||0)===Number(summary.technicalTotal||0)?'success':'warning'}">${Number(summary.technicalPassed||0)} of ${Number(summary.technicalTotal||0)} passed</span></div><div class="launch-technical-grid">${technical}</div></section><section class="launch-domain-grid">${domainCards}</section>`;
+  $$('[data-launch-domain-form]').forEach(form=>{markSettingsFormClean(form);form.addEventListener('submit',saveLaunchGovernanceDomain);});
+  $$('[data-launch-approve]').forEach(button=>button.addEventListener('click',()=>openLaunchGovernanceSignoff(button.dataset.launchApprove)));
+  $$('[data-launch-reopen]').forEach(button=>button.addEventListener('click',()=>reopenLaunchGovernance(button.dataset.launchReopen)));
+}
+
+async function loadLaunchGovernance(){
+  clearSettingsSectionError('governance');
+  try{launchGovernanceData=await api('/api/launch-governance');renderLaunchGovernance();updateSettingsOverview();return launchGovernanceData;}
+  catch(error){showSettingsSectionError('governance',error);throw error;}
+}
+
+async function saveLaunchGovernanceDomain(event){
+  event.preventDefault();const form=event.currentTarget,domainKey=form.dataset.launchDomainForm,checks={};
+  form.querySelectorAll('[data-launch-check]').forEach(input=>{const key=input.dataset.launchCheck,note=form.querySelector(`[data-launch-check-note="${CSS.escape(key)}"]`);checks[key]={completed:input.checked,evidenceNote:note?.value||''};});
+  const data={ownerName:form.elements.ownerName.value,ownerRole:form.elements.ownerRole.value,evidenceSummary:form.elements.evidenceSummary.value,evidenceReference:form.elements.evidenceReference.value,checks};
+  const submit=form.querySelector('[type="submit"]');if(submit){submit.disabled=true;submit.textContent='Saving…';}
+  try{await api(`/api/launch-governance/${encodeURIComponent(domainKey)}`,{method:'PUT',body:JSON.stringify(data)});await loadLaunchGovernance();showSuccessToast?.('Launch evidence saved.');}
+  catch(error){showToastError?.(error);alert(error.message);if(submit){submit.disabled=false;submit.textContent='Save evidence';}}
+}
+
+function openLaunchGovernanceSignoff(domainKey){
+  const domain=(launchGovernanceData.domains||[]).find(item=>item.key===domainKey),dialog=$('#launch-signoff-dialog'),form=$('#launch-signoff-form');if(!domain||!dialog||!form)return;
+  form.reset();form.elements.domainKey.value=domainKey;form.elements.signatoryRole.value=domain.ownerRole||roleLabel(currentUser?.accessLevel||currentUser?.role);$('#launch-signoff-title').textContent=`Approve ${domain.title.toLowerCase()}`;$('#launch-signoff-error').hidden=true;dialog.showModal();
+}
+
+async function reopenLaunchGovernance(domainKey){
+  const reason=prompt('Why must this approval be reopened?');if(!reason)return;
+  try{await api(`/api/launch-governance/${encodeURIComponent(domainKey)}/signoff`,{method:'POST',body:JSON.stringify({action:'reopen',reason})});await loadLaunchGovernance();showSuccessToast?.('The approval was reopened and recorded in the audit history.');}catch(error){showToastError?.(error);alert(error.message);}
+}
+
+$('#launch-governance-refresh')?.addEventListener('click',()=>loadLaunchGovernance());
+$('#launch-governance-print')?.addEventListener('click',()=>window.print());
+$$('[data-close-launch-signoff]').forEach(button=>button.addEventListener('click',()=>$('#launch-signoff-dialog')?.close()));
+$('#launch-signoff-form')?.addEventListener('submit',async event=>{
+  event.preventDefault();const form=event.currentTarget,error=$('#launch-signoff-error'),submit=form.querySelector('[type="submit"]');error.hidden=true;submit.disabled=true;submit.textContent='Recording…';
+  try{await api(`/api/launch-governance/${encodeURIComponent(form.elements.domainKey.value)}/signoff`,{method:'POST',body:JSON.stringify({action:'approve',signatoryRole:form.elements.signatoryRole.value,reviewDueAt:form.elements.reviewDueAt.value,declaration:form.elements.declaration.checked})});$('#launch-signoff-dialog').close();await loadLaunchGovernance();showSuccessToast?.('Accountable approval recorded.');}
+  catch(exception){error.textContent=exception.message;error.hidden=false;}finally{submit.disabled=false;submit.textContent='Record approval';}
+});
 
 function settingsUsers(){return users.filter(user=>user.accessLevel!=='family');}
 function renderUsers() {

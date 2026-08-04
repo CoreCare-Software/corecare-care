@@ -17,13 +17,35 @@ async function request(path, { method = 'GET', body, cookie = ownerCookie, expec
 
 const health = (await request('/api/health')).payload;
 assert.equal(health.ok, true);
-assert.equal(health.version, '1.34.0');
-assert.equal((await request('/api/version')).payload.version, '1.34.0');
+assert.equal(health.version, '1.35.0');
+assert.equal((await request('/api/version')).payload.version, '1.35.0');
 const ownerLogin = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json', origin: base }, body: JSON.stringify({ email: 'admin@demo.corecare', password: 'ChangeMe!2026' }) });
 assert.equal(ownerLogin.status, 200, `Owner login failed: ${await ownerLogin.text()}`);
 ownerCookie = (ownerLogin.headers.get('set-cookie') || '').split(';')[0];
 assert.ok(ownerCookie.startsWith('corecare_session='));
 assert.equal((await request('/api/auth/session')).payload.user.organisationId, 'org-demo');
+
+let governance = (await request('/api/launch-governance')).payload;
+assert.equal(governance.domains.length, 8);
+const governancePayload = domain => ({
+  ownerName: 'Launch Test Owner',
+  ownerRole: domain.key === 'clinical_safety' ? 'Clinical safety lead' : 'Accountable test owner',
+  evidenceSummary: `The ${domain.title} criteria were completed in the isolated launch smoke test.`,
+  evidenceReference: `SMOKE-${domain.key.toUpperCase()}`,
+  checks: Object.fromEntries(domain.checks.map(check => [check.key, { completed: true, evidenceNote: `Verified by smoke test: ${check.key}` }]))
+});
+const productionAcceptance = governance.domains.find(domain => domain.key === 'production_acceptance');
+await request(`/api/launch-governance/${productionAcceptance.key}`, { method: 'PUT', body: governancePayload(productionAcceptance) });
+const blockedAcceptance = await request(`/api/launch-governance/${productionAcceptance.key}/signoff`, { method: 'POST', expected: 409, body: { action: 'approve', signatoryRole: 'Release owner', declaration: true } });
+assert.equal(blockedAcceptance.payload.error.code, 'SIGNOFF_NOT_READY');
+for (const domain of governance.domains.filter(item => item.key !== 'production_acceptance')) {
+  await request(`/api/launch-governance/${domain.key}`, { method: 'PUT', body: governancePayload(domain) });
+  await request(`/api/launch-governance/${domain.key}/signoff`, { method: 'POST', body: { action: 'approve', signatoryRole: governancePayload(domain).ownerRole, declaration: true } });
+}
+await request(`/api/launch-governance/${productionAcceptance.key}/signoff`, { method: 'POST', body: { action: 'approve', signatoryRole: 'Release owner', declaration: true } });
+governance = (await request('/api/launch-governance')).payload;
+assert.equal(governance.overallStatus, 'approved');
+assert.equal(governance.summary.approved, 8);
 
 let clients = (await request('/api/clients')).payload.clients || [];
 let client = clients.find(row => row.id !== 'client-smoke-other');

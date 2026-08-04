@@ -28,7 +28,6 @@ test('worker applies branch, session, eMAR and incident safety controls', () => 
   assert.match(worker, /duty_of_candour_completed_at/);
   assert.match(worker, /client_visit_codes[\s\S]*expires_at/);
   assert.match(worker, /runScheduledMaintenance/);
-  assert.match(worker, /UPDATE system_maintenance_state[\s\S]*datetime\('now','-55 minutes'\)/);
   assert.match(maintenanceMigration, /CREATE TABLE IF NOT EXISTS system_maintenance_state/);
   assert.equal(config.triggers, undefined);
 });
