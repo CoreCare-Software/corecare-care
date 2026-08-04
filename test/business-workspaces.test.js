@@ -49,6 +49,7 @@ test('finance and management metrics are derived from records', () => {
   assert.equal(report.visits.completionRate, 50);
   assert.equal(report.incidents.open, 1);
   assert.equal(report.quality.staffComplianceRate, 100);
+  assert.equal(calculateReportSummary({}).visits.completionRate, null);
 });
 
 test('incidents, finance and reports are real permission-backed workspaces', () => {

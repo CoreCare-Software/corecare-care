@@ -442,6 +442,7 @@ function showPage(page) {
     return;
   }
   if(page!=='platform'&&page!=='client-profile'&&!canOpenPage(page)){denyPage();return;}
+  window.scrollTo(0,0);
   selectedClientId = page === 'client-profile' ? selectedClientId : null;
   if(page!=='client-profile')setActiveWorkspaceNavigation(page);
   if (page === 'platform') {
@@ -1816,7 +1817,7 @@ $('#finance-settings-form')?.addEventListener('submit',event=>{event.preventDefa
 
 function initialiseReportDates(){const to=$('#reports-to'),from=$('#reports-from');if(to&&!to.value)to.value=localInputDate();if(from&&!from.value)from.value=futureLocalDate(-29)}
 async function loadReportsWorkspace(){initialiseReportDates();const from=$('#reports-from')?.value,to=$('#reports-to')?.value;reportsData=await api(`/api/reports?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);renderReportsWorkspace()}
-function reportPercent(value){return `${Math.max(0,Math.min(100,Number(value)||0))}%`}
+function reportPercent(value){return value===null||value===undefined?'—':`${Math.max(0,Math.min(100,Number(value)||0))}%`}
 function renderReportsWorkspace(){
   if(!reportsData)return;const summary=reportsData.summary||{},visits=summary.visits||{},incidents=summary.incidents||{},tasks=summary.tasks||{},quality=summary.quality||{};
   setText('#reports-visits-completed',`${visits.completed||0} / ${visits.total||0}`);setText('#reports-visit-rate',reportPercent(visits.completionRate));setText('#reports-on-time',reportPercent(visits.onTimeRate));setText('#reports-incidents',incidents.total||0);setText('#reports-incidents-open',incidents.open||0);setText('#reports-tasks',reportPercent(tasks.completionRate));setText('#reports-care-plans',reportPercent(quality.carePlanCurrentRate));setText('#reports-range-label',`${reportsData.range.from} to ${reportsData.range.to} · ${reportsData.range.days} day${reportsData.range.days===1?'':'s'}`);$('#reports-limit-warning').hidden=!reportsData.recordLimitReached;
@@ -1827,7 +1828,7 @@ function renderReportsWorkspace(){
   const financePanel=$('#reports-finance-panel');financePanel.hidden=!reportsData.finance;if(reportsData.finance)$('#reports-finance-summary').innerHTML=`${reportValueRow('Income in period',financeMoney(reportsData.finance.monthIncomePence))}${reportValueRow('Expenses in period',financeMoney(reportsData.finance.monthExpensePence))}${reportValueRow('Net movement',financeMoney(reportsData.finance.monthNetPence))}${reportValueRow('Outstanding invoices',financeMoney(reportsData.finance.outstandingPence))}`;
   const exportButton=$('#reports-export');if(exportButton)exportButton.hidden=!reportsData.canExport;
 }
-function reportScoreRow(label,value,note){return `<article><div><strong>${escapeHtml(label)}</strong><small>${escapeHtml(note)}</small></div><span><i style="width:${Math.max(0,Math.min(100,Number(value)||0))}%"></i></span><b>${reportPercent(value)}</b></article>`}
+function reportScoreRow(label,value,note){return `<article><div><strong>${escapeHtml(label)}</strong><small>${escapeHtml(note)}</small></div><span><i style="width:${value===null||value===undefined?0:Math.max(0,Math.min(100,Number(value)||0))}%"></i></span><b>${reportPercent(value)}</b></article>`}
 function reportValueRow(label,value){return `<article><div><strong>${escapeHtml(label)}</strong></div><b>${escapeHtml(value)}</b></article>`}
 function csvCell(value){const text=String(value??'');return /[",\n]/.test(text)?`"${text.replaceAll('"','""')}"`:text}
 function exportReportsCsv(){if(!reportsData?.canExport)return denyPage();if(reportsData.recordLimitReached)return showToastError(new Error('Choose a shorter reporting period before exporting.'));const rows=[['record_type','date','reference','client','category','severity','status','value'],['summary',reportsData.range.from,'visits_completed','','','','',reportsData.summary.visits.completed],['summary',reportsData.range.from,'visit_completion_rate','','','','',reportsData.summary.visits.completionRate],['summary',reportsData.range.from,'incidents_total','','','','',reportsData.summary.incidents.total],['summary',reportsData.range.from,'incidents_open','','','','',reportsData.summary.incidents.open]];for(const row of reportsData.recentIncidents||[])rows.push(['incident',String(row.occurred_at||row.created_at||'').slice(0,10),row.reference_number,row.client_name,row.category,row.severity,incidentStatusLabel(row.status),row.title]);for(const row of reportsData.recentVisits||[])rows.push(['visit',String(row.scheduled_start||'').slice(0,10),row.id,row.client_name,row.visit_type,'',row.status,'']);const blob=new Blob([rows.map(row=>row.map(csvCell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}),link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`corecare-report-${reportsData.range.from}-to-${reportsData.range.to}.csv`;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(link.href),1000)}

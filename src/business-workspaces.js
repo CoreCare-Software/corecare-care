@@ -179,7 +179,7 @@ export function calculateReportSummary(input = {}, now = new Date()) {
   const activeStaff = staff.filter(row => row.status === 'Active');
   const currentPlans = plans.filter(row => row.status === 'Active' && row.review_date && row.review_date >= today);
   const activePlans = plans.filter(row => row.status === 'Active');
-  const percent = (part, whole) => whole ? Math.round(part / whole * 100) : 100;
+  const percent = (part, whole) => whole ? Math.round(part / whole * 100) : null;
   return {
     visits: { total: visits.length, completed: completedVisits.length, missed: missedVisits.length, completionRate: percent(completedVisits.length, visits.length), onTimeRate: percent(onTimeVisits.length, completedVisits.length) },
     incidents: { total: incidents.length, open: incidents.length - closedIncidents.length, high: incidents.filter(row => ['high', 'critical'].includes(row.severity)).length, closedRate: percent(closedIncidents.length, incidents.length) },
