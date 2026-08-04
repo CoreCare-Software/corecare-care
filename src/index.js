@@ -5,9 +5,9 @@ import { carePlanReadiness, validateAdministration, validateBodyMap, validateMed
 import { assessRotaPublication, calculateLiveDashboard, normaliseFamilyAccess } from './operational-workspaces.js';
 import { calculateFinanceMetrics, calculateReportSummary, incidentReference, normaliseFinanceTransaction, normaliseIncidentReport, normaliseIncidentReview, normaliseInvoice, validateFinanceSettings } from './business-workspaces.js';
 
-/** CoreCare Care 1.32.1 — Family access in one place */
-const VERSION = "1.32.1";
-const RELEASE = "CoreCare Care 1.32.1 — Family access in one place";
+/** CoreCare Care 1.33.0 — Focused settings hub */
+const VERSION = "1.33.0";
+const RELEASE = "CoreCare Care 1.33.0 — Focused settings hub";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -15,11 +15,14 @@ const LOGIN_WINDOW_MINUTES = 15;
 const MAX_LOGIN_ATTEMPTS = 5;
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, context) {
     const url = new URL(request.url);
     try {
       if (url.pathname === "/platform-access" && request.method === "GET") return exchangePlatformAccess(request, env);
-      if (url.pathname === "/api/health") return health(env);
+      if (url.pathname === "/api/health") {
+        context?.waitUntil?.(syncPlatformEntitlements(env));
+        return health(env);
+      }
       if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: RELEASE });
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
@@ -281,9 +284,6 @@ export default {
       console.error("CoreCare request failed", error);
       return json({ error: { code: "INTERNAL_ERROR", message: "CoreCare could not complete the request." } }, 500);
     }
-  },
-  scheduled(_event, env, context) {
-    context.waitUntil(syncPlatformEntitlements(env));
   }
 };
 

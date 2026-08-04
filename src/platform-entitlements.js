@@ -1,5 +1,5 @@
 const PRODUCT_CODE = 'CARE';
-const DEFAULT_PRODUCT_VERSION = '1.32.1';
+const DEFAULT_PRODUCT_VERSION = '1.33.0';
 const RETRY_MINUTES = [5, 15, 60, 360, 1_440];
 
 const clean = (value, maxLength = 1_000) => String(value ?? '').trim().slice(0, maxLength);

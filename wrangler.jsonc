@@ -15,9 +15,6 @@
   "observability": {
     "enabled": true
   },
-  "triggers": {
-    "crons": ["*/5 * * * *"]
-  },
   "services": [
     {
       "binding": "CORECARE_PLATFORM",

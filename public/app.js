@@ -245,7 +245,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.32.1';
+const CORECARE_FALLBACK_VERSION = '1.33.0';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -1597,7 +1597,7 @@ async function loadSettings() {
   const canAdmin=['platform_owner','platform_admin','organisation_owner','organisation_admin'].includes(currentUser.accessLevel)||currentUser.role==='owner';
   $('#add-user').hidden=!canAdmin;$('#add-branch').hidden=!canAdmin;$('#add-custom-role').hidden=!canAdmin;
   $('#platform-admin-panel').hidden=!currentUser.isPlatformUser||currentUser.supportMode;
-  document.querySelectorAll('[data-settings-restricted]').forEach(item=>item.hidden=!canAdmin);
+  document.querySelectorAll('.settings-nav-item[data-settings-restricted]').forEach(item=>item.hidden=!canAdmin);
   if(!canAdmin&&['access','security','modules'].includes(currentSettingsSection))setSettingsSection('overview');
   ['overview','organisation','branding','locations','access','security','modules','audit'].forEach(clearSettingsSectionError);
   const [profileResult,userResult,branchResult]=await Promise.allSettled([api('/api/organisation/profile'),api('/api/users'),api('/api/branches')]);
@@ -1677,7 +1677,7 @@ $('#organisation-form').addEventListener('submit',async event=>{event.preventDef
 function populateCustomRoleSelect(){const select=$('#user-custom-role-select');if(!select)return;const current=select.value;select.innerHTML='<option value="">Use standard access level</option>'+customRoles.filter(r=>r.is_active!==0).map(r=>`<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)}</option>`).join('');select.value=current;}
 async function loadEnterpriseSecurity(){
   const canSee=['platform_owner','platform_admin','organisation_owner','organisation_admin'].includes(currentUser?.accessLevel);
-  document.querySelectorAll('[data-settings-restricted]').forEach(item=>item.hidden=!canSee);if(!canSee)return;
+  document.querySelectorAll('.settings-nav-item[data-settings-restricted]').forEach(item=>item.hidden=!canSee);if(!canSee)return;
   clearSettingsSectionError('access');clearSettingsSectionError('security');clearSettingsSectionError('modules');
   const [overviewResult,rolesResult,permissionsResult,policyResult,sessionsResult]=await Promise.allSettled([api('/api/security/overview'),api('/api/security/roles'),api('/api/security/permissions'),api('/api/security/policy'),api('/api/security/sessions')]);
   const failures=[];
