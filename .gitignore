@@ -1,5 +1,6 @@
 node_modules/
 .wrangler/
+.wrangler-governance-test/
 .dev.vars
 .env
 .DS_Store
