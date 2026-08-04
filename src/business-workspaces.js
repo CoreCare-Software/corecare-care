@@ -58,6 +58,9 @@ export function normaliseIncidentReview(input = {}) {
   if (status === 'closed' && !text(input.actionsRequired, 5000) && !text(input.lessonsLearned, 5000)) {
     return { error: 'Before closing, record the action taken or lessons learned.' };
   }
+  if (status === 'closed' && !text(input.closureRationale, 5000)) {
+    return { error: 'Before closing, record why the incident can be safely closed.' };
+  }
   return {
     status,
     review,
@@ -66,6 +69,8 @@ export function normaliseIncidentReview(input = {}) {
     rootCause: text(input.rootCause, 5000),
     actionsRequired: text(input.actionsRequired, 5000),
     lessonsLearned: text(input.lessonsLearned, 5000),
+    closureRationale: text(input.closureRationale, 5000),
+    dutyOfCandourCompleted: booleanValue(input.dutyOfCandourCompleted),
     externalNotification: ['not_required', 'considering', 'cqc', 'local_authority', 'police', 'riddor', 'other'].includes(text(input.externalNotification)) ? text(input.externalNotification) : 'not_required',
     externalReference: text(input.externalReference, 200)
   };

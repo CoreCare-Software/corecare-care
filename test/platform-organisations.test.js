@@ -47,7 +47,7 @@ test('Care organisation summary uses the central support-ticket schema', async (
     openSupportTickets: 2,
   });
   const ticketQuery = statements.find(sql => sql.includes('FROM platform_support_tickets'));
-  assert.match(ticketQuery, /source_product='CARE'/);
   assert.match(ticketQuery, /product_id='product-care'/);
+  assert.doesNotMatch(ticketQuery, /source_product/);
   assert.doesNotMatch(ticketQuery, /product_code/);
 });

@@ -2,18 +2,31 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "corecare-care",
   "main": "src/index.js",
-  "compatibility_date": "2026-07-28",
+  "compatibility_date": "2026-08-04",
+  "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
 		"run_worker_first": [
 			"/api/*",
-			"/platform-access"
+			"/platform-access",
+			"/auth/portal-login"
 		]
   },
   "observability": {
-    "enabled": true
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.1
+    }
+  },
+  "triggers": {
+    "crons": ["0 * * * *"]
   },
   "services": [
     {
@@ -21,22 +34,27 @@
       "service": "corecare-platform"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "CLIENT_FILES",
+      "bucket_name": "corecare-care-secure-files"
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "corecare",
-      "database_id": "9d9bfe9a-ee79-48e7-817a-cadff90ccfcf",
-      "remote": true
+      "database_id": "9d9bfe9a-ee79-48e7-817a-cadff90ccfcf"
     },
     {
       "binding": "CONTROL_DB",
       "database_name": "corecare-care-control",
       "database_id": "1e50a826-7976-4056-9e0f-54d2f4842b20",
-      "migrations_dir": "control-migrations",
-      "remote": true
+      "migrations_dir": "control-migrations"
     }
   ],
   "vars": {
-    "PLATFORM_ORIGIN": "https://corecare-platform.cselectricalservices11.workers.dev"
+    "PLATFORM_ORIGIN": "https://corecare-platform.cselectricalservices11.workers.dev",
+    "ENVIRONMENT": "production"
   }
 }

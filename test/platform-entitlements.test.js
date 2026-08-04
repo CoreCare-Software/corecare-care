@@ -19,6 +19,6 @@ test('Care entitlement retries cap at one day', () => {
 
 test('Care synchronises entitlements when Platform performs its scheduled health poll', async () => {
   const source = await readFile(new URL('../src/index.js', import.meta.url), 'utf8');
-  assert.match(source, /context\?\.waitUntil\?\.\(syncPlatformEntitlements\(env\)\)/);
-  assert.doesNotMatch(source, /scheduled\(_event, env, context\)/);
+  assert.match(source, /context\.waitUntil\(runScheduledMaintenance\(env, controller\.scheduledTime\)\)/);
+  assert.match(source, /work\.push\(syncPlatformEntitlements\(env\)\)/);
 });

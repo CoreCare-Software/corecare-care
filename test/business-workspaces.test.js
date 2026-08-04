@@ -62,5 +62,6 @@ test('incidents, finance and reports are real permission-backed workspaces', () 
   assert.match(worker, /"finance\.manage", \(\) => createFinanceInvoice/);
   assert.match(worker, /"reports\.view", \(\) => reportsWorkspace/);
   assert.match(worker, /userHasPermission\(db,session,'data\.export'\)/);
-  assert.match(worker, /exportRecords:canExport\?\{incidents:incidentRows,visits:visitRows\}:null/);
+  assert.match(worker, /exportRecords:canExport\?\{incidents:incidentRows,visits:visitRows,tasks:/);
+  assert.match(worker, /financeTransactions:canFinance\?financeRows:\[\]/);
 });
