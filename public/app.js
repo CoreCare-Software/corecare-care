@@ -436,7 +436,9 @@ function setActiveWorkspaceNavigation(page){
 }
 
 function showPage(page) {
-  if(page!=='settings'&&$('#settings-page')?.classList.contains('active-page')&&hasUnsavedSettings()&&!confirm('You have unsaved settings changes. Leave this page without saving them?'))return;
+  const leavingDirtySettings=page!=='settings'&&$('#settings-page')?.classList.contains('active-page');
+  const leavingDirtyRota=page!=='rota'&&$('#rota-page')?.classList.contains('active-page')&&$('#routing-settings-form')?.dataset.dirty==='true';
+  if((leavingDirtySettings||leavingDirtyRota)&&hasUnsavedSettings()&&!confirm('You have unsaved settings changes. Leave this page without saving them?'))return;
   if(isPlatformWorkspace() && page!=='platform'){
     showToastError(new Error('Open an organisation through an authorised support session before accessing organisation records.'));
     showPage('platform');
