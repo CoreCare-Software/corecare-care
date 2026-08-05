@@ -8,9 +8,9 @@ import { LAUNCH_GOVERNANCE_DOMAINS, deriveLaunchDomainStatus, deriveOverallLaunc
 import { requestPlatformTransactionalEmail } from './platform-email.js';
 import { protectResponse, recordComplianceMutation } from './compliance-audit.js';
 
-/** CoreCare Care 1.37.0 - centrally enforced subscription access */
-const VERSION = "1.37.0";
-const RELEASE = "CoreCare Care 1.37.0 - centrally enforced subscription access";
+/** CoreCare Care 1.37.1 - subscription resource limits */
+const VERSION = "1.37.1";
+const RELEASE = "CoreCare Care 1.37.1 - subscription resource limits";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;

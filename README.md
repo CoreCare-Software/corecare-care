@@ -1,8 +1,8 @@
 # CoreCare Care
 
-CoreCare Care is a multi-tenant care-management web application deployed as a Cloudflare Worker with static browser assets and a Cloudflare D1 database. The current package version is `1.36.0`.
+CoreCare Care is a multi-tenant care-management web application deployed as a Cloudflare Worker with static browser assets and a Cloudflare D1 database. The current package version is `1.37.1`.
 
-Release 1.37.0 adds centrally enforced subscription access. Customers receive full access only during an unexpired trial or active paid subscription, past-due workspaces become read-only, and missing, stale, expired or cancelled entitlements fail closed. Release 1.36.0 connected account onboarding to CoreCare Platform's shared transactional-email service. Temporary passwords remain one-time handover data and are never written to email audit records.
+Release 1.37.1 enforces the Limited plan's five-user and fifteen-client caps in all Care creation and reactivation paths. Release 1.37.0 added centrally enforced subscription access. Customers receive full access only during an unexpired trial or active paid subscription, past-due workspaces become read-only, and missing, stale, expired or cancelled entitlements fail closed.
 
 > Release boundary: version 1.35.0 provides a controlled workflow for data-protection, clinical-safety, recovery, continuity, training and production-acceptance evidence. CoreCare cannot provide those organisational approvals; authorised people must review and sign each domain in Settings → Launch governance before real personal, medical or care data is entered.
 
