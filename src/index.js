@@ -1,28 +1,32 @@
 import { exchangePlatformAccess } from './platform-access.js';
 import { handlePlatformOrganisation } from './platform-organisations.js';
-import { syncPlatformEntitlements } from './platform-entitlements.js';
+import { subscriptionAccess, subscriptionLimit, syncPlatformEntitlements } from './platform-entitlements.js';
 import { carePlanReadiness, validateAdministration, validateBodyMap, validateMedicationProfile } from './clinical-records.js';
 import { assessRotaPublication, calculateLiveDashboard, normaliseFamilyAccess } from './operational-workspaces.js';
 import { calculateFinanceMetrics, calculateReportSummary, incidentReference, normaliseFinanceTransaction, normaliseIncidentReport, normaliseIncidentReview, normaliseInvoice, validateFinanceSettings } from './business-workspaces.js';
 import { LAUNCH_GOVERNANCE_DOMAINS, deriveLaunchDomainStatus, deriveOverallLaunchStatus, launchGovernanceDomain, validateLaunchSignoff } from './launch-governance.js';
 import { requestPlatformTransactionalEmail } from './platform-email.js';
+import { protectResponse, recordComplianceMutation } from './compliance-audit.js';
 
-/** CoreCare Care 1.36.0 - automatic account email */
-const VERSION = "1.36.0";
-const RELEASE = "CoreCare Care 1.36.0 - automatic account email";
+/** CoreCare Care 1.37.0 - centrally enforced subscription access */
+const VERSION = "1.37.0";
+const RELEASE = "CoreCare Care 1.37.0 - centrally enforced subscription access";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
 const LOGIN_WINDOW_MINUTES = 15;
 const MAX_LOGIN_ATTEMPTS = 5;
 
-export default {
+const application = {
   async fetch(request, env, context) {
     const url = new URL(request.url);
     const requestId = clean(request.headers.get("cf-ray")) || crypto.randomUUID();
     try {
       if (url.pathname === "/platform-access" && request.method === "GET") return exchangePlatformAccess(request, env);
-      if (url.pathname === "/api/health") return health(env);
+      if (url.pathname === "/api/health") {
+        context.waitUntil(maybeRunScheduledMaintenance(env));
+        return health(env);
+      }
       if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: RELEASE });
       if (["/auth/portal-login", "/api/auth/portal-login"].includes(url.pathname) && request.method === "POST") return portalLogin(request, env, "CARE");
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
@@ -34,8 +38,13 @@ export default {
       if (url.pathname.startsWith("/api/")) {
         if (!env.DB) return databaseRequired();
         if (!mutationOriginAllowed(request)) return json({ error: { code: "INVALID_ORIGIN", message: "This request did not originate from CoreCare." } }, 403);
-        const session = await requireSession(request, env.DB);
+        const session = await requireSession(request, env);
         if (session instanceof Response) return session;
+        if(!session.support_mode&&!url.pathname.startsWith('/api/support/')){
+          const access=session.subscription_access;
+          if(!access||access.mode==='locked')return json({error:{code:'SUBSCRIPTION_REQUIRED',message:'This subscription needs attention. Contact your CoreCare owner or support to restore access.'}},402);
+          if(access?.mode==='read_only'&&!['GET','HEAD','OPTIONS'].includes(request.method))return json({error:{code:'SUBSCRIPTION_READ_ONLY',message:'This workspace is read-only while the subscription payment is overdue.'}},402);
+        }
         const scopeError = await enforceBranchScope(request, env.DB, session, url);
         if (scopeError) return scopeError;
         if (session.support_mode && session.support_access_mode === 'read_only' && !['GET','HEAD','OPTIONS'].includes(request.method) && url.pathname !== '/api/platform/exit-support') {
@@ -270,14 +279,14 @@ export default {
         }
         if (url.pathname === "/api/clients") {
           if (request.method === "GET") return await permitted(env.DB, session, "clients.view", () => listClients(env.DB, session, url));
-          if (request.method === "POST") return await permitted(env.DB, session, "clients.create", () => createClient(request, env.DB, session));
+          if (request.method === "POST") return await permitted(env.DB, session, "clients.create", () => createClient(request, env, session));
           return methodNotAllowed(["GET", "POST"]);
         }
         const clientMatch = url.pathname.match(/^\/api\/clients\/([^/]+)$/);
         if (clientMatch) {
           const id = decodeURIComponent(clientMatch[1]);
           if (request.method === "GET") return await permitted(env.DB, session, "clients.view", () => getClient(env.DB, session, id));
-          if (request.method === "PUT") return await permitted(env.DB, session, "clients.edit", () => updateClient(request, env.DB, session, id));
+          if (request.method === "PUT") return await permitted(env.DB, session, "clients.edit", () => updateClient(request, env, session, id));
           if (request.method === "DELETE") return await permitted(env.DB, session, "clients.archive", () => archiveClient(env.DB, session, id));
           return methodNotAllowed(["GET", "PUT", "DELETE"]);
         }
@@ -287,7 +296,7 @@ export default {
           return methodNotAllowed(["GET", "POST"]);
         }
         const userMatch = url.pathname.match(/^\/api\/users\/([^/]+)$/);
-        if (userMatch && request.method === "PUT") return updateUser(request, env.DB, session, decodeURIComponent(userMatch[1]));
+        if (userMatch && request.method === "PUT") return updateUser(request, env, session, decodeURIComponent(userMatch[1]));
         if (url.pathname === "/api/audit" && request.method === "GET") return listAudit(env.DB, session, url);
         if (url.pathname === "/api/organisation" && request.method === "PUT") return updateOrganisation(request, env.DB, session);
         return json({ error: { code: "API_ROUTE_NOT_FOUND", message: "The requested API route does not exist." } }, 404);
@@ -298,6 +307,15 @@ export default {
       return json({ error: { code: "INTERNAL_ERROR", message: "CoreCare could not complete the request.", requestId } }, 500, { "x-request-id": requestId });
     }
   }
+};
+
+export default {
+  async fetch(request, env, context) {
+    const response = await application.fetch(request, env, context);
+    const audit = recordComplianceMutation(request, env, response, 'CARE');
+    if (context?.waitUntil) context.waitUntil(audit); else await audit;
+    return protectResponse(response, request);
+  },
 };
 
 function health(env) {
@@ -410,6 +428,9 @@ async function login(request, env) {
     return json({ error: { code: "INVALID_CREDENTIALS", message: "The email address or password is incorrect." } }, 401);
   }
 
+  user.subscription_access=await currentSubscriptionAccess(env,user.organisation_id);
+  if(user.subscription_access.mode==='locked')return json({error:{code:'SUBSCRIPTION_REQUIRED',message:'This subscription needs attention. Contact your CoreCare owner or support to restore access.'}},402);
+
   await env.DB.prepare("DELETE FROM login_attempts WHERE attempt_key=?").bind(attemptKey).run();
   const token = randomToken();
   const tokenHash = await sha256Base64(token);
@@ -445,13 +466,35 @@ async function logout(request, env) {
 
 async function sessionInfo(request, env) {
   if (!env.DB) return databaseRequired();
-  const session = await requireSession(request, env.DB);
+  const session = await requireSession(request, env);
   if (session instanceof Response) return session;
   const access = await buildAccessProfile(env.DB, session);
   return json({ user: {...publicUser(session), permissions: access.permissions, modules: access.modules}, expiresAt: session.expires_at });
 }
 
-async function requireSession(request, db) {
+async function currentSubscriptionAccess(env,organisationId){
+  let access=await subscriptionAccess(env.CONTROL_DB,organisationId),updated=access.updatedAt?new Date(access.updatedAt).getTime():0;
+  if(env.CORECARE_PLATFORM&&(['entitlement_unavailable','entitlement_stale'].includes(access.reason)||!updated||Date.now()-updated>5*60_000)){
+    await syncPlatformEntitlements(env,{limit:100,force:true}).catch(()=>null);
+    access=await subscriptionAccess(env.CONTROL_DB,organisationId);
+  }
+  return access;
+}
+
+async function subscriptionResourceLimitGuard(env,organisationId,resource){
+  const limit=await subscriptionLimit(env.CONTROL_DB,organisationId,resource);
+  if(limit===null)return null;
+  const row=resource==='users'
+    ? await env.DB.prepare("SELECT COUNT(*) count FROM users WHERE organisation_id=? AND status='active' AND COALESCE(is_platform_user,0)=0").bind(organisationId).first()
+    : await env.DB.prepare("SELECT COUNT(*) count FROM clients WHERE organisation_id=? AND status<>'Archived' AND archived_at IS NULL").bind(organisationId).first();
+  const current=Number(row?.count||0);
+  if(current<limit)return null;
+  const label=resource==='users'?'active users':'active clients';
+  return json({error:{code:'SUBSCRIPTION_LIMIT_REACHED',message:`This subscription allows ${limit} ${label}. Disable or archive an existing record, choose a higher plan, or ask the CoreCare owner for an override.`,resource,limit,current}},409);
+}
+
+async function requireSession(request, env) {
+  const db=env.DB;
   const token = cookieValue(request, SESSION_COOKIE);
   if (!token) return unauthorised();
   const row = await db.prepare(`SELECT s.id AS session_id,s.expires_at,s.last_seen_at,s.user_id,s.organisation_id,s.active_branch_id,s.support_mode,s.support_origin_organisation_id,s.support_started_at,COALESCE(p.idle_timeout_minutes,60) AS idle_timeout_minutes,
@@ -461,6 +504,7 @@ async function requireSession(request, db) {
     FROM sessions s JOIN users u ON u.id=s.user_id JOIN organisations o ON o.id=s.organisation_id LEFT JOIN branches b ON b.id=s.active_branch_id LEFT JOIN organisation_security_policies p ON p.organisation_id=s.organisation_id
     WHERE s.token_hash=? AND s.expires_at>CURRENT_TIMESTAMP LIMIT 1`).bind(await sha256Base64(token)).first();
   if (!row || row.status !== "active") return unauthorised();
+  if(!row.support_mode)row.subscription_access=await currentSubscriptionAccess(env,row.organisation_id);
   const idleMinutes = Math.max(5, Math.min(1440, Number(row.idle_timeout_minutes) || 60));
   if (row.last_seen_at && Date.now() - databaseTimestampMs(row.last_seen_at) > idleMinutes * 60000) {
     await db.batch([
@@ -565,12 +609,17 @@ async function getClient(db, session, id) {
   return json({ client: toClient(row) });
 }
 
-async function createClient(request, db, session) {
+async function createClient(request, env, session) {
+  const db=env.DB;
   if (!hasRole(session, ["owner", "manager", "carer"])) return forbidden();
   const raw = await readJson(request);
   const input = normaliseClient(raw);
   const validation = validateClient(input);
   if (validation) return json({ error: { code: "VALIDATION_ERROR", message: validation } }, 400);
+  if(input.status!=='Archived'){
+    const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'clients');
+    if(limitError)return limitError;
+  }
   const id = crypto.randomUUID();
   const fields = clientFields(input);
   const requirements = normaliseVisitRequirements(raw.visitRequirements, raw.visitStartDate);
@@ -645,7 +694,8 @@ async function saveVisitRequirements(request,db,session,clientId){
   await db.batch(statements);return json({ok:true,requirementsCreated:requirements.length,visitsGenerated:requirements.reduce((n,r)=>n+generatedOccurrenceCount(r),0)});
 }
 
-async function updateClient(request, db, session, id) {
+async function updateClient(request, env, session, id) {
+  const db=env.DB;
   if (!hasRole(session, ["owner", "manager", "carer"])) return forbidden();
   const raw = await readJson(request);
   const input = normaliseClient(raw);
@@ -653,8 +703,12 @@ async function updateClient(request, db, session, id) {
   if (validation) return json({ error: { code: "VALIDATION_ERROR", message: validation } }, 400);
   const fields = clientFields(input);
   const assignments = fields.names.map(name => `${name}=?`).join(",");
-  const existing = await db.prepare(`SELECT id FROM clients WHERE id=? AND organisation_id=? LIMIT 1`).bind(id,session.organisation_id).first();
+  const existing = await db.prepare(`SELECT id,status,archived_at FROM clients WHERE id=? AND organisation_id=? LIMIT 1`).bind(id,session.organisation_id).first();
   if (!existing) return json({ error: { code: "CLIENT_NOT_FOUND", message: "Client record not found." } }, 404);
+  if(input.status!=='Archived'&&(existing.status==='Archived'||existing.archived_at)){
+    const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'clients');
+    if(limitError)return limitError;
+  }
   const statements=[db.prepare(`UPDATE clients SET ${assignments},archived_at=CASE WHEN ?='Archived' THEN COALESCE(archived_at,CURRENT_TIMESTAMP) ELSE NULL END,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(...fields.values,input.status,id,session.organisation_id)];
   let requirementsCreated=0,visitsGenerated=0;
   if(Array.isArray(raw.visitRequirements)){
@@ -1343,6 +1397,7 @@ async function createStaff(request, env, session) {
   const accessLevel = clean(input.loginAccessLevel)||'carer';
   const temporaryPassword = String(input.temporaryPassword||'');
   if(createLogin && (!loginEmail || !allowedAccessLevels().includes(accessLevel) || !strongTemporaryPassword(temporaryPassword))) return json({error:{code:'VALIDATION_ERROR',message:'Enter a login email, valid access level and temporary password of at least 12 characters with upper-case, lower-case and a number.'}},400);
+  if(createLogin){const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;}
   const id=crypto.randomUUID(), statements=[];let invitation=null;
   statements.push(db.prepare(`INSERT INTO staff (id,organisation_id,branch_id,first_name,last_name,preferred_name,job_title,employment_type,phone,email,start_date,status,dbs_expiry,training_expiry,notes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,activeBranch(session),...v.values));
   if(createLogin){
@@ -1360,19 +1415,21 @@ async function updateStaff(request, env, session, id) {
   const db=env.DB;
   if (!hasRole(session,["owner","manager"])) return forbidden();
   const input=await readJson(request); const v=validateStaff(input); if(v.error) return json({error:{code:"VALIDATION_ERROR",message:v.error}},400);
-  const existing=await db.prepare(`SELECT s.id,u.id login_user_id FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.id=? AND s.organisation_id=?`).bind(id,session.organisation_id).first();
+  const existing=await db.prepare(`SELECT s.id,u.id login_user_id,u.status login_status FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.id=? AND s.organisation_id=?`).bind(id,session.organisation_id).first();
   if(!existing)return json({error:{code:'STAFF_NOT_FOUND',message:'Staff record not found.'}},404);
   const statements=[db.prepare(`UPDATE staff SET first_name=?,last_name=?,preferred_name=?,job_title=?,employment_type=?,phone=?,email=?,start_date=?,status=?,dbs_expiry=?,training_expiry=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(...v.values,id,session.organisation_id)];let invitation=null;
   const createLogin=input.createLogin===true||clean(input.createLogin)==='on'||clean(input.createLogin)==='true';
   if(createLogin&&!existing.login_user_id){
     const loginEmail=clean(input.loginEmail||input.email).toLowerCase(),accessLevel=clean(input.loginAccessLevel)||'carer',temporaryPassword=String(input.temporaryPassword||'');
     if(!loginEmail||!allowedAccessLevels().includes(accessLevel)||!strongTemporaryPassword(temporaryPassword))return json({error:{code:'VALIDATION_ERROR',message:'Enter a login email, valid access level and temporary password of at least 12 characters with upper-case, lower-case and a number.'}},400);
+    const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;
     const secured=await hashPassword(temporaryPassword),userId=crypto.randomUUID(),displayName=`${v.values[0]} ${v.values[1]}`.trim();
     statements.push(db.prepare(`INSERT INTO users (id,organisation_id,staff_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',1)`).bind(userId,session.organisation_id,id,loginEmail,displayName,legacyRole(accessLevel),accessLevel,activeBranch(session),secured.hash,secured.salt,PASSWORD_ITERATIONS));
     statements.push(auditStatement(db,session.organisation_id,session.user_id,'staff.login_created','user',userId,{staffId:id,email:loginEmail,accessLevel}));
     invitation={userId,recipientEmail:loginEmail,recipientName:displayName,accessLabel:accessLevel.replaceAll('_',' '),temporaryPassword};
   } else if(existing.login_user_id){
     const loginStatus=v.values[8]==='Inactive'?'disabled':(clean(input.loginStatus)||'active');
+    if(loginStatus==='active'&&existing.login_status!=='active'){const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;}
     const accessLevel=allowedAccessLevels().includes(clean(input.loginAccessLevel))?clean(input.loginAccessLevel):null;
     if(accessLevel) statements.push(db.prepare(`UPDATE users SET display_name=?,role=?,access_level=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(`${v.values[0]} ${v.values[1]}`.trim(),legacyRole(accessLevel),accessLevel,loginStatus,existing.login_user_id,session.organisation_id));
     else statements.push(db.prepare(`UPDATE users SET display_name=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(`${v.values[0]} ${v.values[1]}`.trim(),loginStatus,existing.login_user_id,session.organisation_id));
@@ -1526,6 +1583,7 @@ async function createUser(request, env, session) {
   const customRoleId = clean(input.customRoleId) || null;
   const password = String(input.temporaryPassword || "");
   if (!email || !name || !allowedAccessLevels().includes(accessLevel) || !strongTemporaryPassword(password)) return json({ error: { code: "VALIDATION_ERROR", message: "Enter a name, valid email, role and temporary password of at least 12 characters with upper-case, lower-case and a number." } }, 400);
+  const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;
   const secured = await hashPassword(password);
   const id = crypto.randomUUID();
   try {
@@ -1542,7 +1600,8 @@ async function createUser(request, env, session) {
   return json({ user: { id, email, displayName: name, role, accessLevel, branchId, status: "active", mustChangePassword: true },emailDelivery }, 201);
 }
 
-async function updateUser(request, db, session, id) {
+async function updateUser(request, env, session, id) {
+  const db=env.DB;
   if (!await userHasPermission(db, session, "security.users.manage")) return forbidden();
   if (id === session.user_id) return json({ error: { code: "SELF_EDIT_BLOCKED", message: "Use the password and profile controls for your own account." } }, 400);
   const input = await readJson(request);
@@ -1553,6 +1612,9 @@ async function updateUser(request, db, session, id) {
   const status = clean(input.status);
   const customRoleId = clean(input.customRoleId) || null;
   if (!name || !allowedAccessLevels().includes(accessLevel) || !["active", "disabled"].includes(status)) return json({ error: { code: "VALIDATION_ERROR", message: "Enter a name, valid access level and status." } }, 400);
+  const existing=await db.prepare('SELECT id,status FROM users WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();
+  if(!existing)return notFound('User');
+  if(status==='active'&&existing.status!=='active'){const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;}
   const statements = [db.prepare("UPDATE users SET display_name=?,role=?,access_level=?,home_branch_id=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(name, role, accessLevel, branchId, status, id, session.organisation_id), db.prepare("DELETE FROM user_custom_roles WHERE user_id=? AND organisation_id=?").bind(id,session.organisation_id)];
   if(customRoleId) statements.push(db.prepare("INSERT INTO user_custom_roles(user_id,role_id,organisation_id,branch_id,assigned_by) SELECT ?,id,?,?,? FROM custom_roles WHERE id=? AND organisation_id=? AND is_active=1").bind(id,session.organisation_id,branchId,session.user_id,customRoleId,session.organisation_id));
   statements.push(auditStatement(db, session.organisation_id, session.user_id, "user.updated", "user", id, { role, accessLevel, branchId, customRoleId, status }));
@@ -1600,7 +1662,7 @@ async function permitted(db, session, permission, action) {
 function unauthorised(message = "Sign in to continue.") { return json({ error: { code: "UNAUTHORISED", message } }, 401, { "set-cookie": expiredSessionCookie() }); }
 function databaseRequired(message = "The D1 database binding named DB is not configured.") { return json({ error: { code: "DATABASE_NOT_CONFIGURED", message } }, 503); }
 function methodNotAllowed(allow) { return json({ error: { code: "METHOD_NOT_ALLOWED", message: "This method is not allowed." } }, 405, { allow: allow.join(", ") }); }
-function publicUser(row) { return { id: row.user_id || row.id, staffId: row.staff_id || null, organisationId: row.organisation_id, organisationName: row.organisation_name, branchId: row.active_branch_id || row.home_branch_id || null, branchName: row.branch_name || null, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, isPlatformUser: Boolean(row.is_platform_user), supportMode: Boolean(row.support_mode), supportOriginOrganisationId: row.support_origin_organisation_id || null, supportStartedAt: row.support_started_at || null, supportReason: row.support_reason || null, supportAccessMode: row.support_access_mode || null, mustChangePassword: Boolean(row.must_change_password) }; }
+function publicUser(row) { return { id: row.user_id || row.id, staffId: row.staff_id || null, organisationId: row.organisation_id, organisationName: row.organisation_name, branchId: row.active_branch_id || row.home_branch_id || null, branchName: row.branch_name || null, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, isPlatformUser: Boolean(row.is_platform_user), supportMode: Boolean(row.support_mode), supportOriginOrganisationId: row.support_origin_organisation_id || null, supportStartedAt: row.support_started_at || null, supportReason: row.support_reason || null, supportAccessMode: row.support_access_mode || null, subscriptionAccess: row.subscription_access || undefined, mustChangePassword: Boolean(row.must_change_password) }; }
 function toUser(row) { return { id: row.id, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, branchId: row.home_branch_id || null, customRoleId: row.custom_role_id || null, customRoleName: row.custom_role_name || null, status: row.status, mustChangePassword: Boolean(row.must_change_password), lastLoginAt: row.last_login_at, createdAt: row.created_at }; }
 function clean(value) { return String(value ?? "").trim(); }
 function databaseTimestampMs(value) { const text=clean(value);return new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(text)?`${text.replace(' ','T')}Z`:text).getTime(); }
@@ -2126,6 +2188,7 @@ async function createFamilyAccount(request,env,session){
   const restricted=branchRestricted(session),branch=activeBranch(session);
   const client=await db.prepare(`SELECT id,branch_id FROM clients WHERE id=? AND organisation_id=? ${restricted?'AND branch_id=?':''} AND archived_at IS NULL`).bind(clientId,session.organisation_id,...(restricted?[branch]:[])).first();
   if(!client)return json({error:{code:'VALIDATION_ERROR',message:'Choose an active client from this organisation or branch.'}},400);
+  const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;
   const secured=await hashPassword(password),userId=crypto.randomUUID(),accessId=crypto.randomUUID(),role=legacyRole('family');
   try{
     await db.batch([
@@ -2142,8 +2205,9 @@ async function updateFamilyAccount(request,env,session,id){
   const db=env.DB;
   const input=await readJson(request),name=clean(input.displayName),status=clean(input.status),password=String(input.temporaryPassword||''),restricted=branchRestricted(session),branch=activeBranch(session);
   if(!name||!['active','disabled'].includes(status)||(password&&!strongTemporaryPassword(password)))return json({error:{code:'VALIDATION_ERROR',message:'Enter a name and valid status. A new temporary password must have at least 12 characters with upper-case, lower-case and a number.'}},400);
-  const account=await db.prepare(`SELECT u.id,u.email FROM users u WHERE u.id=? AND u.organisation_id=? AND u.access_level='family' ${restricted?'AND (u.home_branch_id=? OR EXISTS (SELECT 1 FROM family_client_access f JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.user_id=u.id AND f.organisation_id=u.organisation_id AND c.branch_id=?))':''}`).bind(id,session.organisation_id,...(restricted?[branch,branch]:[])).first();
+  const account=await db.prepare(`SELECT u.id,u.email,u.status FROM users u WHERE u.id=? AND u.organisation_id=? AND u.access_level='family' ${restricted?'AND (u.home_branch_id=? OR EXISTS (SELECT 1 FROM family_client_access f JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.user_id=u.id AND f.organisation_id=u.organisation_id AND c.branch_id=?))':''}`).bind(id,session.organisation_id,...(restricted?[branch,branch]:[])).first();
   if(!account)return notFound('Family account');
+  if(status==='active'&&account.status!=='active'){const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;}
   const statements=[];
   if(password){const secured=await hashPassword(password);statements.push(db.prepare("UPDATE users SET display_name=?,status=?,password_hash=?,password_salt=?,password_iterations=?,must_change_password=1,password_changed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND access_level='family'").bind(name,status,secured.hash,secured.salt,PASSWORD_ITERATIONS,id,session.organisation_id));}
   else statements.push(db.prepare("UPDATE users SET display_name=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND access_level='family'").bind(name,status,id,session.organisation_id));
