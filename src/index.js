@@ -1,3 +1,4 @@
+import { WorkerEntrypoint } from 'cloudflare:workers';
 import { exchangePlatformAccess } from './platform-access.js';
 import { handlePlatformOrganisation } from './platform-organisations.js';
 import { subscriptionAccess, subscriptionLimit, syncPlatformEntitlements } from './platform-entitlements.js';
@@ -30,6 +31,7 @@ const application = {
       if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: RELEASE });
       if (url.pathname === "/api/auth/forgot-password" && request.method === "POST") return requestPasswordReset(request, env);
       if (url.pathname === "/api/auth/reset-password" && request.method === "POST") return resetPasswordWithToken(request, env);
+      if (url.pathname === "/api/auth/portal-claim" && request.method === "POST") return claimPortalGrant(request, env, "CARE");
       if (["/auth/portal-login", "/api/auth/portal-login"].includes(url.pathname) && request.method === "POST") return portalLogin(request, env, "CARE");
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
@@ -350,6 +352,19 @@ export default {
   },
 };
 
+export class IdentityBroker extends WorkerEntrypoint {
+  async accountExists(email) {
+    const normalised = clean(email).toLowerCase().slice(0, 320);
+    if (!normalised || !this.env.DB) return false;
+    const row = await this.env.DB.prepare("SELECT id FROM users WHERE lower(email)=lower(?) AND status='active' LIMIT 1").bind(normalised).first();
+    return Boolean(row);
+  }
+
+  async createPortalGrant(input) {
+    return createPortalLoginGrant(this.env, input);
+  }
+}
+
 function health(env) {
   return json({ ok: true, service: "corecare", version: VERSION, environment: clean(env.ENVIRONMENT) || "production", database: Boolean(env.DB), authentication: Boolean(env.DB), platform: { configured: Boolean(env.CORECARE_PLATFORM && env.CORECARE_PRODUCT_KEY) }, timestamp: new Date().toISOString() });
 }
@@ -422,9 +437,8 @@ function portalReturnPath(value) {
 
 async function portalLogin(request, env, productCode) {
   if (!portalOriginAllowed(request)) return json({ error: { code: "INVALID_ORIGIN", message: "This sign-in request was not sent by CoreCare Systems." } }, 403);
-  if (Number(request.headers.get("content-length") || 0) > 16_384) return json({ error: { code: "REQUEST_TOO_LARGE", message: "This sign-in request is too large." } }, 413);
   let form;
-  try { form = await request.formData(); } catch { return json({ error: { code: "VALIDATION_ERROR", message: "Enter an email address and password." } }, 400); }
+  try { form = new URLSearchParams(await readText(request, 16_384)); } catch { return json({ error: { code: "VALIDATION_ERROR", message: "Enter an email address and password." } }, 400); }
   const email = clean(form.get("email")).toLowerCase().slice(0, 240);
   const password = String(form.get("password") || "");
   const failure = () => new Response(null, { status: 303, headers: { location: `https://www.corecaresystems.co.uk/login?product=${productCode}&error=invalid_credentials`, "cache-control": "no-store" } });
@@ -437,6 +451,46 @@ async function portalLogin(request, env, productCode) {
   const cookie = result.headers.get("set-cookie");
   if (!cookie) return json({ error: { code: "SESSION_NOT_CREATED", message: "CoreCare could not create a sign-in session." } }, 502);
   return new Response(null, { status: 303, headers: { location: portalReturnPath(form.get("returnTo")), "set-cookie": cookie.replace(/SameSite=Strict/i, "SameSite=Lax"), "cache-control": "no-store", "referrer-policy": "no-referrer" } });
+}
+
+function sessionTokenFromResponse(response) {
+  const match = (response.headers.get("set-cookie") || "").match(/(?:^|,\s*)corecare_session=([^;,\s]+)/i);
+  if (!match) return "";
+  try { return decodeURIComponent(match[1]); } catch { return ""; }
+}
+
+async function createPortalLoginGrant(env, input = {}) {
+  const email = clean(input.email).toLowerCase().slice(0, 320);
+  const password = String(input.password || "");
+  if (!email || !password || password.length > 1024 || !env.DB) return { ok: false, status: 401 };
+  const headers = new Headers({
+    "content-type": "application/json",
+    accept: "application/json",
+    "cf-connecting-ip": clean(input.ip).slice(0, 64) || "portal-broker",
+    "user-agent": clean(input.userAgent).slice(0, 250) || "CoreCare-Portal-Broker/1.0",
+  });
+  const result = await login(new Request("https://care.internal/api/auth/login", { method: "POST", headers, body: JSON.stringify({ email, password }) }), env);
+  const token = sessionTokenFromResponse(result);
+  if (!result.ok || !token) return { ok: false, status: result.status };
+  const tokenHash = await sha256Base64(token);
+  const expiresAt = new Date(Date.now() + 2 * 60_000).toISOString();
+  await env.DB.prepare("INSERT INTO portal_login_grants(token_hash,expires_at) VALUES(?,?)").bind(tokenHash, expiresAt).run();
+  return { ok: true, grant: token, expiresAt };
+}
+
+async function claimPortalGrant(request, env, productCode) {
+  if (!portalOriginAllowed(request)) return json({ error: { code: "INVALID_ORIGIN", message: "This sign-in request was not sent by CoreCare Systems." } }, 403);
+  const failure = () => new Response(null, { status: 303, headers: { location: `https://www.corecaresystems.co.uk/login?product=${productCode}&error=invalid_credentials`, "cache-control": "no-store", "referrer-policy": "no-referrer" } });
+  let raw; try { raw = await readText(request, 8_192); } catch { return failure(); }
+  const form = new URLSearchParams(raw);
+  const grant = String(form.get("grant") || "");
+  if (!/^[A-Za-z0-9_-]{20,256}$/.test(grant)) return failure();
+  const tokenHash = await sha256Base64(grant);
+  const claimed = await env.DB.prepare("UPDATE portal_login_grants SET consumed_at=CURRENT_TIMESTAMP WHERE token_hash=? AND consumed_at IS NULL AND datetime(expires_at)>CURRENT_TIMESTAMP RETURNING token_hash").bind(tokenHash).first();
+  if (!claimed) return failure();
+  const session = await env.DB.prepare("SELECT expires_at FROM sessions WHERE token_hash=? AND datetime(expires_at)>CURRENT_TIMESTAMP LIMIT 1").bind(tokenHash).first();
+  if (!session) return failure();
+  return new Response(null, { status: 303, headers: { location: portalReturnPath(form.get("returnTo")), "set-cookie": sessionCookie(grant, new Date(session.expires_at)), "cache-control": "no-store", "referrer-policy": "no-referrer" } });
 }
 
 async function login(request, env) {
@@ -1585,7 +1639,8 @@ function safeDownloadName(value){return clean(value).replace(/[\r\n"]/g,'').slic
 async function uploadDocument(request,env,session,clientId){
   if(!env.CLIENT_FILES)return json({error:{code:'STORAGE_UNAVAILABLE',message:'Private document storage is not configured.'}},503);
   const client=await ensureClient(env.DB,session,clientId);if(!client)return notFound('Client');
-  const form=await request.formData(),file=form.get('file'),input=Object.fromEntries([...form.entries()].filter(([key])=>key!=='file')),p=documentInput(input);
+  let form;try{form=await readFormData(request,11*1024*1024);}catch{return json({error:{code:'FILE_TOO_LARGE',message:'The document upload is too large or invalid.'}},413);}
+  const file=form.get('file'),input=Object.fromEntries([...form.entries()].filter(([key])=>key!=='file')),p=documentInput(input);
   if(p.error)return json({error:{code:'VALIDATION_ERROR',message:p.error}},400);
   if(!file||typeof file.arrayBuffer!=='function'||!Number(file.size))return json({error:{code:'VALIDATION_ERROR',message:'Choose a PDF, JPEG or PNG file.'}},400);
   if(Number(file.size)>10*1024*1024)return json({error:{code:'FILE_TOO_LARGE',message:'Document files must be 10 MB or smaller.'}},413);
@@ -1714,7 +1769,37 @@ function publicUser(row) { return { id: row.user_id || row.id, staffId: row.staf
 function toUser(row) { return { id: row.id, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, branchId: row.home_branch_id || null, customRoleId: row.custom_role_id || null, customRoleName: row.custom_role_name || null, status: row.status, mustChangePassword: Boolean(row.must_change_password), lastLoginAt: row.last_login_at, createdAt: row.created_at }; }
 function clean(value) { return String(value ?? "").trim(); }
 function databaseTimestampMs(value) { const text=clean(value);return new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(text)?`${text.replace(' ','T')}Z`:text).getTime(); }
-async function readJson(request) { try { return await request.json(); } catch { return {}; } }
+async function readBytes(request, maxBytes = 262_144) {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) throw new Error("request body limit exceeded");
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader(), chunks=[];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) { await reader.cancel("request body limit exceeded"); throw new Error("request body limit exceeded"); }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const bytes=new Uint8Array(total);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}return bytes;
+}
+async function readText(request, maxBytes = 262_144) {
+  return new TextDecoder().decode(await readBytes(request,maxBytes));
+}
+async function readFormData(request,maxBytes){
+  const contentType=request.headers.get('content-type')||'';
+  if(!contentType)throw new Error('content type required');
+  return new Response(await readBytes(request,maxBytes),{headers:{'content-type':contentType}}).formData();
+}
+async function readJson(request, maxBytes = 262_144) {
+  try {
+    const value = JSON.parse(await readText(request, maxBytes));
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch { return {}; }
+}
 async function audit(db, organisationId, userId, action, entityType, entityId, detail) { await auditStatement(db, organisationId, userId, action, entityType, entityId, detail).run(); }
 function auditStatement(db, organisationId, userId, action, entityType, entityId, detail) { return db.prepare("INSERT INTO audit_log (id,organisation_id,user_id,action,entity_type,entity_id,detail_json) VALUES (?,?,?,?,?,?,?)").bind(crypto.randomUUID(), organisationId, userId || null, action, entityType, entityId || null, JSON.stringify(detail || {})); }
 async function sendCareAccountEmail(env,session,details){
@@ -2613,8 +2698,8 @@ async function listOrganisationTickets(db,session,url){
 async function createOrganisationTicket(request,env,session){
  const db=env.DB;
  if(!supportRoleAllowed(session)) return forbidden('You do not have permission to create support tickets.');
- const b=await request.json(),subject=String(b.subject||'').trim(),description=String(b.description||'').trim(); if(!subject||!description)return badRequest('Subject and description are required.');
- const id=crypto.randomUUID(),number='CC-'+new Date().toISOString().slice(0,10).replaceAll('-','')+'-'+Math.random().toString(36).slice(2,7).toUpperCase(),product=await supportProductId(db);
+ const b=await readJson(request,32_768),subject=String(b.subject||'').trim(),description=String(b.description||'').trim(); if(!subject||!description)return badRequest('Subject and description are required.');
+ const id=crypto.randomUUID(),number='CC-'+new Date().toISOString().slice(0,10).replaceAll('-','')+'-'+id.slice(0,5).toUpperCase(),product=await supportProductId(db);
  await db.prepare(`INSERT INTO platform_support_tickets(id,ticket_number,product_id,organisation_id,subject,description,priority,category,status,created_by,created_at,updated_at,module,page_url,app_version,browser_info,device_info,branch_id,last_customer_reply_at,support_requester_name,support_requester_email) VALUES(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,?)`).bind(id,number,product,session.organisation_id,subject,description,['low','normal','high','critical'].includes(b.priority)?b.priority:'normal',String(b.category||'general'), 'new',session.user_id,String(b.module||''),String(b.pageUrl||''),VERSION,String(b.browserInfo||''),String(b.deviceInfo||''),session.active_branch_id||session.home_branch_id||null,String(session.display_name||''),String(session.email||'').trim().toLowerCase()).run();
  await db.prepare(`INSERT INTO platform_ticket_status_history(id,ticket_id,to_status,changed_by,note) VALUES(?,?,?,?,?)`).bind(crypto.randomUUID(),id,'new',session.user_id,'Ticket submitted by organisation').run();
  await writeAudit(db,session,'support.ticket.created','support_ticket',id,{ticket_number:number,subject});
@@ -2638,7 +2723,7 @@ async function retryPendingCareSupportTickets(env){
 }
 async function organisationTicketOrNull(db,session,id){return db.prepare(`SELECT t.*,p.name product_name,u.display_name assigned_name,c.display_name created_name FROM platform_support_tickets t LEFT JOIN platform_products p ON p.id=t.product_id LEFT JOIN users u ON u.id=t.assigned_to LEFT JOIN users c ON c.id=t.created_by WHERE t.id=? AND t.organisation_id=?`).bind(id,session.organisation_id).first()}
 async function getOrganisationTicket(db,session,id){if(!supportRoleAllowed(session))return forbidden();const ticket=await organisationTicketOrNull(db,session,id);if(!ticket)return notFound('Ticket');const [m,a,h]=await Promise.all([db.prepare(`SELECT m.*,u.display_name author_name FROM platform_ticket_messages m LEFT JOIN users u ON u.id=m.author_user_id WHERE m.ticket_id=? AND m.message_type!='internal_note' ORDER BY m.created_at`).bind(id).all(),db.prepare(`SELECT id,file_name,mime_type,size_bytes,created_at AS uploaded_at FROM platform_ticket_attachments WHERE ticket_id=? ORDER BY created_at`).bind(id).all(),db.prepare(`SELECT h.*,u.display_name changed_name FROM platform_ticket_status_history h LEFT JOIN users u ON u.id=h.changed_by WHERE h.ticket_id=? ORDER BY h.changed_at`).bind(id).all()]);return json({ticket,messages:m.results||[],attachments:a.results||[],history:h.results||[]})}
-async function updateOrganisationTicket(request,db,session,id){if(!supportRoleAllowed(session))return forbidden();const current=await organisationTicketOrNull(db,session,id);if(!current)return notFound('Ticket');const b=await request.json(),action=b.action;if(action==='close'&&!['resolved','closed'].includes(current.status)){await db.prepare(`UPDATE platform_support_tickets SET status='closed',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(id).run();await db.prepare(`INSERT INTO platform_ticket_status_history(id,ticket_id,from_status,to_status,changed_by,note) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,current.status,'closed',session.user_id,'Closed by organisation').run()}else if(action==='reopen'&&['resolved','closed'].includes(current.status)){await db.prepare(`UPDATE platform_support_tickets SET status='open',updated_at=CURRENT_TIMESTAMP,last_customer_reply_at=CURRENT_TIMESTAMP WHERE id=?`).bind(id).run();await db.prepare(`INSERT INTO platform_ticket_status_history(id,ticket_id,from_status,to_status,changed_by,note) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,current.status,'open',session.user_id,'Reopened by organisation').run()}else return badRequest('Invalid ticket action.');return json({ok:true})}
-async function addOrganisationTicketMessage(request,db,session,id){if(!supportRoleAllowed(session))return forbidden();const t=await organisationTicketOrNull(db,session,id);if(!t)return notFound('Ticket');const b=await request.json(),body=String(b.body||'').trim();if(!body)return badRequest('Reply is required.');const mid=crypto.randomUUID();await db.prepare(`INSERT INTO platform_ticket_messages(id,ticket_id,author_user_id,message_type,body) VALUES(?,?,?,?,?)`).bind(mid,id,session.user_id,'customer_reply',body).run();const next=['resolved','closed'].includes(t.status)?'open':(t.status==='waiting_customer'?'open':t.status);await db.prepare(`UPDATE platform_support_tickets SET status=?,updated_at=CURRENT_TIMESTAMP,last_customer_reply_at=CURRENT_TIMESTAMP WHERE id=?`).bind(next,id).run();if(next!==t.status)await db.prepare(`INSERT INTO platform_ticket_status_history(id,ticket_id,from_status,to_status,changed_by,note) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,t.status,next,session.user_id,'Customer replied').run();return json({ok:true,id:mid},201)}
-async function addOrganisationTicketAttachment(request,db,session,id){if(!supportRoleAllowed(session))return forbidden();const t=await organisationTicketOrNull(db,session,id);if(!t)return notFound('Ticket');const b=await request.json(),data=String(b.dataBase64||''),name=String(b.fileName||'attachment');if(!data||data.length>2800000)return badRequest('Attachment must be smaller than 2 MB.');const aid=crypto.randomUUID();await db.prepare(`INSERT INTO platform_ticket_attachments(id,ticket_id,file_name,mime_type,size_bytes,data_url,uploaded_by) VALUES(?,?,?,?,?,?,?)`).bind(aid,id,name,String(b.mimeType||'application/octet-stream'),Number(b.sizeBytes||0),data,session.user_id).run();await db.prepare(`UPDATE platform_support_tickets SET updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(id).run();return json({ok:true,id:aid},201)}
+async function updateOrganisationTicket(request,db,session,id){if(!supportRoleAllowed(session))return forbidden();const current=await organisationTicketOrNull(db,session,id);if(!current)return notFound('Ticket');const b=await readJson(request,16_384),action=b.action;if(action==='close'&&!['resolved','closed'].includes(current.status)){await db.prepare(`UPDATE platform_support_tickets SET status='closed',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(id).run();await db.prepare(`INSERT INTO platform_ticket_status_history(id,ticket_id,from_status,to_status,changed_by,note) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,current.status,'closed',session.user_id,'Closed by organisation').run()}else if(action==='reopen'&&['resolved','closed'].includes(current.status)){await db.prepare(`UPDATE platform_support_tickets SET status='open',updated_at=CURRENT_TIMESTAMP,last_customer_reply_at=CURRENT_TIMESTAMP WHERE id=?`).bind(id).run();await db.prepare(`INSERT INTO platform_ticket_status_history(id,ticket_id,from_status,to_status,changed_by,note) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,current.status,'open',session.user_id,'Reopened by organisation').run()}else return badRequest('Invalid ticket action.');return json({ok:true})}
+async function addOrganisationTicketMessage(request,db,session,id){if(!supportRoleAllowed(session))return forbidden();const t=await organisationTicketOrNull(db,session,id);if(!t)return notFound('Ticket');const b=await readJson(request,32_768),body=String(b.body||'').trim();if(!body)return badRequest('Reply is required.');const mid=crypto.randomUUID();await db.prepare(`INSERT INTO platform_ticket_messages(id,ticket_id,author_user_id,message_type,body) VALUES(?,?,?,?,?)`).bind(mid,id,session.user_id,'customer_reply',body).run();const next=['resolved','closed'].includes(t.status)?'open':(t.status==='waiting_customer'?'open':t.status);await db.prepare(`UPDATE platform_support_tickets SET status=?,updated_at=CURRENT_TIMESTAMP,last_customer_reply_at=CURRENT_TIMESTAMP WHERE id=?`).bind(next,id).run();if(next!==t.status)await db.prepare(`INSERT INTO platform_ticket_status_history(id,ticket_id,from_status,to_status,changed_by,note) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,t.status,next,session.user_id,'Customer replied').run();return json({ok:true,id:mid},201)}
+async function addOrganisationTicketAttachment(request,db,session,id){if(!supportRoleAllowed(session))return forbidden();const t=await organisationTicketOrNull(db,session,id);if(!t)return notFound('Ticket');const b=await readJson(request,2_900_000),data=String(b.dataBase64||''),name=String(b.fileName||'attachment');if(!data||data.length>2800000)return badRequest('Attachment must be smaller than 2 MB.');const aid=crypto.randomUUID();await db.prepare(`INSERT INTO platform_ticket_attachments(id,ticket_id,file_name,mime_type,size_bytes,data_url,uploaded_by) VALUES(?,?,?,?,?,?,?)`).bind(aid,id,name,String(b.mimeType||'application/octet-stream'),Number(b.sizeBytes||0),data,session.user_id).run();await db.prepare(`UPDATE platform_support_tickets SET updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(id).run();return json({ok:true,id:aid},201)}
 async function getOrganisationTicketAttachment(db,session,id){if(!supportRoleAllowed(session))return forbidden();const a=await db.prepare(`SELECT a.* FROM platform_ticket_attachments a JOIN platform_support_tickets t ON t.id=a.ticket_id WHERE a.id=? AND t.organisation_id=?`).bind(id,session.organisation_id).first();if(!a)return notFound('Attachment');const bytes=Uint8Array.from(atob(a.data_url),c=>c.charCodeAt(0));return new Response(bytes,{headers:{'content-type':a.mime_type,'content-disposition':`attachment; filename="${String(a.file_name).replaceAll('"','')}"`,'cache-control':'private, no-store'}})}

@@ -3,6 +3,14 @@ const PASSWORD_ITERATIONS = 100000;
 const clean = (value, maxLength = 500) => String(value ?? '').trim().slice(0, maxLength);
 const json = (payload, status = 200) => Response.json(payload, { status, headers: { 'cache-control': 'no-store' } });
 
+async function boundedJson(request,maxBytes=32_768){
+  const declared=Number(request.headers.get('content-length'));if(Number.isFinite(declared)&&declared>maxBytes)return {};
+  if(!request.body)return {};const reader=request.body.getReader(),chunks=[];let length=0;
+  try{while(true){const {done,value}=await reader.read();if(done)break;length+=value.byteLength;if(length>maxBytes){await reader.cancel();return {};}chunks.push(value);}}finally{reader.releaseLock();}
+  const bytes=new Uint8Array(length);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+  try{return JSON.parse(new TextDecoder().decode(bytes));}catch{return {};}
+}
+
 function base64(bytes) { let value = ''; for (const byte of bytes) value += String.fromCharCode(byte); return btoa(value); }
 async function passwordRecord(password) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
@@ -63,7 +71,7 @@ export async function handlePlatformOrganisation(request, env, requestedExternal
   const auth = await authorised(request, env); if (auth.error) return auth.error;
   if (!env.DB) return json({ error: { code: 'DATABASE_NOT_CONFIGURED', message: 'Care organisation storage is unavailable.' } }, 503);
   if (request.method === 'POST' && !requestedExternalId) {
-    const input = await request.json().catch(() => ({})); const source = input.organisation || {};
+    const input = await boundedJson(request); const source = input.organisation || {};
     const platformId = clean(source.id, 160); const externalId = clean(source.external_id || platformId, 160); const name = clean(source.name, 240);
     if (!platformId || !name) return json({ error: { code: 'INVALID_ORGANISATION', message: 'Organisation id and name are required.' } }, 400);
     let organisation = await env.DB.prepare('SELECT id,name,status FROM organisations WHERE id=?1 OR id=?2 LIMIT 1').bind(platformId, externalId).first();

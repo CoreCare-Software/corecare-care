@@ -1,6 +1,9 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "corecare-care",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "care.corecaresystems.co.uk", "custom_domain": true }],
   "main": "src/index.js",
   "compatibility_date": "2026-08-04",
   "compatibility_flags": ["nodejs_compat"],
@@ -11,7 +14,8 @@
 		"run_worker_first": [
 			"/api/*",
 			"/platform-access",
-			"/auth/portal-login"
+			"/auth/portal-login",
+			"/auth/portal-claim"
 		]
   },
   "observability": {
@@ -51,7 +55,7 @@
     }
   ],
   "vars": {
-    "PLATFORM_ORIGIN": "https://corecare-platform.cselectricalservices11.workers.dev",
+    "PLATFORM_ORIGIN": "https://owner.corecaresystems.co.uk",
     "ENVIRONMENT": "production"
   }
 }

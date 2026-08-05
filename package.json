@@ -8,13 +8,13 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "check": "wrangler deploy --dry-run",
-    "test": "node --test",
+    "test": "node --experimental-loader ./test/cloudflare-loader.mjs --test test/*.test.js",
     "verify:source": "node --check src/index.js && node --check public/app.js && node scripts/verify-release-consistency.mjs",
     "db:migrate:local": "wrangler d1 migrations apply corecare --local",
     "db:migrate:remote": "wrangler d1 migrations apply corecare --remote"
   },
   "devDependencies": {
-    "wrangler": "^4.118.0"
+    "wrangler": "^4.119.0"
   },
   "overrides": {
     "undici": "^7.29.0"
