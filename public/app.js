@@ -245,7 +245,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.37.1';
+const CORECARE_FALLBACK_VERSION = '1.38.0';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -413,6 +413,13 @@ function showLogin(message = '') {
     loginError.hidden = true;
   }
   $('#email').focus();
+}
+
+function showLoginPanel(mode='login'){
+  loginForm.hidden=mode!=='login';$('#forgot-password-form').hidden=mode!=='forgot';$('#reset-password-form').hidden=mode!=='reset';
+  if(mode==='login')$('#email')?.focus();
+  if(mode==='forgot'){const field=$('#forgot-email');field.value=$('#email')?.value||'';field.focus();}
+  if(mode==='reset')$('#reset-new-password')?.focus();
 }
 
 async function restoreSession() {
@@ -1390,6 +1397,11 @@ $('#sign-out').addEventListener('click', async () => {
   showLogin();
 });
 
+$('#forgot-password')?.addEventListener('click',()=>showLoginPanel('forgot'));
+$$('[data-back-to-login]').forEach(button=>button.addEventListener('click',()=>{history.replaceState({},'',location.pathname);showLoginPanel('login')}));
+$('#forgot-password-form')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,message=$('#forgot-password-message'),button=form.querySelector('[type=submit]');button.disabled=true;message.hidden=true;try{const result=await api('/api/auth/forgot-password',{method:'POST',suppressAuthRedirect:true,body:JSON.stringify({email:form.elements.email.value})});message.textContent=result.message;message.hidden=false;message.className='form-message success'}catch{message.textContent='CoreCare could not request a reset right now. Please try again.';message.hidden=false}finally{button.disabled=false}});
+$('#reset-password-form')?.addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget,message=$('#reset-password-message'),button=form.querySelector('[type=submit]'),token=new URLSearchParams(location.search).get('reset')||'';message.hidden=true;if(form.elements.newPassword.value!==form.elements.confirmPassword.value){message.textContent='The passwords do not match.';message.hidden=false;return}button.disabled=true;try{const result=await api('/api/auth/reset-password',{method:'POST',suppressAuthRedirect:true,body:JSON.stringify({token,newPassword:form.elements.newPassword.value})});history.replaceState({},'',location.pathname);showLoginPanel('login');loginError.textContent=result.message;loginError.hidden=false}catch(error){message.textContent=error.message;message.hidden=false}finally{button.disabled=false}});
+
 function closeUserAccountMenu(){const menu=$('#user-account-menu'),trigger=$('#user-menu-trigger');if(menu)menu.hidden=true;if(trigger)trigger.setAttribute('aria-expanded','false');}
 $('#user-menu-trigger')?.addEventListener('click',event=>{event.stopPropagation();const menu=$('#user-account-menu'),trigger=event.currentTarget,opening=menu?.hidden!==false;if(menu)menu.hidden=!opening;trigger.setAttribute('aria-expanded',opening?'true':'false');});
 document.addEventListener('click',event=>{if(!event.target.closest?.('.user-menu'))closeUserAccountMenu();});
@@ -1900,7 +1912,7 @@ $('#workflow-form')?.addEventListener('submit',async e=>{e.preventDefault();cons
 $('#workflow-new')?.addEventListener('click',()=>{resetWorkflowForm();$('#workflow-form')?.scrollIntoView({behavior:'smooth'})});
 $('#workflow-reset')?.addEventListener('click',resetWorkflowForm);$('#workflow-refresh')?.addEventListener('click',loadWorkflowEngine);$('#workflow-status-filter')?.addEventListener('change',loadWorkflowEngine);
 
-restoreSession();
+if(new URLSearchParams(location.search).get('reset')){showLogin();showLoginPanel('reset')}else restoreSession();
 
 $('#exit-support-mode')?.addEventListener('click',async()=>{try{await api('/api/platform/exit-support',{method:'POST'});location.reload();}catch(error){alert(error.message);}});
 

@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0f766e">
   <meta name="description" content="CoreCare care management platform">
   <title>Sign in | CoreCare Care</title>
-  <link rel="stylesheet" href="styles.css?v=1.37.1">
+  <link rel="stylesheet" href="styles.css?v=1.38.0">
 </head>
 <body>
   <div id="login-view" class="login-shell">
@@ -29,10 +29,12 @@
           <div class="password-label"><label for="password">Password</label><button id="toggle-password" type="button" aria-controls="password">Show</button></div>
           <input id="password" name="password" type="password" autocomplete="current-password" required>
         </div>
-        <p class="login-access-help">Forgotten your password? Contact your organisation administrator.</p>
+        <p class="login-access-help"><button id="forgot-password" class="text-button" type="button">Forgotten your password?</button></p>
         <p id="login-error" class="form-error" role="alert" aria-live="polite" hidden></p>
         <button class="primary-button login-submit" type="submit">Sign in to CoreCare Care</button>
       </form>
+      <form id="forgot-password-form" hidden novalidate><h2>Reset your password</h2><p class="login-access-help">Enter your account email. If it matches an active account, CoreCare will send a secure 30-minute reset link.</p><div class="login-field"><label for="forgot-email">Email address</label><input id="forgot-email" name="email" type="email" autocomplete="email" required></div><p id="forgot-password-message" class="form-error" role="status" hidden></p><button class="primary-button login-submit" type="submit">Send reset link</button><button class="text-button" data-back-to-login type="button">Back to sign in</button></form>
+      <form id="reset-password-form" hidden novalidate><h2>Choose a new password</h2><p class="login-access-help">Use at least 12 characters with upper-case, lower-case and a number.</p><div class="login-field"><label for="reset-new-password">New password</label><input id="reset-new-password" name="newPassword" type="password" autocomplete="new-password" minlength="12" required></div><div class="login-field"><label for="reset-confirm-password">Confirm password</label><input id="reset-confirm-password" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required></div><p id="reset-password-message" class="form-error" role="status" hidden></p><button class="primary-button login-submit" type="submit">Change password</button><button class="text-button" data-back-to-login type="button">Back to sign in</button></form>
       <div id="login-security-note" class="login-security-note"><span aria-hidden="true">✓</span><p><strong>Protected access</strong><small>Secure sessions and audited activity help keep care information safe.</small></p></div>
       <p class="legal-copy">Authorised users only. Use fictional information in development environments.</p>
     </section>
@@ -79,7 +81,7 @@
         </div>
         <div id="organisation-navigation" class="organisation-navigation" aria-label="Workspace navigation"></div>
       </nav>
-      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>CoreCare Care</strong><small>Secure service <span id="dev-version">v1.37.1</span></small></div></div>
+      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>CoreCare Care</strong><small>Secure service <span id="dev-version">v1.38.0</span></small></div></div>
     </aside>
 
     <div class="workspace">
@@ -737,7 +739,7 @@
 <dialog id="support-ticket-detail-dialog" class="client-dialog wide-dialog"><div class="dialog-heading"><div><p class="eyebrow" id="org-ticket-number">Support ticket</p><h2 id="org-ticket-title">Ticket</h2></div><button type="button" data-close-dialog="support-ticket-detail-dialog">×</button></div><div id="org-ticket-detail" class="support-ticket-detail"></div></dialog>
 
 <script src="/vendor/qrcode.min.js"></script>
-<script src="app.js?v=1.37.1"></script>
+<script src="app.js?v=1.38.0"></script>
 
 </body>
 </html>

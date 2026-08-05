@@ -5,12 +5,12 @@ import { carePlanReadiness, validateAdministration, validateBodyMap, validateMed
 import { assessRotaPublication, calculateLiveDashboard, normaliseFamilyAccess } from './operational-workspaces.js';
 import { calculateFinanceMetrics, calculateReportSummary, incidentReference, normaliseFinanceTransaction, normaliseIncidentReport, normaliseIncidentReview, normaliseInvoice, validateFinanceSettings } from './business-workspaces.js';
 import { LAUNCH_GOVERNANCE_DOMAINS, deriveLaunchDomainStatus, deriveOverallLaunchStatus, launchGovernanceDomain, validateLaunchSignoff } from './launch-governance.js';
-import { requestPlatformTransactionalEmail } from './platform-email.js';
+import { requestPlatformSupportTicket, requestPlatformTransactionalEmail } from './platform-email.js';
 import { protectResponse, recordComplianceMutation } from './compliance-audit.js';
 
-/** CoreCare Care 1.37.1 - subscription resource limits */
-const VERSION = "1.37.1";
-const RELEASE = "CoreCare Care 1.37.1 - subscription resource limits";
+/** CoreCare Care 1.38.0 - transactional security and support email */
+const VERSION = "1.38.0";
+const RELEASE = "CoreCare Care 1.38.0 - transactional security and support email";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -28,6 +28,8 @@ const application = {
         return health(env);
       }
       if (url.pathname === "/api/version") return json({ name: "CoreCare", version: VERSION, release: RELEASE });
+      if (url.pathname === "/api/auth/forgot-password" && request.method === "POST") return requestPasswordReset(request, env);
+      if (url.pathname === "/api/auth/reset-password" && request.method === "POST") return resetPasswordWithToken(request, env);
       if (["/auth/portal-login", "/api/auth/portal-login"].includes(url.pathname) && request.method === "POST") return portalLogin(request, env, "CARE");
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
@@ -87,7 +89,7 @@ const application = {
         if (url.pathname === "/api/operations/tasks" && request.method === "POST") return await permitted(env.DB, session, "tasks.manage", () => createOperationsTask(request, env.DB, session));
         const operationsTaskMatch = url.pathname.match(/^\/api\/operations\/tasks\/([^/]+)\/(complete|escalate)$/);
         if (operationsTaskMatch && request.method === "POST") return await permitted(env.DB, session, "tasks.manage", () => updateOperationsTask(env.DB, session, decodeURIComponent(operationsTaskMatch[1]), operationsTaskMatch[2]));
-        if (url.pathname === "/api/operations/incidents" && request.method === "POST") return await permitted(env.DB, session, "incidents.manage", () => createOperationsIncident(request, env.DB, session));
+        if (url.pathname === "/api/operations/incidents" && request.method === "POST") return await permitted(env.DB, session, "incidents.manage", () => createOperationsIncident(request, env, session));
         const operationsIncidentMatch = url.pathname.match(/^\/api\/operations\/incidents\/([^/]+)\/review$/);
         if (operationsIncidentMatch && request.method === "POST") return await permitted(env.DB, session, "incidents.manage", () => reviewOperationsIncident(request, env.DB, session, decodeURIComponent(operationsIncidentMatch[1])));
         if (url.pathname === "/api/finance" && request.method === "GET") return await permitted(env.DB, session, "finance.view", () => financeWorkspace(env.DB, session));
@@ -114,7 +116,7 @@ const application = {
         if (url.pathname === "/api/body-map" && request.method === "GET") return await permitted(env.DB, session, "clients.view", () => listBodyMap(env.DB, session, url));
         if (url.pathname === "/api/body-map" && request.method === "POST") return await permitted(env.DB, session, "care_plans.edit", () => createBodyMapRecord(request, env.DB, session));
         const bodyMapUpdateMatch = url.pathname.match(/^\/api\/body-map\/([^/]+)\/update$/);
-        if (bodyMapUpdateMatch && request.method === "POST") return await permitted(env.DB, session, "care_plans.edit", () => updateBodyMapRecord(request, env.DB, session, decodeURIComponent(bodyMapUpdateMatch[1])));
+        if (bodyMapUpdateMatch && request.method === "POST") return await permitted(env.DB, session, "care_plans.edit", () => updateBodyMapRecord(request, env, session, decodeURIComponent(bodyMapUpdateMatch[1])));
         const carePlanActionMatch = url.pathname.match(/^\/api\/care-plans\/([^/]+)\/(approve|generate-visits)$/);
         if (carePlanActionMatch && request.method === "POST") return await permitted(env.DB, session, "care_plans.edit", () => carePlanAction(request, env.DB, session, decodeURIComponent(carePlanActionMatch[1]), carePlanActionMatch[2]));
         const carePlanHistoryMatch = url.pathname.match(/^\/api\/care-plans\/([^/]+)\/history$/);
@@ -122,7 +124,7 @@ const application = {
         const careAlertMatch = url.pathname.match(/^\/api\/care-delivery\/alerts\/([^/]+)\/acknowledge$/);
         if (careAlertMatch && request.method === "POST") return acknowledgeCareAlert(env.DB, session, decodeURIComponent(careAlertMatch[1]));
         if (url.pathname === "/api/support/tickets" && request.method === "GET") return listOrganisationTickets(env.DB, session, url);
-        if (url.pathname === "/api/support/tickets" && request.method === "POST") return createOrganisationTicket(request, env.DB, session);
+        if (url.pathname === "/api/support/tickets" && request.method === "POST") return createOrganisationTicket(request, env, session);
         const orgSupportTicketMatch = url.pathname.match(/^\/api\/support\/tickets\/([^/]+)$/);
         if (orgSupportTicketMatch && request.method === "GET") return getOrganisationTicket(env.DB, session, decodeURIComponent(orgSupportTicketMatch[1]));
         if (orgSupportTicketMatch && request.method === "PUT") return updateOrganisationTicket(request, env.DB, session, decodeURIComponent(orgSupportTicketMatch[1]));
@@ -309,6 +311,36 @@ const application = {
   }
 };
 
+const PASSWORD_RESET_MINUTES=30;
+const passwordResetResponse=()=>json({ok:true,message:'If an active account matches that email address, a reset link will be sent.'},202);
+async function requestPasswordReset(request,env){
+  if(!env.DB)return databaseRequired();
+  const input=await readJson(request),email=clean(input.email).toLowerCase().slice(0,320);
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return passwordResetResponse();
+  const user=await env.DB.prepare(`SELECT u.id,u.organisation_id,u.email,u.display_name,u.access_level,o.name organisation_name FROM users u JOIN organisations o ON o.id=u.organisation_id WHERE lower(u.email)=lower(?) AND u.status='active' LIMIT 1`).bind(email).first();
+  if(!user)return passwordResetResponse();
+  const ipHash=await sha256Base64(clean(request.headers.get('cf-connecting-ip'))||'unknown');
+  const [byUser,byIp]=await Promise.all([env.DB.prepare("SELECT COUNT(*) total FROM password_reset_tokens WHERE user_id=? AND created_at>=datetime('now','-1 hour')").bind(user.id).first(),env.DB.prepare("SELECT COUNT(*) total FROM password_reset_tokens WHERE request_ip_hash=? AND created_at>=datetime('now','-1 hour')").bind(ipHash).first()]);
+  if(Number(byUser?.total||0)>=3||Number(byIp?.total||0)>=10)return passwordResetResponse();
+  const id=crypto.randomUUID(),token=randomToken(),expiresAt=new Date(Date.now()+PASSWORD_RESET_MINUTES*60_000).toISOString();
+  await env.DB.batch([env.DB.prepare('INSERT INTO password_reset_tokens(id,user_id,token_hash,request_ip_hash,expires_at) VALUES(?,?,?,?,?)').bind(id,user.id,await sha256Base64(token),ipHash,expiresAt),auditStatement(env.DB,user.organisation_id,user.id,'user.password_reset_requested','user',user.id,{expiresAt})]);
+  const actionUrl=new URL(request.url);actionUrl.pathname='/';actionUrl.search='';actionUrl.hash='';actionUrl.searchParams.set('reset',token);
+  await sendCareAccountEmail(env,{organisation_id:user.organisation_id,user_id:user.id},{templateKey:'password_reset_link',sourceEventId:`care-password-reset:${id}`,userId:user.id,recipientEmail:user.email,recipientName:user.display_name,accessLabel:clean(user.access_level).replaceAll('_',' '),actionUrl:actionUrl.toString()});
+  return passwordResetResponse();
+}
+async function resetPasswordWithToken(request,env){
+  if(!env.DB)return databaseRequired();
+  const input=await readJson(request),token=String(input.token||''),password=String(input.newPassword||input.password||'');
+  if(token.length<32||token.length>256)return json({error:{code:'RESET_LINK_INVALID',message:'This password reset link is invalid or has expired.'}},400);
+  if(!strongTemporaryPassword(password)||password.length>128)return json({error:{code:'WEAK_PASSWORD',message:'Use 12–128 characters with upper-case, lower-case and a number.'}},400);
+  const record=await env.DB.prepare(`SELECT r.id reset_id,r.user_id,u.organisation_id,u.email,u.display_name,u.access_level FROM password_reset_tokens r JOIN users u ON u.id=r.user_id WHERE r.token_hash=? AND r.consumed_at IS NULL AND datetime(r.expires_at)>CURRENT_TIMESTAMP AND u.status='active' LIMIT 1`).bind(await sha256Base64(token)).first();
+  if(!record)return json({error:{code:'RESET_LINK_INVALID',message:'This password reset link is invalid or has expired.'}},400);
+  const secured=await hashPassword(password),changedAt=new Date().toISOString();
+  await env.DB.batch([env.DB.prepare('UPDATE password_reset_tokens SET consumed_at=CURRENT_TIMESTAMP WHERE id=? AND consumed_at IS NULL').bind(record.reset_id),env.DB.prepare('UPDATE users SET password_hash=?,password_salt=?,password_iterations=?,must_change_password=0,password_changed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?').bind(secured.hash,secured.salt,PASSWORD_ITERATIONS,record.user_id),env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(record.user_id),auditStatement(env.DB,record.organisation_id,record.user_id,'user.password_reset_completed','user',record.user_id,{})]);
+  await sendCareAccountEmail(env,{organisation_id:record.organisation_id,user_id:record.user_id},{templateKey:'password_changed',sourceEventId:`care-password-reset:${record.reset_id}:completed`,userId:record.user_id,recipientEmail:record.email,recipientName:record.display_name,accessLabel:clean(record.access_level).replaceAll('_',' '),actionTime:changedAt});
+  return json({ok:true,message:'Your password has been changed. Sign in with your new password.'});
+}
+
 export default {
   async fetch(request, env, context) {
     const response = await application.fetch(request, env, context);
@@ -329,6 +361,7 @@ async function runScheduledMaintenance(env, scheduledTime) {
     work.push(env.DB.batch([
       env.DB.prepare("DELETE FROM sessions WHERE expires_at<=CURRENT_TIMESTAMP"),
       env.DB.prepare("DELETE FROM login_attempts WHERE updated_at<datetime('now','-1 day')"),
+      env.DB.prepare("DELETE FROM password_reset_tokens WHERE datetime(expires_at)<datetime('now','-7 days')"),
       env.DB.prepare(`INSERT INTO operations_tasks(id,organisation_id,branch_id,client_id,title,description,category,priority,status,due_at,created_by)
         SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-4'||substr(lower(hex(randomblob(2))),2)||'-a'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),a.organisation_id,c.branch_id,a.client_id,'PRN effectiveness review: '||m.name,'Review the outcome of PRN administration '||a.id||' recorded at '||a.administered_at||'.','Medication','high','open',datetime('now'),a.recorded_by
         FROM medication_administrations a
@@ -340,6 +373,7 @@ async function runScheduledMaintenance(env, scheduledTime) {
     ]));
   }
   if (env.CORECARE_PLATFORM) work.push(syncPlatformEntitlements(env));
+  if (env.CORECARE_PLATFORM && env.DB) work.push(retryPendingCareSupportTickets(env));
   const results = await Promise.allSettled(work);
   const failures = results.filter(result => result.status === "rejected").map(result => String(result.reason));
   const event = { message: "scheduled maintenance completed", scheduledAt: startedAt, jobs: results.length, failures };
@@ -1153,7 +1187,8 @@ async function operationsBoard(db, session) {
 }
 async function createOperationsTask(request,db,session){const i=await readJson(request),title=clean(i.title),clientId=clean(i.clientId)||null,staffId=clean(i.staffId)||null;if(!title)return json({error:{code:'VALIDATION_ERROR',message:'Enter a task title.'}},400);let branchId=activeBranch(session)||null;if(clientId){const client=await ensureClient(db,session,clientId);if(!client)return notFound('Client');branchId=client.branch_id||branchId;}if(staffId){const staff=await db.prepare(`SELECT id,branch_id FROM staff WHERE id=? AND organisation_id=? ${branchRestricted(session)?'AND branch_id=?':''} AND status='Active'`).bind(staffId,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first();if(!staff)return notFound('Staff member');if(branchId&&staff.branch_id&&branchId!==staff.branch_id)return json({error:{code:'BRANCH_MISMATCH',message:'The task client and assigned staff member must belong to the same branch.'}},409);branchId=branchId||staff.branch_id||null;}const id=crypto.randomUUID();await db.batch([db.prepare(`INSERT INTO operations_tasks(id,organisation_id,branch_id,client_id,assigned_staff_id,title,description,category,priority,status,due_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,branchId,clientId,staffId,title,clean(i.description),clean(i.category)||'Care',['low','normal','high','critical'].includes(clean(i.priority))?clean(i.priority):'normal','open',clean(i.dueAt)||null,session.user_id),auditStatement(db,session.organisation_id,session.user_id,'operations.task_created','task',id,{title,clientId,staffId})]);return json({ok:true,id});}
 async function updateOperationsTask(db,session,id,action){const row=await db.prepare('SELECT title FROM operations_tasks WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();if(!row)return notFound('Task');const status=action==='complete'?'completed':'escalated',column=action==='complete'?'completed_at':'escalated_at';await db.batch([db.prepare(`UPDATE operations_tasks SET status=?,${column}=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(status,id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,`operations.task_${action}`,'task',id,{title:row.title})]);return json({ok:true});}
-async function createOperationsIncident(request,db,session){
+async function createOperationsIncident(request,env,session){
+  const db=env.DB;
   const input=normaliseIncidentReport(await readJson(request));if(input.error)return json({error:{code:'VALIDATION_ERROR',message:input.error}},400);
   let client=null;if(input.clientId){client=await db.prepare(`SELECT id,branch_id FROM clients WHERE id=? AND organisation_id=? ${branchRestricted(session)?'AND branch_id=?':''} AND archived_at IS NULL`).bind(input.clientId,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first();if(!client)return notFound('Client');}
   const id=crypto.randomUUID(),reference=incidentReference(id),branchId=client?.branch_id||activeBranch(session)||null;
@@ -1161,7 +1196,20 @@ async function createOperationsIncident(request,db,session){
     db.prepare(`INSERT INTO operations_incidents(id,organisation_id,reference_number,branch_id,client_id,reported_by,category,severity,title,description,status,occurred_at,injury_or_harm,immediate_action,witnesses,safeguarding_required,external_notification,external_reference,duty_of_candour_required) VALUES(?,?,?,?,?,?,?,?,?,?,'open',?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,reference,branchId,input.clientId||null,session.user_id,input.category,input.severity,input.title,input.description,input.occurredAt||null,input.injuryOrHarm,input.immediateAction,input.witnesses,input.safeguardingRequired?1:0,input.externalNotification,input.externalReference,(['high','critical'].includes(input.severity)||Boolean(input.injuryOrHarm))?1:0),
     db.prepare(`INSERT INTO incident_updates(id,organisation_id,incident_id,update_type,status,note,created_by) VALUES(?,?,?,'reported','open',?,?)`).bind(crypto.randomUUID(),session.organisation_id,id,`Incident reported as ${input.severity} severity.`,session.user_id),
     auditStatement(db,session.organisation_id,session.user_id,'operations.incident_created','incident',id,{reference,title:input.title,severity:input.severity,safeguardingRequired:input.safeguardingRequired})
-  ]);return json({ok:true,id,reference},201);
+  ]);
+  const emailDeliveries=await sendCareIncidentEmails(env,session,{id,reference,severity:input.severity,occurredAt:input.occurredAt||new Date().toISOString()});
+  return json({ok:true,id,reference,emailDeliveries},201);
+}
+
+async function sendCareIncidentEmails(env,session,incident){
+  const recipients=await env.DB.prepare(`SELECT id,email,display_name,access_level FROM users WHERE organisation_id=? AND status='active' AND access_level IN ('organisation_owner','organisation_admin','registered_manager') ORDER BY access_level,display_name LIMIT 20`).bind(session.organisation_id).all();
+  const deliveries=[];
+  for(const recipient of recipients.results||[]){
+    const result=await requestPlatformTransactionalEmail(env,{organisationId:session.organisation_id,templateKey:'incident_alert',sourceEventId:`care-incident:${incident.id}:recipient:${recipient.id}`,recipientEmail:recipient.email,recipientName:recipient.display_name,accessLabel:clean(recipient.access_level).replaceAll('_',' '),incidentReference:incident.reference,incidentSeverity:incident.severity,incidentOccurredAt:incident.occurredAt});
+    deliveries.push({recipientId:recipient.id,status:result.status||'failed'});
+  }
+  await auditStatement(env.DB,session.organisation_id,session.user_id,'email.incident_alert.dispatched','incident',incident.id,{recipients:deliveries.length,statuses:deliveries.map(item=>item.status)}).run();
+  return deliveries;
 }
 async function reviewOperationsIncident(request,db,session,id){
   const input=normaliseIncidentReview(await readJson(request));if(input.error)return json({error:{code:'VALIDATION_ERROR',message:input.error}},400);
@@ -1808,11 +1856,15 @@ async function createBodyMapRecord(request,db,session){
   if(incidentId)statements.push(db.prepare(`INSERT INTO operations_incidents(id,organisation_id,reference_number,branch_id,client_id,reported_by,category,severity,title,description,status,occurred_at,immediate_action,duty_of_candour_required) VALUES(?,?,?,?,?,?,?,?,?,?,'open',?,?,?)`).bind(incidentId,session.organisation_id,incidentReference(incidentId),client.branch_id||null,clientId,session.user_id,'Body map',severity,`${concernType}: ${clean(i.bodyLocation)||'body-map concern'}`,`Body map record ${id}. ${description}`,new Date(clean(i.firstObservedAt)||Date.now()).toISOString(),clean(i.actionTaken),['high','critical'].includes(severity)?1:0));
   await db.batch(statements); return json({ok:true,id,incidentCreated:Boolean(incidentId),incidentId},201);
 }
-async function updateBodyMapRecord(request,db,session,id){
+async function updateBodyMapRecord(request,env,session,id){
+  const db=env.DB;
   const row=await db.prepare('SELECT * FROM body_map_records WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first(); if(!row)return json({error:{code:'NOT_FOUND',message:'Body map concern not found.'}},404); const i=await readJson(request),validation=validateBodyMap({...i,view:row.view,severity:clean(i.severity)||row.severity},{update:true});if(validation)return json({error:{code:'VALIDATION_ERROR',message:validation}},400); const note=clean(i.note),status=clean(i.status)||row.status,severity=clean(i.severity)||row.severity,uid=crypto.randomUUID(),shouldCreateIncident=Boolean(i.createIncident||(['high','critical'].includes(severity)&&(!['high','critical'].includes(row.severity)||row.status==='resolved'))),incidentId=shouldCreateIncident?crypto.randomUUID():null;
   const statements=[db.prepare(`INSERT INTO body_map_updates(id,organisation_id,body_map_record_id,note,appearance,action_taken,status,recorded_by) VALUES(?,?,?,?,?,?,?,?)`).bind(uid,session.organisation_id,id,note,clean(i.appearance),clean(i.actionTaken),status,session.user_id),db.prepare(`UPDATE body_map_records SET size=COALESCE(NULLIF(?,''),size),appearance=COALESCE(NULLIF(?,''),appearance),severity=?,action_taken=COALESCE(NULLIF(?,''),action_taken),status=?,linked_incident_id=COALESCE(?,linked_incident_id),resolved_at=CASE WHEN ?='resolved' THEN CURRENT_TIMESTAMP ELSE NULL END,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.size),clean(i.appearance),severity,clean(i.actionTaken),status,incidentId,status,id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'body_map.updated','body_map_record',id,{status,severity,incidentId})];
   if(incidentId)statements.push(db.prepare(`INSERT INTO operations_incidents(id,organisation_id,reference_number,branch_id,client_id,reported_by,category,severity,title,description,status,occurred_at,immediate_action,duty_of_candour_required) VALUES(?,?,?,(SELECT branch_id FROM clients WHERE id=? AND organisation_id=?),?,?,?,?,?,?,'open',?,?,?)`).bind(incidentId,session.organisation_id,incidentReference(incidentId),row.client_id,session.organisation_id,row.client_id,session.user_id,'Body map',severity,`${row.concern_type}: ${row.body_location||'body-map concern'}`,`Body map record ${id}${row.status==='resolved'?' reopened':' escalated'}. ${note}`,new Date().toISOString(),clean(i.actionTaken),['high','critical'].includes(severity)?1:0));
-  await db.batch(statements); return json({ok:true,id:uid,incidentCreated:Boolean(incidentId),incidentId},201);
+  await db.batch(statements);
+  let emailDeliveries=[];
+  if(incidentId){const incident=await db.prepare('SELECT reference_number,severity,occurred_at FROM operations_incidents WHERE id=? AND organisation_id=?').bind(incidentId,session.organisation_id).first();emailDeliveries=await sendCareIncidentEmails(env,session,{id:incidentId,reference:incident?.reference_number||incidentReference(incidentId),severity:incident?.severity||severity,occurredAt:incident?.occurred_at||new Date().toISOString()});}
+  return json({ok:true,id:uid,incidentCreated:Boolean(incidentId),incidentId,emailDeliveries},201);
 }
 
 async function platformSearch(db,session,url){
@@ -2558,13 +2610,31 @@ async function listOrganisationTickets(db,session,url){
  const binds=[session.organisation_id]; if(status!='all'){sql+=' AND t.status=?';binds.push(status)} if(search){sql+=' AND (t.ticket_number LIKE ? OR t.subject LIKE ?)';binds.push('%'+search+'%','%'+search+'%')} sql+=' ORDER BY t.updated_at DESC';
  const r=await db.prepare(sql).bind(...binds).all();return json({tickets:r.results||[]});
 }
-async function createOrganisationTicket(request,db,session){
+async function createOrganisationTicket(request,env,session){
+ const db=env.DB;
  if(!supportRoleAllowed(session)) return forbidden('You do not have permission to create support tickets.');
  const b=await request.json(),subject=String(b.subject||'').trim(),description=String(b.description||'').trim(); if(!subject||!description)return badRequest('Subject and description are required.');
  const id=crypto.randomUUID(),number='CC-'+new Date().toISOString().slice(0,10).replaceAll('-','')+'-'+Math.random().toString(36).slice(2,7).toUpperCase(),product=await supportProductId(db);
- await db.prepare(`INSERT INTO platform_support_tickets(id,ticket_number,product_id,organisation_id,subject,description,priority,category,status,created_by,created_at,updated_at,module,page_url,app_version,browser_info,device_info,branch_id,last_customer_reply_at) VALUES(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?,?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(id,number,product,session.organisation_id,subject,description,['low','normal','high','critical'].includes(b.priority)?b.priority:'normal',String(b.category||'general'), 'new',session.user_id,String(b.module||''),String(b.pageUrl||''),VERSION,String(b.browserInfo||''),String(b.deviceInfo||''),session.active_branch_id||session.home_branch_id||null).run();
+ await db.prepare(`INSERT INTO platform_support_tickets(id,ticket_number,product_id,organisation_id,subject,description,priority,category,status,created_by,created_at,updated_at,module,page_url,app_version,browser_info,device_info,branch_id,last_customer_reply_at,support_requester_name,support_requester_email) VALUES(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,?)`).bind(id,number,product,session.organisation_id,subject,description,['low','normal','high','critical'].includes(b.priority)?b.priority:'normal',String(b.category||'general'), 'new',session.user_id,String(b.module||''),String(b.pageUrl||''),VERSION,String(b.browserInfo||''),String(b.deviceInfo||''),session.active_branch_id||session.home_branch_id||null,String(session.display_name||''),String(session.email||'').trim().toLowerCase()).run();
  await db.prepare(`INSERT INTO platform_ticket_status_history(id,ticket_id,to_status,changed_by,note) VALUES(?,?,?,?,?)`).bind(crypto.randomUUID(),id,'new',session.user_id,'Ticket submitted by organisation').run();
- await writeAudit(db,session,'support.ticket.created','support_ticket',id,{ticket_number:number,subject}); return json({ok:true,id,ticketNumber:number},201);
+ await writeAudit(db,session,'support.ticket.created','support_ticket',id,{ticket_number:number,subject});
+ const delivery=await requestPlatformSupportTicket(env,{id,organisationId:session.organisation_id,subject,description,priority:['low','normal','high','critical'].includes(b.priority)?b.priority:'normal',category:String(b.category||'general'),version:VERSION,contactName:session.display_name,contactEmail:session.email,module:String(b.module||''),pageUrl:String(b.pageUrl||''),submittedAt:new Date().toISOString()});
+ await db.prepare('UPDATE platform_support_tickets SET central_ticket_id=?,delivery_status=?,delivery_error=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').bind(delivery.ticketId||null,delivery.status||'failed',delivery.error||null,id).run();
+ return json({ok:true,id,ticketNumber:delivery.ticketNumber||number,localTicketNumber:number,delivery:{status:delivery.status,error:delivery.error||null}},201);
+}
+async function retryPendingCareSupportTickets(env){
+ const rows=await env.DB.prepare(`SELECT t.id,t.organisation_id,t.subject,t.description,t.priority,t.category,t.module,t.page_url,t.created_at,
+   COALESCE(NULLIF(t.support_requester_name,''),u.display_name,'') requester_name,
+   COALESCE(NULLIF(t.support_requester_email,''),u.email,'') requester_email
+   FROM platform_support_tickets t LEFT JOIN users u ON u.id=t.created_by AND u.organisation_id=t.organisation_id
+   WHERE t.delivery_status!='delivered' ORDER BY t.updated_at LIMIT 10`).all();
+ let delivered=0;
+ for(const ticket of rows.results||[]){
+  const result=await requestPlatformSupportTicket(env,{id:ticket.id,organisationId:ticket.organisation_id,subject:ticket.subject,description:ticket.description,priority:ticket.priority,category:ticket.category,version:VERSION,contactName:ticket.requester_name,contactEmail:ticket.requester_email,module:ticket.module,pageUrl:ticket.page_url,submittedAt:ticket.created_at});
+  await env.DB.prepare('UPDATE platform_support_tickets SET central_ticket_id=COALESCE(?,central_ticket_id),delivery_status=?,delivery_error=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').bind(result.ticketId||null,result.status||'failed',result.error||null,ticket.id).run();
+  if(result.status==='delivered')delivered+=1;
+ }
+ return {attempted:rows.results?.length||0,delivered};
 }
 async function organisationTicketOrNull(db,session,id){return db.prepare(`SELECT t.*,p.name product_name,u.display_name assigned_name,c.display_name created_name FROM platform_support_tickets t LEFT JOIN platform_products p ON p.id=t.product_id LEFT JOIN users u ON u.id=t.assigned_to LEFT JOIN users c ON c.id=t.created_by WHERE t.id=? AND t.organisation_id=?`).bind(id,session.organisation_id).first()}
 async function getOrganisationTicket(db,session,id){if(!supportRoleAllowed(session))return forbidden();const ticket=await organisationTicketOrNull(db,session,id);if(!ticket)return notFound('Ticket');const [m,a,h]=await Promise.all([db.prepare(`SELECT m.*,u.display_name author_name FROM platform_ticket_messages m LEFT JOIN users u ON u.id=m.author_user_id WHERE m.ticket_id=? AND m.message_type!='internal_note' ORDER BY m.created_at`).bind(id).all(),db.prepare(`SELECT id,file_name,mime_type,size_bytes,created_at AS uploaded_at FROM platform_ticket_attachments WHERE ticket_id=? ORDER BY created_at`).bind(id).all(),db.prepare(`SELECT h.*,u.display_name changed_name FROM platform_ticket_status_history h LEFT JOIN users u ON u.id=h.changed_by WHERE h.ticket_id=? ORDER BY h.changed_at`).bind(id).all()]);return json({ticket,messages:m.results||[],attachments:a.results||[],history:h.results||[]})}
