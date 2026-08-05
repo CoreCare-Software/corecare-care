@@ -9,9 +9,9 @@ import { LAUNCH_GOVERNANCE_DOMAINS, deriveLaunchDomainStatus, deriveOverallLaunc
 import { requestPlatformSupportTicket, requestPlatformTransactionalEmail } from './platform-email.js';
 import { protectResponse, recordComplianceMutation } from './compliance-audit.js';
 
-/** CoreCare Care 1.38.0 - transactional security and support email */
-const VERSION = "1.38.0";
-const RELEASE = "CoreCare Care 1.38.0 - transactional security and support email";
+/** CoreCare Care 1.38.1 - Owner Platform custom-domain routing */
+const VERSION = "1.38.1";
+const RELEASE = "CoreCare Care 1.38.1 - Owner Platform custom-domain routing";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;

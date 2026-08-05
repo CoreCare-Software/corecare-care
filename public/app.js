@@ -5,7 +5,7 @@ function setText(selector, value) { const node = $(selector); if (node) node.tex
 const loginView = $('#login-view');
 const appView = $('#app-view');
 const APP_EDITION = 'care';
-const PLATFORM_URL = 'https://platform.corecare.co.uk';
+const PLATFORM_URL = 'https://owner.corecaresystems.co.uk';
 const loginForm = $('#login-form');
 const loginError = $('#login-error');
 const sidebar = $('.sidebar');
@@ -245,7 +245,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.38.0';
+const CORECARE_FALLBACK_VERSION = '1.38.1';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;

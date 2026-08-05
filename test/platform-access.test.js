@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { exchangePlatformAccess, platformOrigin } from '../src/platform-access.js';
+
+test('Owner Portal launches through the protected production custom domain', () => {
+  const browserSource = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(browserSource, /const PLATFORM_URL = 'https:\/\/owner\.corecaresystems\.co\.uk';/);
+  assert.doesNotMatch(browserSource, /https:\/\/platform\.corecare\.co\.uk/);
+});
 
 test('Platform origin accepts HTTPS and local development only', () => {
   assert.equal(platformOrigin({ PLATFORM_ORIGIN: 'https://platform.corecare.example/path' }), 'https://platform.corecare.example');
