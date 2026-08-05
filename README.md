@@ -1,6 +1,8 @@
 # CoreCare Care
 
-CoreCare Care is a multi-tenant care-management web application deployed as a Cloudflare Worker with static browser assets and a Cloudflare D1 database. The current package version is `1.35.0`.
+CoreCare Care is a multi-tenant care-management web application deployed as a Cloudflare Worker with static browser assets and a Cloudflare D1 database. The current package version is `1.36.0`.
+
+Release 1.36.0 connects account onboarding to CoreCare Platform's shared transactional-email service. New staff, organisation users and family users receive an automatic branded invitation with the correct Care sign-in address and a temporary password; password resets and password changes produce the corresponding security email. Temporary passwords remain one-time handover data and are never written to email audit records.
 
 > Release boundary: version 1.35.0 provides a controlled workflow for data-protection, clinical-safety, recovery, continuity, training and production-acceptance evidence. CoreCare cannot provide those organisational approvals; authorised people must review and sign each domain in Settings → Launch governance before real personal, medical or care data is entered.
 
@@ -15,6 +17,7 @@ CoreCare Care is a multi-tenant care-management web application deployed as a Cl
 - Structured, versioned care plans with review and manager approval workflows.
 - Medication profiles, eMAR administration, stock history, and body-map records.
 - A self-contained Family Portal for creating family logins, linking relatives to clients, controlling shared record types, resetting temporary passwords, and disabling access.
+- Automatic account invitations and password-security emails for Care staff, organisation users and family users through the central CoreCare Platform delivery service.
 - Organisation settings, branding, security administration, and CoreCare Connect support tickets; family logins are managed in the Family Portal rather than general user settings.
 - Platform administration APIs retained for the separate CoreCare Platform application.
 

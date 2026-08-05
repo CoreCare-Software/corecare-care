@@ -17,11 +17,11 @@ async function upsertInitialUser(env, organisation, branchId, input) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 12 || password.length > 128) return { error: json({ error: { code: 'INVALID_INITIAL_USER', message: 'A valid owner email and secure password are required.' } }, 400) };
   const secured = await passwordRecord(password), existing = await env.DB.prepare('SELECT id FROM users WHERE organisation_id=?1 AND lower(email)=lower(?2) LIMIT 1').bind(organisation.id, email).first();
   if (existing) {
-    await env.DB.prepare(`UPDATE users SET display_name=?1,role='owner',access_level='organisation_owner',home_branch_id=?2,password_hash=?3,password_salt=?4,password_iterations=?5,status='active',must_change_password=0,password_changed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?6`).bind(name, branchId, secured.hash, secured.salt, PASSWORD_ITERATIONS, existing.id).run();
+    await env.DB.prepare(`UPDATE users SET display_name=?1,role='owner',access_level='organisation_owner',home_branch_id=?2,password_hash=?3,password_salt=?4,password_iterations=?5,status='active',must_change_password=1,password_changed_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?6`).bind(name, branchId, secured.hash, secured.salt, PASSWORD_ITERATIONS, existing.id).run();
     return { id: existing.id, email, created: false };
   }
   const id = crypto.randomUUID();
-  await env.DB.prepare(`INSERT INTO users(id,organisation_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password,password_changed_at) VALUES(?1,?2,?3,?4,'owner','organisation_owner',?5,?6,?7,?8,'active',0,CURRENT_TIMESTAMP)`).bind(id, organisation.id, email, name, branchId, secured.hash, secured.salt, PASSWORD_ITERATIONS).run();
+  await env.DB.prepare(`INSERT INTO users(id,organisation_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password,password_changed_at) VALUES(?1,?2,?3,?4,'owner','organisation_owner',?5,?6,?7,?8,'active',1,NULL)`).bind(id, organisation.id, email, name, branchId, secured.hash, secured.salt, PASSWORD_ITERATIONS).run();
   return { id, email, created: true };
 }
 

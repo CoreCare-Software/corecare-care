@@ -5,10 +5,11 @@ import { carePlanReadiness, validateAdministration, validateBodyMap, validateMed
 import { assessRotaPublication, calculateLiveDashboard, normaliseFamilyAccess } from './operational-workspaces.js';
 import { calculateFinanceMetrics, calculateReportSummary, incidentReference, normaliseFinanceTransaction, normaliseIncidentReport, normaliseIncidentReview, normaliseInvoice, validateFinanceSettings } from './business-workspaces.js';
 import { LAUNCH_GOVERNANCE_DOMAINS, deriveLaunchDomainStatus, deriveOverallLaunchStatus, launchGovernanceDomain, validateLaunchSignoff } from './launch-governance.js';
+import { requestPlatformTransactionalEmail } from './platform-email.js';
 
-/** CoreCare Care 1.35.0 — Controlled launch governance */
-const VERSION = "1.35.0";
-const RELEASE = "CoreCare Care 1.35.0 — Controlled launch governance";
+/** CoreCare Care 1.36.0 - automatic account email */
+const VERSION = "1.36.0";
+const RELEASE = "CoreCare Care 1.36.0 - automatic account email";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -41,7 +42,7 @@ export default {
           return json({ error: { code: 'SUPPORT_MODE_READ_ONLY', message: 'This Platform support session is read-only.' } }, 403);
         }
 
-        if (url.pathname === "/api/auth/change-password" && request.method === "POST") return changePassword(request, env.DB, session);
+        if (url.pathname === "/api/auth/change-password" && request.method === "POST") return changePassword(request, env, session);
         if (url.pathname === "/api/development/status") return developmentStatus(env, session);
         if (url.pathname === "/api/dashboard" && request.method === "GET") return await permitted(env.DB, session, "dashboard.view", () => dashboardSummary(env.DB, session));
         if (url.pathname === "/api/carer/dashboard" && request.method === "GET") return await permitted(env.DB, session, "visits.view", () => carerDashboard(env.DB, session));
@@ -208,22 +209,22 @@ export default {
         }
         if (url.pathname === "/api/family-access/accounts") {
           if (request.method === "GET") return await permitted(env.DB, session, "family_portal.manage", () => listFamilyAccounts(env.DB, session));
-          if (request.method === "POST") return await permitted(env.DB, session, "family_portal.manage", () => createFamilyAccount(request, env.DB, session));
+          if (request.method === "POST") return await permitted(env.DB, session, "family_portal.manage", () => createFamilyAccount(request, env, session));
           return methodNotAllowed(["GET", "POST"]);
         }
         const familyAccountMatch = url.pathname.match(/^\/api\/family-access\/accounts\/([^/]+)$/);
-        if (familyAccountMatch && request.method === "PUT") return await permitted(env.DB, session, "family_portal.manage", () => updateFamilyAccount(request, env.DB, session, decodeURIComponent(familyAccountMatch[1])));
+        if (familyAccountMatch && request.method === "PUT") return await permitted(env.DB, session, "family_portal.manage", () => updateFamilyAccount(request, env, session, decodeURIComponent(familyAccountMatch[1])));
         const familyAccessMatch = url.pathname.match(/^\/api\/family-access\/([^/]+)$/);
         if (familyAccessMatch && request.method === "DELETE") return await permitted(env.DB, session, "family_portal.manage", () => revokeFamilyAccess(env.DB, session, decodeURIComponent(familyAccessMatch[1])));
         if (url.pathname === "/api/staff") {
           if (request.method === "GET") return await permitted(env.DB, session, "staff.view", () => listStaff(env.DB, session, url));
-          if (request.method === "POST") return await permitted(env.DB, session, "staff.create", () => createStaff(request, env.DB, session));
+          if (request.method === "POST") return await permitted(env.DB, session, "staff.create", () => createStaff(request, env, session));
           return methodNotAllowed(["GET", "POST"]);
         }
         const staffMatch = url.pathname.match(/^\/api\/staff\/([^/]+)$/);
         if (staffMatch) {
           const id = decodeURIComponent(staffMatch[1]);
-          if (request.method === "PUT") return await permitted(env.DB, session, "staff.edit", () => updateStaff(request, env.DB, session, id));
+          if (request.method === "PUT") return await permitted(env.DB, session, "staff.edit", () => updateStaff(request, env, session, id));
           return methodNotAllowed(["PUT"]);
         }
         const clientCareMatch = url.pathname.match(/^\/api\/clients\/([^/]+)\/(care-plans|risks|documents)$/);
@@ -282,7 +283,7 @@ export default {
         }
         if (url.pathname === "/api/users") {
           if (request.method === "GET") return listUsers(env.DB, session);
-          if (request.method === "POST") return createUser(request, env.DB, session);
+          if (request.method === "POST") return createUser(request, env, session);
           return methodNotAllowed(["GET", "POST"]);
         }
         const userMatch = url.pathname.match(/^\/api\/users\/([^/]+)$/);
@@ -473,7 +474,8 @@ async function requireSession(request, db) {
   return row;
 }
 
-async function changePassword(request, db, session) {
+async function changePassword(request, env, session) {
+  const db = env.DB;
   const input = await readJson(request);
   const current = String(input.currentPassword || "");
   const next = String(input.newPassword || "");
@@ -490,7 +492,8 @@ async function changePassword(request, db, session) {
     db.prepare("DELETE FROM sessions WHERE user_id=? AND id<>?").bind(session.user_id, session.session_id),
     auditStatement(db, session.organisation_id, session.user_id, "user.password_changed", "user", session.user_id, {})
   ]);
-  return json({ ok: true });
+  const emailDelivery=await sendCareAccountEmail(env,session,{templateKey:'password_changed',sourceEventId:`care-user:${session.user_id}:password-changed:${crypto.randomUUID()}`,userId:session.user_id,recipientEmail:session.email,recipientName:session.display_name,accessLabel:session.access_level.replaceAll('_',' '),actionTime:new Date().toISOString()});
+  return json({ ok: true, emailDelivery });
 }
 
 function branchRestricted(session){ return !session.is_platform_user && ["branch_manager","senior_carer","carer","office_staff"].includes(session.access_level) && Boolean(session.active_branch_id || session.home_branch_id); }
@@ -1331,7 +1334,8 @@ async function listStaff(db, session, url) {
   const result = await db.prepare(`SELECT ${STAFF_COLUMNS} FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.organisation_id=? ${branchRestricted(session)?"AND s.branch_id=?":""} ${includeInactive ? "" : "AND s.status='Active'"} ORDER BY s.last_name COLLATE NOCASE,s.first_name COLLATE NOCASE`).bind(session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).all();
   return json({ staff: result.results.map(toStaff) });
 }
-async function createStaff(request, db, session) {
+async function createStaff(request, env, session) {
+  const db=env.DB;
   if (!hasRole(session,["owner","manager"])) return forbidden();
   const input = await readJson(request); const v = validateStaff(input); if (v.error) return json({error:{code:"VALIDATION_ERROR",message:v.error}},400);
   const createLogin = input.createLogin === true || clean(input.createLogin)==='on' || clean(input.createLogin)==='true';
@@ -1339,23 +1343,26 @@ async function createStaff(request, db, session) {
   const accessLevel = clean(input.loginAccessLevel)||'carer';
   const temporaryPassword = String(input.temporaryPassword||'');
   if(createLogin && (!loginEmail || !allowedAccessLevels().includes(accessLevel) || !strongTemporaryPassword(temporaryPassword))) return json({error:{code:'VALIDATION_ERROR',message:'Enter a login email, valid access level and temporary password of at least 12 characters with upper-case, lower-case and a number.'}},400);
-  const id=crypto.randomUUID(), statements=[];
+  const id=crypto.randomUUID(), statements=[];let invitation=null;
   statements.push(db.prepare(`INSERT INTO staff (id,organisation_id,branch_id,first_name,last_name,preferred_name,job_title,employment_type,phone,email,start_date,status,dbs_expiry,training_expiry,notes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,activeBranch(session),...v.values));
   if(createLogin){
     const secured=await hashPassword(temporaryPassword), userId=crypto.randomUUID(), displayName=`${v.values[0]} ${v.values[1]}`.trim();
     statements.push(db.prepare(`INSERT INTO users (id,organisation_id,staff_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',1)`).bind(userId,session.organisation_id,id,loginEmail,displayName,legacyRole(accessLevel),accessLevel,activeBranch(session),secured.hash,secured.salt,PASSWORD_ITERATIONS));
     statements.push(auditStatement(db,session.organisation_id,session.user_id,'staff.login_created','user',userId,{staffId:id,email:loginEmail,accessLevel}));
+    invitation={userId,recipientEmail:loginEmail,recipientName:displayName,accessLabel:accessLevel.replaceAll('_',' '),temporaryPassword};
   }
   statements.push(auditStatement(db,session.organisation_id,session.user_id,"staff.created","staff",id,{name:`${v.values[0]} ${v.values[1]}`,loginCreated:createLogin}));
   try{await db.batch(statements);}catch(error){if(String(error).includes('UNIQUE'))return json({error:{code:'LOGIN_EXISTS',message:'That login email is already in use, or this staff member already has a login.'}},409);throw error;}
-  const row=await db.prepare(`SELECT ${STAFF_COLUMNS} FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.id=? AND s.organisation_id=?`).bind(id,session.organisation_id).first(); return json({staff:toStaff(row)},201);
+  const emailDelivery=invitation?await sendCareAccountEmail(env,session,{templateKey:'account_invitation',sourceEventId:`care-staff:${id}:login-created`,...invitation}):null;
+  const row=await db.prepare(`SELECT ${STAFF_COLUMNS} FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.id=? AND s.organisation_id=?`).bind(id,session.organisation_id).first(); return json({staff:toStaff(row),emailDelivery},201);
 }
-async function updateStaff(request, db, session, id) {
+async function updateStaff(request, env, session, id) {
+  const db=env.DB;
   if (!hasRole(session,["owner","manager"])) return forbidden();
   const input=await readJson(request); const v=validateStaff(input); if(v.error) return json({error:{code:"VALIDATION_ERROR",message:v.error}},400);
   const existing=await db.prepare(`SELECT s.id,u.id login_user_id FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.id=? AND s.organisation_id=?`).bind(id,session.organisation_id).first();
   if(!existing)return json({error:{code:'STAFF_NOT_FOUND',message:'Staff record not found.'}},404);
-  const statements=[db.prepare(`UPDATE staff SET first_name=?,last_name=?,preferred_name=?,job_title=?,employment_type=?,phone=?,email=?,start_date=?,status=?,dbs_expiry=?,training_expiry=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(...v.values,id,session.organisation_id)];
+  const statements=[db.prepare(`UPDATE staff SET first_name=?,last_name=?,preferred_name=?,job_title=?,employment_type=?,phone=?,email=?,start_date=?,status=?,dbs_expiry=?,training_expiry=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(...v.values,id,session.organisation_id)];let invitation=null;
   const createLogin=input.createLogin===true||clean(input.createLogin)==='on'||clean(input.createLogin)==='true';
   if(createLogin&&!existing.login_user_id){
     const loginEmail=clean(input.loginEmail||input.email).toLowerCase(),accessLevel=clean(input.loginAccessLevel)||'carer',temporaryPassword=String(input.temporaryPassword||'');
@@ -1363,6 +1370,7 @@ async function updateStaff(request, db, session, id) {
     const secured=await hashPassword(temporaryPassword),userId=crypto.randomUUID(),displayName=`${v.values[0]} ${v.values[1]}`.trim();
     statements.push(db.prepare(`INSERT INTO users (id,organisation_id,staff_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',1)`).bind(userId,session.organisation_id,id,loginEmail,displayName,legacyRole(accessLevel),accessLevel,activeBranch(session),secured.hash,secured.salt,PASSWORD_ITERATIONS));
     statements.push(auditStatement(db,session.organisation_id,session.user_id,'staff.login_created','user',userId,{staffId:id,email:loginEmail,accessLevel}));
+    invitation={userId,recipientEmail:loginEmail,recipientName:displayName,accessLabel:accessLevel.replaceAll('_',' '),temporaryPassword};
   } else if(existing.login_user_id){
     const loginStatus=v.values[8]==='Inactive'?'disabled':(clean(input.loginStatus)||'active');
     const accessLevel=allowedAccessLevels().includes(clean(input.loginAccessLevel))?clean(input.loginAccessLevel):null;
@@ -1372,7 +1380,8 @@ async function updateStaff(request, db, session, id) {
   }
   statements.push(auditStatement(db,session.organisation_id,session.user_id,"staff.updated","staff",id,{status:v.values[8]}));
   try{await db.batch(statements);}catch(error){if(String(error).includes('UNIQUE'))return json({error:{code:'LOGIN_EXISTS',message:'That login email is already in use, or this staff member already has a login.'}},409);throw error;}
-  const row=await db.prepare(`SELECT ${STAFF_COLUMNS} FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.id=? AND s.organisation_id=?`).bind(id,session.organisation_id).first(); return json({staff:toStaff(row)});
+  const emailDelivery=invitation?await sendCareAccountEmail(env,session,{templateKey:'account_invitation',sourceEventId:`care-staff:${id}:login-created`,...invitation}):null;
+  const row=await db.prepare(`SELECT ${STAFF_COLUMNS} FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.id=? AND s.organisation_id=?`).bind(id,session.organisation_id).first(); return json({staff:toStaff(row),emailDelivery});
 }
 function validateStaff(input){
   const values=[clean(input.firstName),clean(input.lastName),clean(input.preferredName),clean(input.jobTitle)||"Carer",clean(input.employmentType)||"Employee",clean(input.phone),clean(input.email),clean(input.startDate),clean(input.status)||"Active",clean(input.dbsExpiry),clean(input.trainingExpiry),clean(input.notes)];
@@ -1505,7 +1514,8 @@ async function listUsers(db, session) {
   return json({ users: result.results.map(toUser) });
 }
 
-async function createUser(request, db, session) {
+async function createUser(request, env, session) {
+  const db=env.DB;
   if (!await userHasPermission(db, session, "security.users.manage")) return forbidden();
   const input = await readJson(request);
   const email = clean(input.email).toLowerCase();
@@ -1528,7 +1538,8 @@ async function createUser(request, db, session) {
     if (String(error).includes("UNIQUE")) return json({ error: { code: "EMAIL_EXISTS", message: "A user with that email already exists." } }, 409);
     throw error;
   }
-  return json({ user: { id, email, displayName: name, role, accessLevel, branchId, status: "active", mustChangePassword: true } }, 201);
+  const emailDelivery=await sendCareAccountEmail(env,session,{templateKey:'account_invitation',sourceEventId:`care-user:${id}:created`,userId:id,recipientEmail:email,recipientName:name,accessLabel:accessLevel.replaceAll('_',' '),temporaryPassword:password});
+  return json({ user: { id, email, displayName: name, role, accessLevel, branchId, status: "active", mustChangePassword: true },emailDelivery }, 201);
 }
 
 async function updateUser(request, db, session, id) {
@@ -1596,6 +1607,11 @@ function databaseTimestampMs(value) { const text=clean(value);return new Date(/^
 async function readJson(request) { try { return await request.json(); } catch { return {}; } }
 async function audit(db, organisationId, userId, action, entityType, entityId, detail) { await auditStatement(db, organisationId, userId, action, entityType, entityId, detail).run(); }
 function auditStatement(db, organisationId, userId, action, entityType, entityId, detail) { return db.prepare("INSERT INTO audit_log (id,organisation_id,user_id,action,entity_type,entity_id,detail_json) VALUES (?,?,?,?,?,?,?)").bind(crypto.randomUUID(), organisationId, userId || null, action, entityType, entityId || null, JSON.stringify(detail || {})); }
+async function sendCareAccountEmail(env,session,details){
+  const result=await requestPlatformTransactionalEmail(env,{...details,organisationId:session.organisation_id});
+  await auditStatement(env.DB,session.organisation_id,session.user_id,`email.${clean(details.templateKey)}.${clean(result.status)||'failed'}`,'user',details.userId||null,{recipientEmail:clean(details.recipientEmail).toLowerCase(),sourceEventId:clean(details.sourceEventId),status:result.status,error:result.error||null}).run();
+  return {status:result.status||'failed',delivery:result.delivery||null,error:result.error||null};
+}
 function randomToken() { const bytes = crypto.getRandomValues(new Uint8Array(32)); return base64(bytes).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", ""); }
 function cookieValue(request, name) { const match = request.headers.get("cookie")?.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`)); return match ? decodeURIComponent(match[1]) : ""; }
 function sessionCookie(token, expires) { return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict; Expires=${expires.toUTCString()}`; }
@@ -2103,7 +2119,8 @@ async function listFamilyAccounts(db,session){
   return json({accounts:(r.results||[]).map(toUser)});
 }
 function strongTemporaryPassword(password){return password.length>=12&&/[A-Z]/.test(password)&&/[a-z]/.test(password)&&/[0-9]/.test(password);}
-async function createFamilyAccount(request,db,session){
+async function createFamilyAccount(request,env,session){
+  const db=env.DB;
   const input=await readJson(request),email=clean(input.email).toLowerCase(),name=clean(input.displayName),password=String(input.temporaryPassword||''),clientId=clean(input.clientId),flags=normaliseFamilyAccess(input),consentBasis=clean(input.consentBasis).slice(0,1000);
   if(!name||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!strongTemporaryPassword(password)||consentBasis.length<8)return json({error:{code:'VALIDATION_ERROR',message:'Enter a name, valid email, strong temporary password and a clear authority or consent basis.'}},400);
   const restricted=branchRestricted(session),branch=activeBranch(session);
@@ -2118,9 +2135,11 @@ async function createFamilyAccount(request,db,session){
       auditStatement(db,session.organisation_id,session.user_id,'family.access_granted','family_client_access',accessId,{userId,clientId:client.id,...flags,consentBasisRecorded:true})
     ]);
   }catch(error){if(String(error).includes('UNIQUE'))return json({error:{code:'EMAIL_EXISTS',message:'A user with that email already exists.'}},409);throw error;}
-  return json({account:{id:userId,email,displayName:name,role,accessLevel:'family',branchId:client.branch_id||null,status:'active',mustChangePassword:true},access:{id:accessId,userId,clientId:client.id,consentBasis,...flags}},201);
+  const emailDelivery=await sendCareAccountEmail(env,session,{templateKey:'account_invitation',sourceEventId:`care-family:${userId}:created`,userId,recipientEmail:email,recipientName:name,accessLabel:'Family portal',temporaryPassword:password});
+  return json({account:{id:userId,email,displayName:name,role,accessLevel:'family',branchId:client.branch_id||null,status:'active',mustChangePassword:true},access:{id:accessId,userId,clientId:client.id,consentBasis,...flags},emailDelivery},201);
 }
-async function updateFamilyAccount(request,db,session,id){
+async function updateFamilyAccount(request,env,session,id){
+  const db=env.DB;
   const input=await readJson(request),name=clean(input.displayName),status=clean(input.status),password=String(input.temporaryPassword||''),restricted=branchRestricted(session),branch=activeBranch(session);
   if(!name||!['active','disabled'].includes(status)||(password&&!strongTemporaryPassword(password)))return json({error:{code:'VALIDATION_ERROR',message:'Enter a name and valid status. A new temporary password must have at least 12 characters with upper-case, lower-case and a number.'}},400);
   const account=await db.prepare(`SELECT u.id,u.email FROM users u WHERE u.id=? AND u.organisation_id=? AND u.access_level='family' ${restricted?'AND (u.home_branch_id=? OR EXISTS (SELECT 1 FROM family_client_access f JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.user_id=u.id AND f.organisation_id=u.organisation_id AND c.branch_id=?))':''}`).bind(id,session.organisation_id,...(restricted?[branch,branch]:[])).first();
@@ -2130,7 +2149,9 @@ async function updateFamilyAccount(request,db,session,id){
   else statements.push(db.prepare("UPDATE users SET display_name=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND access_level='family'").bind(name,status,id,session.organisation_id));
   if(status==='disabled'||password)statements.push(db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id));
   statements.push(auditStatement(db,session.organisation_id,session.user_id,'family.account_updated','user',id,{email:account.email,status,passwordReset:Boolean(password)}));
-  await db.batch(statements);return json({ok:true});
+  await db.batch(statements);
+  const emailDelivery=password?await sendCareAccountEmail(env,session,{templateKey:'password_reset',sourceEventId:`care-family:${id}:password-reset:${crypto.randomUUID()}`,userId:id,recipientEmail:account.email,recipientName:name,accessLabel:'Family portal',temporaryPassword:password}):null;
+  return json({ok:true,emailDelivery});
 }
 async function saveFamilyAccess(request,db,session){
   const i=await readJson(request),userId=clean(i.userId),clientId=clean(i.clientId),flags=normaliseFamilyAccess(i),consentBasis=clean(i.consentBasis).slice(0,1000);

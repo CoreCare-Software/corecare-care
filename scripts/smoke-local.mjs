@@ -17,8 +17,8 @@ async function request(path, { method = 'GET', body, cookie = ownerCookie, expec
 
 const health = (await request('/api/health')).payload;
 assert.equal(health.ok, true);
-assert.equal(health.version, '1.35.0');
-assert.equal((await request('/api/version')).payload.version, '1.35.0');
+assert.equal(health.version, '1.36.0');
+assert.equal((await request('/api/version')).payload.version, '1.36.0');
 const ownerLogin = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json', origin: base }, body: JSON.stringify({ email: 'admin@demo.corecare', password: 'ChangeMe!2026' }) });
 assert.equal(ownerLogin.status, 200, `Owner login failed: ${await ownerLogin.text()}`);
 ownerCookie = (ownerLogin.headers.get('set-cookie') || '').split(';')[0];
