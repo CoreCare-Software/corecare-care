@@ -2841,7 +2841,7 @@ async function updateLaunchGovernanceSignoff(request,db,session,domainKey){
   return json({ok:true,status:'approved'});
 }
 
-function canManageSecurity(session){return Boolean(session.is_platform_user)||session.access_level==='organisation_owner'||session.role==='owner';}
+function canManageSecurity(session){return Boolean(session.is_platform_user)||session.access_level==='organisation_owner'||(!session.access_level&&session.role==='owner');}
 async function permissionFacts(db,session){
   if(!session._permissionFacts){
     session._permissionFacts=Promise.all([
@@ -2889,7 +2889,7 @@ async function accessGovernance(db,session){
     FROM users u
     LEFT JOIN user_access_reviews r ON r.id=(SELECT latest.id FROM user_access_reviews latest WHERE latest.organisation_id=u.organisation_id AND latest.user_id=u.id ORDER BY latest.reviewed_at DESC,latest.id DESC LIMIT 1)
     LEFT JOIN users reviewer ON reviewer.id=r.reviewer_id AND reviewer.organisation_id=r.organisation_id
-    WHERE u.organisation_id=? ${scoped?'AND u.home_branch_id=?':''}
+    WHERE u.organisation_id=? AND u.access_level!='family' ${scoped?'AND u.home_branch_id=?':''}
     ORDER BY u.display_name COLLATE NOCASE`).bind(session.organisation_id,...(scoped?[activeBranch(session)]:[])).all();
   const users=(rows.results||[]).map(row=>({id:row.id,displayName:row.display_name,email:row.email,accessLevel:row.access_level,status:row.status,branchId:row.home_branch_id||null,lastLoginAt:row.last_login_at||null,review:{outcome:row.review_outcome||null,summary:row.review_summary||'',reviewedAt:row.reviewed_at||null,nextReviewDate:row.next_review_date||null,reviewerName:row.reviewer_name||'',state:accessReviewState(row.next_review_date)}}));
   return json({profiles:publicStandardRoleProfiles(),users});

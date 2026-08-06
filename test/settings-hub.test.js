@@ -33,7 +33,9 @@ test('personal password and rota travel settings live in their workflow context'
 
 test('settings loading and saving protect partial work', () => {
   assert.equal(app.includes("Promise.allSettled([api('/api/organisation/profile')"), true);
-  assert.equal(app.includes("Promise.allSettled([api('/api/security/overview')"), true);
+  assert.equal(app.includes("Promise.allSettled([canSeeAccess?api('/api/security/overview')"), true);
+  assert.match(app, /api\('\/api\/security\/access-governance'\)/);
+  assert.match(app, /api\('\/api\/security\/access-reviews'/);
   assert.match(app, /function hasUnsavedSettings()/);
   assert.match(app, /beforeunload/);
   assert.match(app, /data-dirty-for="organisation-form"/);
