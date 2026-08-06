@@ -257,7 +257,7 @@ function updateIdentity() {
   if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':currentUser?.accessLevel==='area_manager'?'Area management workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '2.0.1';
+const CORECARE_FALLBACK_VERSION = '2.0.2';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -2131,9 +2131,15 @@ function populateBranchSelect(){
 }
 function renderBranches(){
   const list=$('#branch-list'); if(!list)return;
-  list.innerHTML=branches.map(b=>`<article class="record-card"><div class="record-card-heading"><div><p class="eyebrow">${escapeHtml(b.code||'Branch')}</p><h3>${escapeHtml(b.name)}</h3></div><span class="badge ${b.status==='active'?'success':'neutral'}">${escapeHtml(b.status)}</span></div><p>${escapeHtml(b.address||'No address recorded')}</p><small>${escapeHtml(b.phone||'')} ${escapeHtml(b.email||'')}</small>${hasAccess('branches.manage')?`<div class="record-card-actions"><button type="button" class="secondary-button compact" data-edit-branch="${escapeHtml(b.id)}">Edit branch</button></div>`:''}</article>`).join('')||'<div class="empty-state"><strong>No branches found</strong></div>';
+  const card=(b,archived=false)=>`<article class="record-card ${archived?'archived-record':''}"><div class="record-card-heading"><div><p class="eyebrow">${escapeHtml(b.code||'Branch')}</p><h3>${escapeHtml(b.name)}</h3></div><span class="badge ${archived?'neutral':'success'}">${archived?'Archived':'Active'}</span></div><p>${escapeHtml(b.address||'No address recorded')}</p><small>${escapeHtml(b.phone||'')} ${escapeHtml(b.email||'')}</small>${hasAccess('branches.manage')?`<div class="record-card-actions"><button type="button" class="secondary-button compact" data-edit-branch="${escapeHtml(b.id)}">Edit branch</button><button type="button" class="secondary-button compact ${archived?'':'danger-text'}" data-${archived?'restore':'archive'}-branch="${escapeHtml(b.id)}">${archived?'Restore branch':'Archive branch'}</button></div>`:''}</article>`;
+  const active=branches.filter(b=>b.status==='active'&&!b.archived_at),archived=branches.filter(b=>b.status!=='active'||b.archived_at);
+  list.innerHTML=(active.map(b=>card(b)).join('')||'<div class="empty-state"><strong>No active branches</strong><span>Create or restore a branch to continue.</span></div>')+(archived.length?`<details class="archived-records wide" open><summary>Archived branches (${archived.length})</summary><div class="record-card-grid">${archived.map(b=>card(b,true)).join('')}</div></details>`:'');
   $$('[data-edit-branch]').forEach(button=>button.addEventListener('click',()=>openBranchDialog(button.dataset.editBranch)));
+  $$('[data-archive-branch]').forEach(button=>button.addEventListener('click',()=>changeBranchLifecycle(button.dataset.archiveBranch,'archive')));
+  $$('[data-restore-branch]').forEach(button=>button.addEventListener('click',()=>changeBranchLifecycle(button.dataset.restoreBranch,'restore')));
 }
+async function refreshBranches(){const payload=await api('/api/branches');branches=payload.branches||[];renderBranches();populateBranchSelect();}
+async function changeBranchLifecycle(id,action){const branch=branches.find(item=>item.id===id);if(!branch)return;if(action==='archive'&&!confirm(`Archive ${branch.name}? Historical records will be retained. Active users, clients, staff and future visits must be reassigned first.`))return;try{await api(`/api/branches/${encodeURIComponent(id)}/${action}`,{method:'POST',body:'{}'});await refreshBranches();showSuccessToast?.(action==='archive'?'Branch archived.':'Branch restored.');}catch(error){showToastError?.(error);alert(error.message);}}
 async function loadOrganisations(){const p=await api('/api/platform/organisations');organisations=p.organisations||[];renderOrganisations();}
 function renderOrganisations(){const list=$('#organisation-admin-list');if(!list)return;list.innerHTML=organisations.map(o=>`<article class="record-card"><div class="record-card-heading"><div><p class="eyebrow">${escapeHtml(o.subscription_plan||'development')}</p><h3>${escapeHtml(o.name)}</h3></div><span class="badge ${o.status==='active'?'success':'danger'}">${escapeHtml(o.status)}</span></div><p>${o.branch_count||0} branches · ${o.user_count||0} users · ${o.client_count||0} clients</p><button class="secondary-button" data-switch-org="${escapeHtml(o.id)}">Open organisation</button></article>`).join('');$$('[data-switch-org]').forEach(b=>b.addEventListener('click',async()=>{if(!confirm('Switch your support view to this organisation?'))return;await api('/api/platform/switch-organisation',{method:'POST',body:JSON.stringify({organisationId:b.dataset.switchOrg})});location.reload();}));}
 const branchDialog=$('#branch-dialog'),branchForm=$('#branch-form'),organisationDialog=$('#organisation-dialog'),organisationAdminForm=$('#organisation-admin-form');
@@ -2148,14 +2154,13 @@ function openBranchDialog(branchId=''){
   branchForm.elements.address.value=branch?.address||'';
   branchForm.elements.phone.value=branch?.phone||'';
   branchForm.elements.email.value=branch?.email||'';
-  branchForm.elements.status.value=branch?.status||'active';
   $('#branch-dialog-title').textContent=branch?'Edit branch':'Add branch';
   $('#branch-submit').textContent=branch?'Save changes':'Create branch';
   branchDialog.showModal();
 }
 $('#add-branch')?.addEventListener('click',()=>openBranchDialog());
 $('#close-branch-dialog')?.addEventListener('click',()=>branchDialog.close());$('#cancel-branch')?.addEventListener('click',()=>branchDialog.close());
-branchForm?.addEventListener('submit',async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(branchForm)),id=data.id;delete data.id;try{await api(id?`/api/branches/${encodeURIComponent(id)}`:'/api/branches',{method:id?'PUT':'POST',body:JSON.stringify(data)});branchDialog.close();const p=await api('/api/branches');branches=p.branches||[];renderBranches();populateBranchSelect();}catch(x){$('#branch-form-error').textContent=x.message;$('#branch-form-error').hidden=false;}});
+branchForm?.addEventListener('submit',async e=>{e.preventDefault();const data=Object.fromEntries(new FormData(branchForm)),id=data.id;delete data.id;try{await api(id?`/api/branches/${encodeURIComponent(id)}`:'/api/branches',{method:id?'PUT':'POST',body:JSON.stringify(data)});branchDialog.close();await refreshBranches();}catch(x){$('#branch-form-error').textContent=x.message;$('#branch-form-error').hidden=false;}});
 $('#add-organisation')?.addEventListener('click',()=>{organisationAdminForm.reset();$('#organisation-admin-error').hidden=true;organisationDialog.showModal();});
 $('#close-organisation-dialog')?.addEventListener('click',()=>organisationDialog.close());$('#cancel-organisation')?.addEventListener('click',()=>organisationDialog.close());
 organisationAdminForm?.addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/platform/organisations',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(organisationAdminForm)))});organisationDialog.close();await loadOrganisations();}catch(x){$('#organisation-admin-error').textContent=x.message;$('#organisation-admin-error').hidden=false;}});

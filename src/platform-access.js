@@ -93,6 +93,8 @@ export async function exchangePlatformAccess(request, env) {
   }
   const organisation = await env.DB.prepare("SELECT id,name,status FROM organisations WHERE id=? AND status='active'").bind(organisationId).first();
   if (!organisation) return json('The linked Care organisation does not exist or is inactive.', 404);
+  const branch = await env.DB.prepare("SELECT id,name FROM branches WHERE organisation_id=? AND status='active' ORDER BY created_at,id LIMIT 1").bind(organisation.id).first();
+  if (!branch) return json('The linked Care organisation has no active branch.', 409);
   const user = await resolvePlatformSupportUser(env, result.platform_user);
   if (!user || (!user.is_platform_user && !['platform_owner', 'platform_admin'].includes(user.access_level))) return json('The Platform user could not be mapped into CoreCare Care.', 503);
 
@@ -103,7 +105,7 @@ export async function exchangePlatformAccess(request, env) {
   const ip = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || '';
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO sessions (id,user_id,organisation_id,active_branch_id,token_hash,expires_at,user_agent,ip_hint,switched_by_platform_user,support_mode,support_origin_organisation_id,support_started_at)
-      VALUES (?,?,?,?,?,?,?,?,1,1,?,CURRENT_TIMESTAMP)`).bind(sessionId,user.id,organisation.id,user.home_branch_id,await tokenHash(token),expires.toISOString(),String(request.headers.get('user-agent')||'').slice(0,250),ip.slice(0,100),user.organisation_id),
+      VALUES (?,?,?,?,?,?,?,?,1,1,?,CURRENT_TIMESTAMP)`).bind(sessionId,user.id,organisation.id,branch.id,await tokenHash(token),expires.toISOString(),String(request.headers.get('user-agent')||'').slice(0,250),ip.slice(0,100),user.organisation_id),
     env.DB.prepare('INSERT INTO support_sessions(id,organisation_id,platform_user_id,reason,access_mode,session_id) VALUES(?,?,?,?,?,?)').bind(result.support_session.id,organisation.id,user.id,result.support_session.reason,result.support_session.access_mode,sessionId),
     env.DB.prepare('INSERT INTO audit_log(id,organisation_id,user_id,action,entity_type,entity_id,detail_json) VALUES(?,?,?,?,?,?,?)').bind(crypto.randomUUID(),organisation.id,user.id,'platform.cross_product_access','support_session',result.support_session.id,JSON.stringify({productCode:PRODUCT_CODE,accessMode:result.support_session.access_mode,reason:result.support_session.reason})),
   ]);

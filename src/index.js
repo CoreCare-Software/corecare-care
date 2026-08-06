@@ -17,13 +17,16 @@ import { beginMfa, claimMfaChallenge, getMfaChallenge, mfaRequiredForUser, porta
 import { assessStaffAllocationDb, candidateStaff, enrichVisitsWithTeams, getVisitAllocations, publicationReadiness, refreshVisitExceptions, replaceVisitAssignments, syncAssignmentClockEvents } from './rota-safety.js';
 import { clientAssurance, createAllergy, createFeedback, createGovernanceRecord, createJourneyEvent, createMedicationSupply, createObservation, createQualityAction, createQualityAudit, qualityDashboard, saveCommunicationProfile, updateFeedback, updateQualityAction, updateQualityAudit } from './quality-assurance.js';
 import { assessPrnAdministration, medicationDueSlots, validateMedicationSafetyProfile } from './commercial-readiness.js';
+import { recordRuntimeError } from './runtime-errors.js';
 
-/** CoreCare Care 2.0.1 - Holiday-safe Rotas */
-const VERSION = "2.0.1";
-const RELEASE = "CoreCare Care 2.0.1 - Holiday-safe Rotas";
+/** CoreCare Care 2.0.2 - Support-safe onboarding and branch archive */
+const VERSION = "2.0.2";
+const RELEASE = "CoreCare Care 2.0.2 - Support-safe onboarding and branch archive";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
-const PASSWORD_ITERATIONS = 600000;
+// Cloudflare Workers rejects PBKDF2 iteration counts above this runtime ceiling.
+const CLOUDFLARE_WORKERS_PBKDF2_MAX_ITERATIONS = 100000;
+const PASSWORD_ITERATIONS = CLOUDFLARE_WORKERS_PBKDF2_MAX_ITERATIONS;
 const LOGIN_WINDOW_MINUTES = 15;
 const MAX_LOGIN_ATTEMPTS = 5;
 const MFA_PRIVILEGED_ROLES = ['organisation_owner','organisation_admin','area_manager','registered_manager','branch_manager','owner','manager'];
@@ -32,6 +35,7 @@ const application = {
   async fetch(request, env, context) {
     const url = new URL(request.url);
     const requestId = clean(request.headers.get("cf-ray")) || crypto.randomUUID();
+    let requestSession = null;
     try {
       if (url.pathname === "/platform-access" && request.method === "GET") return exchangePlatformAccess(request, env);
       if (url.pathname === "/api/health") {
@@ -57,6 +61,7 @@ const application = {
         if (!mutationOriginAllowed(request)) return json({ error: { code: "INVALID_ORIGIN", message: "This request did not originate from CoreCare." } }, 403);
         const session = await requireSession(request, env);
         if (session instanceof Response) return session;
+        requestSession = session;
         if(!session.support_mode&&!url.pathname.startsWith('/api/support/')){
           const access=session.subscription_access;
           if(!access||access.mode==='locked')return json({error:{code:'SUBSCRIPTION_REQUIRED',message:'This subscription needs attention. Contact your CoreCare owner or support to restore access.'}},402);
@@ -259,6 +264,8 @@ const application = {
           if (request.method === "GET") return await permitted(env.DB, session, "branches.view", () => listBranches(env.DB, session));
           if (request.method === "POST") return await permitted(env.DB, session, "branches.manage", () => createBranch(request, env.DB, session));
         }
+        const branchLifecycleMatch = url.pathname.match(/^\/api\/branches\/([^/]+)\/(archive|restore)$/);
+        if (branchLifecycleMatch && request.method === "POST") return await permitted(env.DB, session, "branches.manage", () => changeBranchLifecycle(env.DB, session, decodeURIComponent(branchLifecycleMatch[1]), branchLifecycleMatch[2]));
         const branchMatch = url.pathname.match(/^\/api\/branches\/([^/]+)$/);
         if (branchMatch && request.method === "PUT") return await permitted(env.DB, session, "branches.manage", () => updateBranch(request, env.DB, session, decodeURIComponent(branchMatch[1])));
         if (url.pathname === "/api/family/portal" && request.method === "GET") return familyPortal(env.DB, session);
@@ -410,7 +417,7 @@ const application = {
       }
       return env.ASSETS.fetch(request);
     } catch (error) {
-      console.error(JSON.stringify({ message: "CoreCare request failed", requestId, method: request.method, path: url.pathname, error: error instanceof Error ? error.message : String(error) }));
+      await recordRuntimeError(env,{requestId,productCode:'CARE',organisationId:requestSession?.organisation_id,userId:requestSession?.user_id,route:url.pathname,method:request.method,statusCode:500,error});
       return json({ error: { code: "INTERNAL_ERROR", message: "CoreCare could not complete the request.", requestId } }, 500, { "x-request-id": requestId });
     }
   }
@@ -499,7 +506,7 @@ async function runScheduledMaintenance(env, scheduledTime) {
   const results = await Promise.allSettled(work);
   const failures = results.filter(result => result.status === "rejected").map(result => String(result.reason));
   const event = { message: "scheduled maintenance completed", scheduledAt: startedAt, jobs: results.length, failures };
-  if (failures.length) console.error(JSON.stringify(event)); else console.log(JSON.stringify(event));
+  if (failures.length) await Promise.all(failures.map(error=>recordRuntimeError(env,{productCode:'CARE',route:'scheduled/hourly-maintenance',method:'CRON',error:new Error(error)}))); else console.log(JSON.stringify(event));
   return { ok: failures.length === 0, ...event };
 }
 
@@ -523,7 +530,7 @@ async function maybeRunScheduledMaintenance(env, scheduledTime = Date.now()) {
     await env.DB.prepare(`UPDATE system_maintenance_state
       SET last_completed_at=CURRENT_TIMESTAMP,status='failed',error_message=?,updated_at=CURRENT_TIMESTAMP
       WHERE job_key='hourly'`).bind(message).run().catch(() => null);
-    console.error(JSON.stringify({ message: "scheduled maintenance failed", error: message }));
+    await recordRuntimeError(env,{productCode:'CARE',route:'scheduled/hourly-maintenance',method:'CRON',error});
     return { ok: false, skipped: false, failures: [message] };
   }
 }
@@ -2194,7 +2201,7 @@ function cookieValue(request, name) { const match = request.headers.get("cookie"
 function sessionCookie(token, expires) { return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict; Expires=${expires.toUTCString()}`; }
 function expiredSessionCookie() { return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`; }
 async function hashPassword(password) { const salt = crypto.getRandomValues(new Uint8Array(16)); const hash = await derivePassword(password, salt, PASSWORD_ITERATIONS); return { salt: base64(salt), hash: base64(hash) }; }
-async function verifyPassword(password, saltBase64, expectedBase64, iterations) { const rounds=Number(iterations)||100000;if(rounds<100000||rounds>2000000)return false;const actual = await derivePassword(password, fromBase64(saltBase64), rounds); return timingSafeEqual(actual, fromBase64(expectedBase64)); }
+async function verifyPassword(password, saltBase64, expectedBase64, iterations) { const rounds=Number(iterations)||PASSWORD_ITERATIONS;if(rounds<100000||rounds>CLOUDFLARE_WORKERS_PBKDF2_MAX_ITERATIONS)return false;const actual = await derivePassword(password, fromBase64(saltBase64), rounds); return timingSafeEqual(actual, fromBase64(expectedBase64)); }
 async function derivePassword(password, salt, iterations) { const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]); const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, key, 256); return new Uint8Array(bits); }
 async function sha256Base64(value) { const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)); return base64(new Uint8Array(digest)); }
 function timingSafeEqual(a, b) { if (a.length !== b.length) return false; let diff = 0; for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i]; return diff === 0; }
@@ -2693,9 +2700,31 @@ async function updateOrganisationProfile(request,db,session){
   ]);
   return getOrganisationProfile(db,session);
 }
-async function listBranches(db,session){const r=await db.prepare("SELECT * FROM branches WHERE organisation_id=? ORDER BY status,name COLLATE NOCASE").bind(session.organisation_id).all();return json({branches:r.results});}
+async function listBranches(db,session){const r=await db.prepare("SELECT * FROM branches WHERE organisation_id=? ORDER BY CASE WHEN archived_at IS NULL AND status='active' THEN 0 ELSE 1 END,name COLLATE NOCASE").bind(session.organisation_id).all();return json({branches:r.results});}
 async function createBranch(request,db,session){const i=await readJson(request),name=clean(i.name);if(!name)return json({error:{code:"VALIDATION_ERROR",message:"Enter a branch name."}},400);const id=crypto.randomUUID();await db.batch([db.prepare("INSERT INTO branches(id,organisation_id,name,code,address,phone,email,status) VALUES(?,?,?,?,?,?,?,?)").bind(id,session.organisation_id,name,clean(i.code),clean(i.address),clean(i.phone),clean(i.email),"active"),auditStatement(db,session.organisation_id,session.user_id,"branch.created","branch",id,{name})]);return json({branch:{id,name,status:"active"}},201);}
-async function updateBranch(request,db,session,id){const i=await readJson(request),name=clean(i.name),status=clean(i.status)||"active";if(!name)return json({error:{code:"VALIDATION_ERROR",message:"Enter a branch name."}},400);if(!["active","inactive"].includes(status))return json({error:{code:"VALIDATION_ERROR",message:"Choose a valid branch status."}},400);const existing=await db.prepare("SELECT id,name,code,address,phone,email,status FROM branches WHERE id=? AND organisation_id=? LIMIT 1").bind(id,session.organisation_id).first();if(!existing)return json({error:{code:"NOT_FOUND",message:"Branch not found."}},404);await db.batch([db.prepare("UPDATE branches SET name=?,code=?,address=?,phone=?,email=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(name,clean(i.code),clean(i.address),clean(i.phone),clean(i.email),status,id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,"branch.updated","branch",id,{before:existing,after:{name,code:clean(i.code),address:clean(i.address),phone:clean(i.phone),email:clean(i.email),status}})]);return json({ok:true});}
+async function updateBranch(request,db,session,id){const i=await readJson(request),name=clean(i.name);if(!name)return json({error:{code:"VALIDATION_ERROR",message:"Enter a branch name."}},400);const existing=await db.prepare("SELECT id,name,code,address,phone,email,status,archived_at FROM branches WHERE id=? AND organisation_id=? LIMIT 1").bind(id,session.organisation_id).first();if(!existing)return json({error:{code:"NOT_FOUND",message:"Branch not found."}},404);if(clean(i.status)&&clean(i.status)!==existing.status)return json({error:{code:'BRANCH_LIFECYCLE_CONTROL_REQUIRED',message:'Use Archive branch or Restore branch to change availability safely.'}},409);await db.batch([db.prepare("UPDATE branches SET name=?,code=?,address=?,phone=?,email=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(name,clean(i.code),clean(i.address),clean(i.phone),clean(i.email),id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,"branch.updated","branch",id,{before:existing,after:{name,code:clean(i.code),address:clean(i.address),phone:clean(i.phone),email:clean(i.email),status:existing.status}})]);return json({ok:true});}
+async function changeBranchLifecycle(db,session,id,action){
+  const branch=await db.prepare("SELECT id,name,status,archived_at FROM branches WHERE id=? AND organisation_id=? LIMIT 1").bind(id,session.organisation_id).first();
+  if(!branch)return notFound('Branch');
+  if(action==='restore'){
+    if(branch.status==='active'&&!branch.archived_at)return json({ok:true,branch:{...branch,status:'active',archived_at:null}});
+    await db.batch([db.prepare("UPDATE branches SET status='active',archived_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'branch.restored','branch',id,{name:branch.name})]);
+    return json({ok:true,branch:{...branch,status:'active',archived_at:null}});
+  }
+  if(branch.status!=='active'||branch.archived_at)return json({ok:true,branch:{...branch,status:'inactive'}});
+  const [activeBranches,users,clients,staff,visits]=await Promise.all([
+    db.prepare("SELECT COUNT(*) total FROM branches WHERE organisation_id=? AND status='active' AND archived_at IS NULL").bind(session.organisation_id).first(),
+    db.prepare("SELECT COUNT(*) total FROM users WHERE organisation_id=? AND home_branch_id=? AND status='active'").bind(session.organisation_id,id).first(),
+    db.prepare("SELECT COUNT(*) total FROM clients WHERE organisation_id=? AND branch_id=? AND status<>'Archived' AND archived_at IS NULL").bind(session.organisation_id,id).first(),
+    db.prepare("SELECT COUNT(*) total FROM staff WHERE organisation_id=? AND branch_id=? AND status='Active'").bind(session.organisation_id,id).first(),
+    db.prepare("SELECT COUNT(*) total FROM care_visits WHERE organisation_id=? AND branch_id=? AND status!='cancelled' AND COALESCE(rota_status,'published')!='cancelled' AND datetime(scheduled_start)>=CURRENT_TIMESTAMP").bind(session.organisation_id,id).first(),
+  ]);
+  if(Number(activeBranches?.total||0)<=1)return json({error:{code:'LAST_ACTIVE_BRANCH',message:'Create or restore another active branch before archiving this one.'}},409);
+  const blockers={activeUsers:Number(users?.total||0),activeClients:Number(clients?.total||0),activeStaff:Number(staff?.total||0),futureVisits:Number(visits?.total||0)};
+  if(Object.values(blockers).some(Boolean))return json({error:{code:'BRANCH_ARCHIVE_BLOCKED',message:'Reassign active users, clients, staff and future visits before archiving this branch.',blockers}},409);
+  await db.batch([db.prepare("UPDATE branches SET status='inactive',archived_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'branch.archived','branch',id,{name:branch.name})]);
+  return json({ok:true,branch:{...branch,status:'inactive',archived_at:new Date().toISOString()}});
+}
 function familyAccessView(row){return {id:row.id,userId:row.user_id,clientId:row.client_id,displayName:row.display_name,email:row.email,userStatus:row.user_status||'active',clientName:[row.preferred_name||row.first_name,row.last_name].filter(Boolean).join(' '),status:row.status,relationship:row.relationship_label||'',canViewProfile:Boolean(row.can_view_profile),canViewVisits:Boolean(row.can_view_visits),canViewCareUpdates:Boolean(row.can_view_care_updates),canViewDocuments:Boolean(row.can_view_documents),canViewMedication:Boolean(row.can_view_medication),canViewCarePlan:Boolean(row.can_view_care_plan),canMessageTeam:Boolean(row.can_message_team),consentBasis:row.consent_basis||'',consentRecordedAt:row.consent_recorded_at||null,accessReviewDate:row.access_review_date||null,reviewState:familyAccessReviewState(row.access_review_date),revokedAt:row.revoked_at||null,createdAt:row.created_at};}
 async function listFamilyAccess(db,session){
   const branch=activeBranch(session),restricted=branchRestricted(session);

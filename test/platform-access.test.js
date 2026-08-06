@@ -34,6 +34,7 @@ test('Care establishes an audited support-mode session from a valid exchange', a
     prepare(sql) {
       return { bind(...values) {
         if (sql.includes('FROM organisations')) return { first: async () => ({ id: 'care-org', name: 'Example Care', status: 'active' }) };
+        if (sql.includes('FROM branches')) return { first: async () => ({ id: 'care-org-main', name: 'Main Branch' }) };
         if (sql.includes('FROM users')) return { first: async () => ({ id: 'owner-1', organisation_id: 'platform-org', email: 'owner@example.test', display_name: 'Platform Owner', access_level: 'platform_owner', is_platform_user: 1, home_branch_id: null, status: 'active' }) };
         return { sql, values };
       }};
@@ -50,6 +51,7 @@ test('Care establishes an audited support-mode session from a valid exchange', a
     assert.equal(response.headers.get('location'), '/?platform_access=success');
     assert.match(response.headers.get('set-cookie'), /^corecare_session=/);
     assert.equal(batched.length, 3);
+    assert.equal(batched[0].values[3], 'care-org-main');
   } finally { globalThis.fetch = originalFetch; }
 });
 
@@ -67,6 +69,7 @@ test('Care creates a non-login support principal after a valid first launch from
     prepare(sql) {
       return { bind(...values) {
         if (sql.includes('FROM organisations')) return { first: async () => ({ id: 'care-new', name: 'New Care Organisation', status: 'active' }) };
+        if (sql.includes('FROM branches')) return { first: async () => ({ id: 'care-new-main', name: 'Main Branch' }) };
         if (sql.includes('FROM users WHERE is_platform_user=1')) {
           userLookups += 1;
           return { first: async () => userLookups === 1 ? null : ({ id: 'platform-support-created', organisation_id: 'corecare-platform-support', email: 'platform+shadow@access.corecare.internal', display_name: 'Platform Owner', access_level: 'platform_owner', is_platform_user: 1, home_branch_id: 'corecare-platform-support-main', status: 'active' }) };
@@ -90,5 +93,6 @@ test('Care creates a non-login support principal after a valid first launch from
     assert.equal(userInsert.values.includes('owner@example.test'), false);
     assert.match(userInsert.values[2], /^platform\+[A-Za-z0-9_-]+@access\.corecare\.internal$/);
     assert.equal(batches[1].length, 3);
+    assert.equal(batches[1][0].values[3], 'care-new-main');
   } finally { globalThis.fetch = originalFetch; }
 });
