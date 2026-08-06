@@ -1632,6 +1632,7 @@ loginForm.addEventListener('submit', async event => {
   submit.textContent = 'Signing in…';
   try {
     const payload = await api('/api/auth/login', { method: 'POST', suppressAuthRedirect: true, body: JSON.stringify({ email: String(data.get('email') || '').trim().toLowerCase(), password: String(data.get('password') || '') }) });
+    if(payload.mfa){await CoreCareMfa.open(payload.mfa,{onComplete:async result=>{history.replaceState({},'',location.pathname);await showApplication(result.user)}});return}
     await showApplication(payload.user);
   } catch (error) {
     loginError.textContent = error.message;
@@ -1860,7 +1861,7 @@ function setupSettingsHub(){
   if(addBranch)$('#settings-location-actions').append(addBranch);
   routingCard?.remove();securityPanel?.remove();passwordCard?.remove();brandingArticle?.remove();grid?.remove();
   const securityForm=$('#security-policy-form');
-  if(securityForm){securityForm.dataset.settingsDirty='true';const submit=securityForm.querySelector('[type="submit"]');if(submit){const bar=document.createElement('div');bar.className='settings-save-bar';bar.innerHTML='<span class="settings-unsaved" data-dirty-for="security-policy-form" hidden>Unsaved changes</span>';submit.before(bar);bar.append(submit);}['requireMfa','requireTrustedDevice','allowPasswordLogin'].forEach(name=>{const input=securityForm.elements[name];if(!input)return;input.disabled=true;const label=input.closest('label'),title=label?.querySelector('b'),help=label?.querySelector('small');label?.classList.add('settings-readiness-control');if(title&&!title.querySelector('.badge'))title.insertAdjacentHTML('beforeend',' <span class="badge neutral">Coming soon</span>');if(name==='allowPasswordLogin'&&help)help.textContent='Password sign-in remains required until another verified sign-in method is available.';});}
+  if(securityForm){securityForm.dataset.settingsDirty='true';const submit=securityForm.querySelector('[type="submit"]');if(submit){const bar=document.createElement('div');bar.className='settings-save-bar';bar.innerHTML='<span class="settings-unsaved" data-dirty-for="security-policy-form" hidden>Unsaved changes</span>';submit.before(bar);bar.append(submit);}['requireTrustedDevice','allowPasswordLogin'].forEach(name=>{const input=securityForm.elements[name];if(!input)return;input.disabled=true;const label=input.closest('label'),title=label?.querySelector('b'),help=label?.querySelector('small');label?.classList.add('settings-readiness-control');if(title&&!title.querySelector('.badge'))title.insertAdjacentHTML('beforeend',' <span class="badge neutral">Coming soon</span>');if(name==='allowPasswordLogin'&&help)help.textContent='Password sign-in remains required until another verified sign-in method is available.';});const mfaHelp=securityForm.elements.requireMfa?.closest('label')?.querySelector('small');if(mfaHelp)mfaHelp.textContent='Owners and administrators are always protected. Enable this to require Microsoft Authenticator for every account.';}
   const routingForm=$('#routing-settings-form');if(routingForm)routingForm.dataset.settingsDirty='true';
   $('#refresh-login-history')?.setAttribute('aria-label','Refresh login history');$('#refresh-sessions')?.setAttribute('aria-label','Refresh active sessions');$('#refresh-audit')?.setAttribute('aria-label','Refresh audit history');
   const permissionUser=$('#permission-user'),effectiveUser=$('#effective-access-user');if(permissionUser)permissionUser.closest('label')?.querySelector('span')?.replaceChildren('User for access customisation');if(effectiveUser)effectiveUser.closest('label')?.querySelector('span')?.replaceChildren('User for access test');
@@ -2198,7 +2199,7 @@ $('#manager-alert-dialog-close')?.addEventListener('click',()=>$('#manager-alert
 $('#manager-alert-refresh')?.addEventListener('click',event=>{const button=event.currentTarget;button.disabled=true;loadManagerAlerts({prompt:false}).catch(showToastError).finally(()=>{button.disabled=false;});});
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&currentUser&&hasAccess('manager_alerts.view'))loadManagerAlerts({prompt:true}).catch(error=>console.warn('Manager alert refresh failed',error));});
 
-if(new URLSearchParams(location.search).get('reset')){showLogin();showLoginPanel('reset')}else restoreSession();
+if(new URLSearchParams(location.search).get('reset')){showLogin();showLoginPanel('reset')}else if(new URLSearchParams(location.search).get('continue')==='mfa'){CoreCareMfa.resume({onComplete:async result=>{history.replaceState({},'',location.pathname);await showApplication(result.user)}}).catch(error=>showLogin(error.message))}else restoreSession();
 
 $('#exit-support-mode')?.addEventListener('click',async()=>{try{await api('/api/platform/exit-support',{method:'POST'});location.reload();}catch(error){alert(error.message);}});
 

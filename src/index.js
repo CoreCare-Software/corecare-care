@@ -13,15 +13,17 @@ import { workforceSetupStatements } from './workforce-seed.js';
 import { familyAccessReviewState, normaliseFamilyPortalAccess, normaliseFamilyPreferences, validateFamilyMessage, validateFamilyUpdate } from './family-portal.js';
 import { accessReviewState, canAssignStandardRole, impliedPermissionSources, publicStandardRoleProfiles, roleScope, standardPermissionsForRole } from './access-control.js';
 import { attachManagerAlertAcknowledgements, buildManagerAlerts, managerAlertSummary } from './manager-alerts.js';
+import { beginMfa, claimMfaChallenge, getMfaChallenge, mfaRequiredForUser, portalGrantFromLoginResponse, verifyMfa } from './native-mfa.js';
 
-/** CoreCare Care 1.42.0 - area management and persistent operational alerts */
-const VERSION = "1.42.0";
-const RELEASE = "CoreCare Care 1.42.0 - area management and persistent operational alerts";
+/** CoreCare Care 1.43.0 - Microsoft Authenticator protection */
+const VERSION = "1.43.0";
+const RELEASE = "CoreCare Care 1.43.0 - Microsoft Authenticator protection";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
 const LOGIN_WINDOW_MINUTES = 15;
 const MAX_LOGIN_ATTEMPTS = 5;
+const MFA_PRIVILEGED_ROLES = ['organisation_owner','organisation_admin','area_manager','registered_manager','branch_manager','owner','manager'];
 
 const application = {
   async fetch(request, env, context) {
@@ -39,6 +41,9 @@ const application = {
       if (url.pathname === "/api/auth/portal-claim" && request.method === "POST") return claimPortalGrant(request, env, "CARE");
       if (["/auth/portal-login", "/api/auth/portal-login"].includes(url.pathname) && request.method === "POST") return portalLogin(request, env, "CARE");
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
+      if (url.pathname === "/api/auth/mfa/challenge" && request.method === "GET") return getMfaChallenge(request, env, careMfaOptions(env));
+      if (url.pathname === "/api/auth/mfa/verify" && request.method === "POST") return verifyMfa(request, env, careMfaOptions(env));
+      if (url.pathname === "/api/auth/mfa/claim" && request.method === "POST") return claimMfaChallenge(request, env, {...careMfaOptions(env),portalOriginAllowed,returnPath:portalReturnPath,productOrigin:new URL(request.url).origin,failureLocation:'https://www.corecaresystems.co.uk/login?product=CARE&error=invalid_credentials'});
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
       if (request.headers.get('x-corecare-product-key') && url.pathname === "/api/platform/organisations" && request.method === "POST") return handlePlatformOrganisation(request, env);
@@ -513,6 +518,11 @@ async function portalLogin(request, env, productCode) {
   headers.set("content-type", "application/json");
   headers.set("accept", "application/json");
   const result = await login(new Request(request.url, { method: "POST", headers, body: JSON.stringify({ email, password }) }), env);
+  if(result.status===202){
+    const cookie=result.headers.get('set-cookie');
+    const destination=new URL(portalReturnPath(form.get('returnTo')),new URL(request.url).origin);destination.searchParams.set('continue','mfa');
+    return new Response(null,{status:303,headers:{location:destination.toString(),...(cookie?{'set-cookie':cookie.replace(/SameSite=Strict/i,'SameSite=Lax')}:{}),'cache-control':'no-store','referrer-policy':'no-referrer'}});
+  }
   if (!result.ok) return failure();
   const cookie = result.headers.get("set-cookie");
   if (!cookie) return json({ error: { code: "SESSION_NOT_CREATED", message: "CoreCare could not create a sign-in session." } }, 502);
@@ -536,6 +546,8 @@ async function createPortalLoginGrant(env, input = {}) {
     "user-agent": clean(input.userAgent).slice(0, 250) || "CoreCare-Portal-Broker/1.0",
   });
   const result = await login(new Request("https://care.internal/api/auth/login", { method: "POST", headers, body: JSON.stringify({ email, password }) }), env);
+  const mfaGrant=await portalGrantFromLoginResponse(result);
+  if(mfaGrant)return mfaGrant;
   const token = sessionTokenFromResponse(result);
   if (!result.ok || !token) return { ok: false, status: result.status };
   const tokenHash = await sha256Base64(token);
@@ -573,7 +585,7 @@ async function login(request, env) {
     return json({ error: { code: "ACCOUNT_TEMPORARILY_LOCKED", message: "Too many unsuccessful attempts. Try again in 15 minutes." } }, 429);
   }
 
-  const user = await env.DB.prepare(`SELECT u.id,u.organisation_id,u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.status,u.password_hash,u.password_salt,u.password_iterations,u.must_change_password,o.name AS organisation_name,o.status AS organisation_status,COALESCE(p.session_hours,12) AS session_hours FROM users u JOIN organisations o ON o.id=u.organisation_id LEFT JOIN organisation_security_policies p ON p.organisation_id=u.organisation_id WHERE lower(u.email)=lower(?) LIMIT 1`).bind(email).first();
+  const user = await env.DB.prepare(`SELECT u.id,u.organisation_id,u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.status,u.password_hash,u.password_salt,u.password_iterations,u.must_change_password,o.name AS organisation_name,o.status AS organisation_status,COALESCE(p.session_hours,12) AS session_hours,COALESCE(p.require_mfa,0) AS policy_require_mfa,CASE WHEN me.status='active' THEN 1 ELSE 0 END AS mfa_enabled FROM users u JOIN organisations o ON o.id=u.organisation_id LEFT JOIN organisation_security_policies p ON p.organisation_id=u.organisation_id LEFT JOIN mfa_enrolments me ON me.user_id=u.id WHERE lower(u.email)=lower(?) LIMIT 1`).bind(email).first();
   const valid = user && user.status === "active" && user.organisation_status === "active" && user.password_hash && user.password_salt
     ? await verifyPassword(password, user.password_salt, user.password_hash, user.password_iterations || PASSWORD_ITERATIONS)
     : false;
@@ -586,19 +598,46 @@ async function login(request, env) {
   if(user.subscription_access.mode==='locked')return json({error:{code:'SUBSCRIPTION_REQUIRED',message:'This subscription needs attention. Contact your CoreCare owner or support to restore access.'}},402);
 
   await env.DB.prepare("DELETE FROM login_attempts WHERE attempt_key=?").bind(attemptKey).run();
+  if(careMfaRequired(user))return beginMfa(request,env,user,careMfaOptions(env));
+  return completeCareLogin(request,env,user);
+}
+
+function careMfaRequired(user){return mfaRequiredForUser(user,MFA_PRIVILEGED_ROLES)}
+
+function careMfaOptions(env){
+  return {
+    issuer:'CoreCare Care',
+    respond:json,
+    isMfaRequired:careMfaRequired,
+    isUserValid:user=>Boolean(user&&user.status==='active'&&user.organisation_status==='active'),
+    loadUser:loadCareMfaUser,
+    completeLogin:completeCareLogin,
+    auditStatement:(user,action,detail)=>auditStatement(env.DB,user.organisation_id,user.id||user.user_id,action,'user',user.id||user.user_id,detail),
+  };
+}
+
+async function loadCareMfaUser(db,userId){
+  return db.prepare(`SELECT u.id,u.organisation_id,u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.status,u.must_change_password,o.name AS organisation_name,o.status AS organisation_status,COALESCE(p.session_hours,12) AS session_hours,COALESCE(p.require_mfa,0) AS policy_require_mfa,CASE WHEN me.status='active' THEN 1 ELSE 0 END AS mfa_enabled FROM users u JOIN organisations o ON o.id=u.organisation_id LEFT JOIN organisation_security_policies p ON p.organisation_id=u.organisation_id LEFT JOIN mfa_enrolments me ON me.user_id=u.id WHERE u.id=? LIMIT 1`).bind(userId).first();
+}
+
+async function completeCareLogin(request,env,user,options={}){
+  user.subscription_access=await currentSubscriptionAccess(env,user.organisation_id);
+  if(user.subscription_access.mode==='locked')return json({error:{code:'SUBSCRIPTION_REQUIRED',message:'This subscription needs attention. Contact your CoreCare owner or support to restore access.'}},402);
   const token = randomToken();
   const tokenHash = await sha256Base64(token);
+  const ip=clean(request.headers.get('cf-connecting-ip')).slice(0,64)||'unknown';
   const sessionHours = Math.max(1, Math.min(168, Number(user.session_hours) || SESSION_HOURS));
   const expires = new Date(Date.now() + sessionHours * 3600000);
   await env.DB.batch([
-    env.DB.prepare("DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP"),
-    env.DB.prepare("INSERT INTO sessions (id,user_id,organisation_id,active_branch_id,token_hash,expires_at,user_agent,ip_hint) VALUES (?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(), user.id, user.organisation_id, user.home_branch_id, tokenHash, expires.toISOString(), clean(request.headers.get("user-agent")).slice(0, 250), ip),
+    ...(options.statements||[]),
+    env.DB.prepare("DELETE FROM sessions WHERE datetime(expires_at) <= CURRENT_TIMESTAMP"),
+    env.DB.prepare("INSERT INTO sessions (id,user_id,organisation_id,active_branch_id,token_hash,expires_at,user_agent,ip_hint,mfa_verified_at,authentication_method) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(), user.id, user.organisation_id, user.home_branch_id, tokenHash, expires.toISOString(), clean(request.headers.get("user-agent")).slice(0, 250), ip,options.mfaVerified?new Date().toISOString():null,options.authenticationMethod||'password'),
     env.DB.prepare("UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?").bind(user.id),
-    env.DB.prepare("INSERT INTO login_history(id,organisation_id,user_id,outcome,reason,ip_hint,user_agent) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(),user.organisation_id,user.id,"success","Password sign-in",ip,clean(request.headers.get("user-agent")).slice(0,250)),
-    auditStatement(env.DB, user.organisation_id, user.id, "user.login", "user", user.id, { email: user.email })
+    env.DB.prepare("INSERT INTO login_history(id,organisation_id,user_id,outcome,reason,ip_hint,user_agent) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(),user.organisation_id,user.id,"success",options.mfaVerified?"Password and Authenticator sign-in":"Password sign-in",ip,clean(request.headers.get("user-agent")).slice(0,250)),
+    auditStatement(env.DB, user.organisation_id, user.id, "user.login", "user", user.id, { email: user.email,authenticationMethod:options.authenticationMethod||'password' })
   ]);
   const access=await buildAccessProfile(env.DB,{...user,user_id:user.id,active_branch_id:user.home_branch_id});
-  return json({ user: {...publicUser(user),permissions:access.permissions,modules:access.modules}, expiresAt: expires.toISOString() }, 200, { "set-cookie": sessionCookie(token, expires) });
+  return json({ user: {...publicUser(user),mfaEnabled:Boolean(options.mfaVerified||user.mfa_enabled),authenticationMethod:options.authenticationMethod||'password',permissions:access.permissions,modules:access.modules}, expiresAt: expires.toISOString(),...(options.recoveryCodes?{recoveryCodes:options.recoveryCodes}:{}) }, 200, { "set-cookie": sessionCookie(token, expires) });
 }
 
 async function recordFailedLogin(db, key, email, ip, attempt) {
@@ -651,13 +690,15 @@ async function requireSession(request, env) {
   const db=env.DB;
   const token = cookieValue(request, SESSION_COOKIE);
   if (!token) return unauthorised();
-  const row = await db.prepare(`SELECT s.id AS session_id,s.expires_at,s.last_seen_at,s.user_id,s.organisation_id,s.active_branch_id,s.support_mode,s.support_origin_organisation_id,s.support_started_at,COALESCE(p.idle_timeout_minutes,60) AS idle_timeout_minutes,
+  const row = await db.prepare(`SELECT s.id AS session_id,s.expires_at,s.last_seen_at,s.user_id,s.organisation_id,s.active_branch_id,s.support_mode,s.support_origin_organisation_id,s.support_started_at,s.mfa_verified_at,s.authentication_method,COALESCE(p.idle_timeout_minutes,60) AS idle_timeout_minutes,COALESCE(p.require_mfa,0) AS policy_require_mfa,
     (SELECT ss.reason FROM support_sessions ss WHERE ss.session_id=s.id AND ss.ended_at IS NULL ORDER BY ss.started_at DESC LIMIT 1) AS support_reason,
     (SELECT ss.access_mode FROM support_sessions ss WHERE ss.session_id=s.id AND ss.ended_at IS NULL ORDER BY ss.started_at DESC LIMIT 1) AS support_access_mode,
-    u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.staff_id,u.status,u.must_change_password,o.name AS organisation_name,o.status AS organisation_status,b.name AS branch_name
+    u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.staff_id,u.status,u.must_change_password,o.name AS organisation_name,o.status AS organisation_status,b.name AS branch_name,CASE WHEN me.status='active' THEN 1 ELSE 0 END AS mfa_enabled
     FROM sessions s JOIN users u ON u.id=s.user_id JOIN organisations o ON o.id=s.organisation_id LEFT JOIN branches b ON b.id=s.active_branch_id LEFT JOIN organisation_security_policies p ON p.organisation_id=s.organisation_id
-    WHERE s.token_hash=? AND s.expires_at>CURRENT_TIMESTAMP LIMIT 1`).bind(await sha256Base64(token)).first();
+    LEFT JOIN mfa_enrolments me ON me.user_id=s.user_id
+    WHERE s.token_hash=? AND datetime(s.expires_at)>CURRENT_TIMESTAMP LIMIT 1`).bind(await sha256Base64(token)).first();
   if (!row || row.status !== "active" || row.organisation_status !== "active") return unauthorised();
+  if(careMfaRequired(row)&&!row.mfa_verified_at){await db.prepare('DELETE FROM sessions WHERE id=?').bind(row.session_id).run();return unauthorised('Sign in again and verify Microsoft Authenticator.');}
   if(!row.support_mode)row.subscription_access=await currentSubscriptionAccess(env,row.organisation_id);
   const idleMinutes = Math.max(5, Math.min(1440, Number(row.idle_timeout_minutes) || 60));
   if (row.last_seen_at && Date.now() - databaseTimestampMs(row.last_seen_at) > idleMinutes * 60000) {
@@ -2914,7 +2955,7 @@ async function securityOverview(db,session){if(!await userHasPermission(db,sessi
 async function listActiveSessions(db,session){if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.sessions.manage'))return forbidden();const r=await db.prepare(`SELECT s.id,s.user_id,s.created_at,s.last_seen_at,s.expires_at,s.user_agent,s.ip_hint,u.display_name,u.email FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.organisation_id=? AND datetime(s.expires_at)>CURRENT_TIMESTAMP ORDER BY s.last_seen_at DESC`).bind(session.organisation_id).all();return json({sessions:r.results||[],currentSessionId:session.session_id});}
 async function revokeSession(db,session,id){if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.sessions.manage'))return forbidden();if(id===session.session_id)return json({error:{code:'CURRENT_SESSION',message:'Use sign out to end your current session.'}},400);const target=await db.prepare('SELECT id,user_id FROM sessions WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();if(!target)return json({error:{code:'NOT_FOUND',message:'Session not found.'}},404);await db.batch([db.prepare('DELETE FROM sessions WHERE id=? AND organisation_id=?').bind(id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'security.session_revoked','session',id,{targetUserId:target.user_id})]);return json({ok:true});}
 async function getSecurityPolicy(db,session){if(!await userHasPermission(db,session,'organisation.settings.view'))return forbidden();await db.prepare('INSERT OR IGNORE INTO organisation_security_policies(organisation_id) VALUES(?)').bind(session.organisation_id).run();const p=await db.prepare('SELECT * FROM organisation_security_policies WHERE organisation_id=?').bind(session.organisation_id).first();return json({policy:p});}
-async function updateSecurityPolicy(request,db,session){if(!await userHasPermission(db,session,'organisation.settings.manage'))return forbidden();const i=await readJson(request),hours=Math.max(1,Math.min(168,Number(i.sessionHours)||12)),idle=Math.max(5,Math.min(1440,Number(i.idleTimeoutMinutes)||60));if(i.requireMfa||i.requireTrustedDevice||i.allowPasswordLogin===false)return json({error:{code:'SECURITY_METHOD_NOT_CONFIGURED',message:'MFA, trusted-device enforcement and passwordless sign-in cannot be enabled until an alternative sign-in provider is configured.'}},409);await db.batch([db.prepare(`INSERT INTO organisation_security_policies(organisation_id,require_mfa,session_hours,idle_timeout_minutes,allow_password_login,require_trusted_device,updated_at) VALUES(?,0,?,?,1,0,CURRENT_TIMESTAMP) ON CONFLICT(organisation_id) DO UPDATE SET require_mfa=0,session_hours=excluded.session_hours,idle_timeout_minutes=excluded.idle_timeout_minutes,allow_password_login=1,require_trusted_device=0,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,hours,idle),auditStatement(db,session.organisation_id,session.user_id,'security.policy_updated','organisation_security_policy',session.organisation_id,{hours,idle,requireMfa:false,requireTrustedDevice:false,allowPasswordLogin:true})]);return getSecurityPolicy(db,session);}
+async function updateSecurityPolicy(request,db,session){if(!await userHasPermission(db,session,'organisation.settings.manage'))return forbidden();const i=await readJson(request),hours=Math.max(1,Math.min(168,Number(i.sessionHours)||12)),idle=Math.max(5,Math.min(1440,Number(i.idleTimeoutMinutes)||60)),requireMfa=Boolean(i.requireMfa);if(i.requireTrustedDevice||i.allowPasswordLogin===false)return json({error:{code:'SECURITY_METHOD_NOT_CONFIGURED',message:'Trusted-device enforcement and passwordless sign-in are not configured.'}},409);const statements=[db.prepare(`INSERT INTO organisation_security_policies(organisation_id,require_mfa,session_hours,idle_timeout_minutes,allow_password_login,require_trusted_device,updated_at) VALUES(?,?,?,?,1,0,CURRENT_TIMESTAMP) ON CONFLICT(organisation_id) DO UPDATE SET require_mfa=excluded.require_mfa,session_hours=excluded.session_hours,idle_timeout_minutes=excluded.idle_timeout_minutes,allow_password_login=1,require_trusted_device=0,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,requireMfa?1:0,hours,idle),auditStatement(db,session.organisation_id,session.user_id,'security.policy_updated','organisation_security_policy',session.organisation_id,{hours,idle,requireMfa,requireTrustedDevice:false,allowPasswordLogin:true})];if(requireMfa)statements.push(db.prepare('DELETE FROM sessions WHERE organisation_id=? AND mfa_verified_at IS NULL').bind(session.organisation_id));await db.batch(statements);return getSecurityPolicy(db,session);}
 async function listLoginHistory(db,session){if(!await userHasPermission(db,session,'security.audit.view'))return forbidden();const r=await db.prepare(`SELECT lh.*,u.display_name,u.email FROM login_history lh LEFT JOIN users u ON u.id=lh.user_id WHERE lh.organisation_id=? ORDER BY lh.created_at DESC LIMIT 100`).bind(session.organisation_id).all();return json({events:r.results||[]});}
 async function effectiveAccess(db,session,url){if(!await userHasPermission(db,session,'security.users.view'))return forbidden();const userId=clean(url.searchParams.get('userId'));const user=await db.prepare('SELECT id,display_name,email,role,access_level,home_branch_id FROM users WHERE id=? AND organisation_id=?').bind(userId,session.organisation_id).first();if(!user)return json({error:{code:'NOT_FOUND',message:'User not found.'}},404);const catalog=await db.prepare('SELECT permission_key,category,name,risk_level FROM permission_catalog ORDER BY category,name').all();const fake={...session,user_id:user.id,role:user.role,access_level:user.access_level,home_branch_id:user.home_branch_id,is_platform_user:0,_permissionFacts:null};const permissions=[];for(const p of catalog.results||[])if(await userHasPermission(db,fake,p.permission_key))permissions.push(p);return json({user,permissions});}
 async function accessGovernance(db,session){

@@ -41,7 +41,7 @@ test('clinical workflows are wired through the live Worker and browser screens',
   assert.match(worker, /"body_map\.manage", \(\) => createBodyMapRecord/);
   assert.doesNotMatch(worker, /care_plans\.manage/);
   assert.match(worker, /carePlanReadiness\(toCarePlan\(plan\)/);
-  assert.match(worker, /publicUser\(user\),permissions:access\.permissions,modules:access\.modules/);
+  assert.match(worker, /publicUser\(user\).*permissions:access\.permissions,modules:access\.modules/);
   assert.match(html, /id="daily-mar-list"/);
   assert.match(html, /id="medication-stock-dialog"/);
   assert.match(html, /id="medication-correction-dialog"/);
