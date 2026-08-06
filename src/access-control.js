@@ -3,6 +3,7 @@ const unique = values => [...new Set(values)];
 export const CARE_PERMISSION_GROUPS = Object.freeze({
   dashboard: ['dashboard.view'],
   operations: ['operations.view', 'operations.manage'],
+  managerAlerts: ['manager_alerts.view', 'manager_alerts.acknowledge'],
   rota: [
     'rota.view', 'rota.create', 'rota.edit', 'rota.publish', 'rota.cancel',
     'rota.templates.view', 'rota.templates.manage', 'rota.templates.generate',
@@ -54,7 +55,7 @@ const group = (...names) => unique(names.flatMap(name => CARE_PERMISSION_GROUPS[
 const without = (values, removed) => values.filter(value => !removed.includes(value));
 
 const registeredManager = group(
-  'dashboard', 'operations', 'rota', 'visits', 'medication', 'tasks', 'incidents',
+  'dashboard', 'operations', 'managerAlerts', 'rota', 'visits', 'medication', 'tasks', 'incidents',
   'people', 'workforce', 'care', 'family', 'finance', 'reporting', 'branches',
   'organisation', 'security', 'support'
 );
@@ -113,6 +114,11 @@ export const STANDARD_ROLE_PROFILES = Object.freeze({
     summary: 'Accountable owner with unrestricted organisation access, ownership and security control.',
     permissions: ['*']
   },
+  area_manager: {
+    label: 'Area manager', rank: 95, scope: 'organisation', reviewDays: 90,
+    summary: 'Multi-branch operational leader with full Care access and authority over registered managers.',
+    permissions: registeredManager
+  },
   organisation_admin: {
     label: 'Registered manager', rank: 90, scope: 'organisation', reviewDays: 90,
     summary: 'Full Care access, including rotas, clinical records, workforce, finance, governance and security.',
@@ -159,6 +165,7 @@ export const STANDARD_ROLE_PROFILES = Object.freeze({
 
 export const PERMISSION_IMPLICATIONS = Object.freeze({
   'operations.manage': ['operations.view'],
+  'manager_alerts.acknowledge': ['manager_alerts.view'],
   'rota.create': ['rota.view'], 'rota.edit': ['rota.view'], 'rota.publish': ['rota.view'],
   'rota.cancel': ['rota.view'], 'rota.templates.manage': ['rota.templates.view'],
   'rota.templates.generate': ['rota.templates.view'],

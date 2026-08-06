@@ -12,15 +12,16 @@ import {
 const worker = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
 const migration = readFileSync(new URL('../migrations/0052_role_access_governance.sql', import.meta.url), 'utf8');
+const managerAlertMigration = readFileSync(new URL('../migrations/0053_area_manager_alerts.sql', import.meta.url), 'utf8');
 
-test('registered and branch managers have complete operational rota authority', () => {
+test('area, registered and branch managers have complete operational rota authority', () => {
   const required = [
     'rota.view', 'rota.create', 'rota.edit', 'rota.publish', 'rota.cancel',
     'rota.templates.view', 'rota.templates.manage', 'rota.templates.generate',
     'rota.travel.override', 'rota.travel.settings', 'rota.visit.lock',
     'rota.visit.override_lock', 'rota.time_critical.override'
   ];
-  for (const role of ['organisation_admin', 'deputy_manager', 'branch_manager']) {
+  for (const role of ['area_manager', 'organisation_admin', 'deputy_manager', 'branch_manager']) {
     const permissions = standardPermissionsForRole(role);
     for (const permission of required) assert.ok(permissions.includes(permission), `${role} is missing ${permission}`);
   }
@@ -59,6 +60,10 @@ test('auditor access remains read-only', () => {
 });
 
 test('role hierarchy prevents peer and upward assignment', () => {
+  assert.equal(STANDARD_ROLE_PROFILES.area_manager.rank, 95);
+  assert.equal(STANDARD_ROLE_PROFILES.area_manager.scope, 'organisation');
+  assert.equal(canAssignStandardRole('area_manager', 'organisation_admin'), true);
+  assert.equal(canAssignStandardRole('organisation_admin', 'area_manager'), false);
   assert.equal(canAssignStandardRole('organisation_admin', 'deputy_manager'), true);
   assert.equal(canAssignStandardRole('branch_manager', 'office_staff'), true);
   assert.equal(canAssignStandardRole('branch_manager', 'branch_manager'), false);
@@ -83,4 +88,18 @@ test('access-review persistence is tenant guarded and exposed in the settings in
   assert.match(worker, /\/api\/security\/access-reviews/);
   assert.match(app, /Access review register/);
   assert.equal(STANDARD_ROLE_PROFILES.office_staff.scope, 'assigned_branch');
+});
+
+test('manager alert access excludes coordinator and frontline roles', () => {
+  for (const role of ['area_manager', 'organisation_admin', 'deputy_manager', 'branch_manager']) {
+    assert.ok(standardPermissionsForRole(role).includes('manager_alerts.view'));
+    assert.ok(standardPermissionsForRole(role).includes('manager_alerts.acknowledge'));
+  }
+  for (const role of ['office_staff', 'senior_carer', 'carer', 'auditor', 'family']) {
+    assert.ok(!standardPermissionsForRole(role).includes('manager_alerts.view'));
+  }
+  assert.match(managerAlertMigration, /CREATE TABLE IF NOT EXISTS manager_alert_acknowledgements/);
+  assert.match(managerAlertMigration, /tenant_guard_manager_alert_ack_insert/);
+  assert.match(worker, /\/api\/manager-alerts/);
+  assert.match(app, /manager-alert-dock/);
 });

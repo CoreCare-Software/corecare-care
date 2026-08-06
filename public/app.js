@@ -76,6 +76,9 @@ let platformData = null;
 let customerSuccessData = null;
 let familyPortalData = null;
 let familyManagementData = { links: [], users: [], clients: [] };
+let managerAlertsData = { alerts: [], summary: {} };
+let managerAlertTimer = null;
+const managerAlertPromptedAt = new Map();
 // Shared live-visit state must be initialised before navigation can call loadVisitsBoard().
 // Keeping this with the other application state prevents a temporal-dead-zone error during startup.
 let visitsData = { visits: [], clients: [], staff: [], codes: [], stats: {} };
@@ -114,14 +117,14 @@ function initialsFromName(name) {
 }
 
 function roleLabel(role) {
-  return ({ platform_owner:'Platform owner',platform_admin:'Platform admin',organisation_owner:'Organisation owner',organisation_admin:'Registered manager',deputy_manager:'Deputy manager',branch_manager:'Branch manager',senior_carer:'Senior carer',carer:'Care worker',office_staff:'Care coordinator',auditor:'Read-only auditor',family:'Family member',owner:'Organisation owner',manager:'Registered manager' })[role] || 'CoreCare user';
+  return ({ platform_owner:'Platform owner',platform_admin:'Platform admin',organisation_owner:'Organisation owner',area_manager:'Area manager',organisation_admin:'Registered manager',deputy_manager:'Deputy manager',branch_manager:'Branch manager',senior_carer:'Senior carer',carer:'Care worker',office_staff:'Care coordinator',auditor:'Read-only auditor',family:'Family member',owner:'Organisation owner',manager:'Registered manager' })[role] || 'CoreCare user';
 }
 
 
 const WORKSPACE_CONFIG = {
   manager: {
     label: 'Manager workspace',
-    roles: ['organisation_owner','organisation_admin','deputy_manager','branch_manager','owner','manager'],
+    roles: ['organisation_owner','area_manager','organisation_admin','deputy_manager','branch_manager','owner','manager'],
     pages: ['dashboard','operations','clients','staff','family','care','medication','visits','rota','tasks','incidents','finance','reports','settings','support']
   },
   coordinator: {
@@ -249,10 +252,11 @@ function updateIdentity() {
   }
   document.body.classList.toggle('platform-workspace', platformWorkspace);
   document.body.dataset.workspace=platformWorkspace?'platform':workspaceKey();
-  const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
+  const workspaceBadge=$('#workspace-label');
+  if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':currentUser?.accessLevel==='area_manager'?'Area management workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.41.0';
+const CORECARE_FALLBACK_VERSION = '1.42.0';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -340,8 +344,69 @@ function showPlatformView(targetId = 'platform-page', updateHistory = true) {
   if (updateHistory) history.pushState({ platformView: targetId }, '', targetId === 'platform-page' ? '#platform' : `#${targetId}`);
 }
 
+function managerAlertTime(alert){
+  const value=alert.dueAt||alert.occurredAt;
+  if(!value)return 'Live alert';
+  const date=new Date(value);if(Number.isNaN(date.getTime()))return 'Live alert';
+  return date.toLocaleString('en-GB',{dateStyle:'medium',timeStyle:'short'});
+}
+
+function managerAlertCard(alert){
+  return `<article class="manager-alert-card ${escapeHtml(alert.severity)} ${alert.acknowledged?'acknowledged':'unacknowledged'}">
+    <span class="manager-alert-severity" aria-hidden="true">!</span>
+    <div class="manager-alert-copy"><div><span class="badge ${alert.severity==='critical'?'danger':'warning'}">${escapeHtml(alert.severity)}</span><span class="manager-alert-category">${escapeHtml(alert.category||'Operational alert')}</span>${alert.acknowledged?'<span class="badge neutral">Seen</span>':''}</div><h3>${escapeHtml(alert.title)}</h3><p>${escapeHtml(alert.message||'Management attention is required.')}</p><small>${escapeHtml(managerAlertTime(alert))}${alert.acknowledgedAt?` · acknowledged ${escapeHtml(new Date(alert.acknowledgedAt).toLocaleString('en-GB',{dateStyle:'short',timeStyle:'short'}))}`:''}</small></div>
+    <div class="manager-alert-actions"><button class="secondary-button compact" type="button" data-manager-alert-page="${escapeHtml(alert.page||'operations')}">Open ${escapeHtml(String(alert.page||'operations').replaceAll('_',' '))}</button>${alert.acknowledged?'':`<button class="primary-button compact" type="button" data-manager-alert-ack="${escapeHtml(alert.key)}">Acknowledge</button>`}</div>
+  </article>`;
+}
+
+function bindManagerAlertActions(){
+  $$('[data-manager-alert-page]').forEach(button=>button.addEventListener('click',()=>{if($('#manager-alert-dialog')?.open)$('#manager-alert-dialog').close();showPage(button.dataset.managerAlertPage);}));
+  $$('[data-manager-alert-ack]').forEach(button=>button.addEventListener('click',async()=>{button.disabled=true;try{await api('/api/manager-alerts/acknowledge',{method:'POST',body:JSON.stringify({alertKey:button.dataset.managerAlertAck})});showSuccessToast('Alert acknowledged. It remains visible until the underlying issue is resolved.');await loadManagerAlerts({prompt:false});}catch(error){showToastError(error);await loadManagerAlerts({prompt:false}).catch(()=>{});}}));
+}
+
+function renderManagerAlerts({prompt=true}={}){
+  const alerts=managerAlertsData.alerts||[],summary=managerAlertsData.summary||{},button=$('#manager-alert-button'),dock=$('#manager-alert-dock'),dialog=$('#manager-alert-dialog');
+  const allowed=hasAccess('manager_alerts.view')&&!isPlatformWorkspace();
+  if(button)button.hidden=!allowed;
+  if(!allowed){if(dock)dock.hidden=true;if(dialog?.open)dialog.close();return;}
+  const unacknowledged=Number(summary.unacknowledged||0),critical=Number(summary.critical||0);
+  setText('#manager-alert-count',unacknowledged);button?.classList.toggle('has-alerts',unacknowledged>0);button?.classList.toggle('critical',critical>0);
+  if(dock){dock.hidden=alerts.length===0;dock.classList.toggle('critical',alerts.some(alert=>alert.severity==='critical'&&!alert.acknowledged));}
+  setText('#manager-alert-dock-title',critical?`${critical} critical management alert${critical===1?'':'s'}`:`${alerts.length} active management alert${alerts.length===1?'':'s'}`);
+  setText('#manager-alert-dock-summary',unacknowledged?`${unacknowledged} still need acknowledgement. Alerts stay active until the underlying issue clears.`:'All active alerts have been seen; continue to monitor them until resolved.');
+  setText('#manager-alert-dialog-summary',alerts.length?`${alerts.length} active alert${alerts.length===1?'':'s'} · ${critical} critical · ${unacknowledged} awaiting acknowledgement`:'There are no current operational exceptions requiring management attention.');
+  const list=$('#manager-alert-list');if(list)list.innerHTML=alerts.map(managerAlertCard).join('')||'<div class="manager-alert-clear"><span>✓</span><strong>No active manager alerts</strong><p>Incidents, visits, medication, overdue actions and access reviews are currently clear.</p></div>';
+  bindManagerAlertActions();
+  const promptTime=Date.now();
+  const dueForPrompt=alert=>{
+    if(!alert.requiresPrompt||alert.acknowledged)return false;
+    const lastPrompt=managerAlertPromptedAt.get(alert.key)||0;
+    const reminderDelay=alert.severity==='critical'?60000:300000;
+    return promptTime-lastPrompt>=reminderDelay;
+  };
+  const newPrompt=alerts.find(dueForPrompt);
+  if(prompt&&newPrompt&&!document.querySelector('dialog[open]')){
+    alerts.filter(dueForPrompt).forEach(alert=>managerAlertPromptedAt.set(alert.key,promptTime));
+    dialog?.showModal();
+  }
+}
+
+async function loadManagerAlerts({prompt=true}={}){
+  if(!hasAccess('manager_alerts.view')||isPlatformWorkspace()){managerAlertsData={alerts:[],summary:{}};renderManagerAlerts({prompt:false});return managerAlertsData;}
+  managerAlertsData=await api('/api/manager-alerts');renderManagerAlerts({prompt});return managerAlertsData;
+}
+
+function stopManagerAlertMonitoring(){if(managerAlertTimer){clearInterval(managerAlertTimer);managerAlertTimer=null;}}
+function startManagerAlertMonitoring({prompt=true}={}){
+  stopManagerAlertMonitoring();
+  if(!hasAccess('manager_alerts.view')||isPlatformWorkspace()){renderManagerAlerts({prompt:false});return;}
+  loadManagerAlerts({prompt}).catch(error=>console.warn('Manager alerts unavailable',error));
+  managerAlertTimer=setInterval(()=>loadManagerAlerts({prompt:true}).catch(error=>console.warn('Manager alert refresh failed',error)),60000);
+}
+
 async function showApplication(user) {
   currentUser = user || currentUser;
+  stopManagerAlertMonitoring();
   if (APP_EDITION === 'care' && currentUser?.isPlatformUser && !currentUser?.supportMode) {
     window.location.replace(PLATFORM_URL);
     return;
@@ -354,6 +419,7 @@ async function showApplication(user) {
   await loadApplicationVersion();
   const platformWorkspace = currentUser?.isPlatformUser && !currentUser?.supportMode;
   if (platformWorkspace) {
+    renderManagerAlerts({prompt:false});
     $$('.nav-item').forEach(item => item.classList.remove('active'));
     $('#platform-nav')?.classList.add('active');
     showPage('platform');
@@ -372,6 +438,8 @@ async function showApplication(user) {
     if(hasAccess('staff.view')&&['manager','coordinator','auditor'].includes(type))renderStaff();
     await loadDevelopmentStatus();
     showPage(canOpenPage('dashboard')?'dashboard':workspaceConfig().pages.find(canOpenPage)||'dashboard');
+    managerAlertPromptedAt.clear();
+    startManagerAlertMonitoring({prompt:!currentUser?.mustChangePassword});
   }
   $('#main-content').focus();
   if (currentUser?.mustChangePassword) setTimeout(() => openPasswordDialog(true), 100);
@@ -411,7 +479,10 @@ function canOpenPage(page){
 function denyPage(){showToastError(new Error('You do not have permission to view this area.'));}
 
 function showLogin(message = '') {
+  stopManagerAlertMonitoring();
+  managerAlertsData={alerts:[],summary:{}};
   currentUser = null;
+  renderManagerAlerts({prompt:false});
   appView.hidden = true;
   loginView.hidden = false;
   if (message) {
@@ -2119,6 +2190,13 @@ function editWorkflow(id){const w=workflowData.find(x=>x.id===id),f=$('#workflow
 $('#workflow-form')?.addEventListener('submit',async e=>{e.preventDefault();const f=e.currentTarget,msg=$('#workflow-form-message'),id=f.elements.id.value,field=$('#workflow-condition-field').value,actions=Array.from(f.querySelectorAll('[name="actions"]:checked')).map(x=>({type:x.value,label:x.parentElement.textContent.trim()})),payload={name:f.elements.name.value,description:f.elements.description.value,scope:f.elements.scope.value,status:f.elements.status.value,triggerType:f.elements.triggerType.value,conditions:field?[{field,operator:$('#workflow-condition-operator').value,value:$('#workflow-condition-value').value}]:[],actions};try{await api(id?`/api/platform/workflows/${encodeURIComponent(id)}`:'/api/platform/workflows',{method:id?'PUT':'POST',body:JSON.stringify(payload)});msg.textContent='Workflow saved successfully.';msg.className='form-message success';msg.hidden=false;resetWorkflowForm();await loadWorkflowEngine();}catch(err){msg.textContent=err.message;msg.className='form-message error';msg.hidden=false;}});
 $('#workflow-new')?.addEventListener('click',()=>{resetWorkflowForm();$('#workflow-form')?.scrollIntoView({behavior:'smooth'})});
 $('#workflow-reset')?.addEventListener('click',resetWorkflowForm);$('#workflow-refresh')?.addEventListener('click',loadWorkflowEngine);$('#workflow-status-filter')?.addEventListener('change',loadWorkflowEngine);
+
+function openManagerAlertCentre(){const dialog=$('#manager-alert-dialog');if(dialog&&!dialog.open)dialog.showModal();}
+$('#manager-alert-button')?.addEventListener('click',openManagerAlertCentre);
+$('#manager-alert-dock-open')?.addEventListener('click',openManagerAlertCentre);
+$('#manager-alert-dialog-close')?.addEventListener('click',()=>$('#manager-alert-dialog')?.close());
+$('#manager-alert-refresh')?.addEventListener('click',event=>{const button=event.currentTarget;button.disabled=true;loadManagerAlerts({prompt:false}).catch(showToastError).finally(()=>{button.disabled=false;});});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&currentUser&&hasAccess('manager_alerts.view'))loadManagerAlerts({prompt:true}).catch(error=>console.warn('Manager alert refresh failed',error));});
 
 if(new URLSearchParams(location.search).get('reset')){showLogin();showLoginPanel('reset')}else restoreSession();
 

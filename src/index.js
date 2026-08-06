@@ -12,10 +12,11 @@ import { calculateStaffReadiness, calculateWorkforceOverview, normaliseSupervisi
 import { workforceSetupStatements } from './workforce-seed.js';
 import { familyAccessReviewState, normaliseFamilyPortalAccess, normaliseFamilyPreferences, validateFamilyMessage, validateFamilyUpdate } from './family-portal.js';
 import { accessReviewState, canAssignStandardRole, impliedPermissionSources, publicStandardRoleProfiles, roleScope, standardPermissionsForRole } from './access-control.js';
+import { attachManagerAlertAcknowledgements, buildManagerAlerts, managerAlertSummary } from './manager-alerts.js';
 
-/** CoreCare Care 1.41.0 - governed workforce access and role assurance */
-const VERSION = "1.41.0";
-const RELEASE = "CoreCare Care 1.41.0 - governed workforce access and role assurance";
+/** CoreCare Care 1.42.0 - area management and persistent operational alerts */
+const VERSION = "1.42.0";
+const RELEASE = "CoreCare Care 1.42.0 - area management and persistent operational alerts";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -62,6 +63,8 @@ const application = {
         if (url.pathname === "/api/auth/change-password" && request.method === "POST") return changePassword(request, env, session);
         if (url.pathname === "/api/development/status") return developmentStatus(env, session);
         if (url.pathname === "/api/dashboard" && request.method === "GET") return await permitted(env.DB, session, "dashboard.view", () => dashboardSummary(env.DB, session));
+        if (url.pathname === "/api/manager-alerts" && request.method === "GET") return await permitted(env.DB, session, "manager_alerts.view", () => managerAlerts(env.DB, session));
+        if (url.pathname === "/api/manager-alerts/acknowledge" && request.method === "POST") return await permitted(env.DB, session, "manager_alerts.acknowledge", () => acknowledgeManagerAlert(request, env.DB, session));
         if (url.pathname === "/api/carer/dashboard" && request.method === "GET") return await permitted(env.DB, session, "visits.view", () => carerDashboard(env.DB, session));
         if (url.pathname === "/api/operations/board" && request.method === "GET") return operationsBoard(env.DB, session);
         if (url.pathname === "/api/rota" && request.method === "GET") return await permitted(env.DB, session, "rota.view", () => rotaBoard(env.DB, session, url));
@@ -1304,12 +1307,12 @@ async function createOperationsIncident(request,env,session){
     db.prepare(`INSERT INTO incident_updates(id,organisation_id,incident_id,update_type,status,note,created_by) VALUES(?,?,?,'reported','open',?,?)`).bind(crypto.randomUUID(),session.organisation_id,id,`Incident reported as ${input.severity} severity.`,session.user_id),
     auditStatement(db,session.organisation_id,session.user_id,'operations.incident_created','incident',id,{reference,title:input.title,severity:input.severity,safeguardingRequired:input.safeguardingRequired})
   ]);
-  const emailDeliveries=await sendCareIncidentEmails(env,session,{id,reference,severity:input.severity,occurredAt:input.occurredAt||new Date().toISOString()});
+  const emailDeliveries=await sendCareIncidentEmails(env,session,{id,reference,severity:input.severity,occurredAt:input.occurredAt||new Date().toISOString(),branchId});
   return json({ok:true,id,reference,emailDeliveries},201);
 }
 
 async function sendCareIncidentEmails(env,session,incident){
-  const recipients=await env.DB.prepare(`SELECT id,email,display_name,access_level FROM users WHERE organisation_id=? AND status='active' AND access_level IN ('organisation_owner','organisation_admin','registered_manager') ORDER BY access_level,display_name LIMIT 20`).bind(session.organisation_id).all();
+  const recipients=await env.DB.prepare(`SELECT id,email,display_name,access_level FROM users WHERE organisation_id=? AND status='active' AND (access_level IN ('organisation_owner','area_manager','organisation_admin') OR (access_level IN ('deputy_manager','branch_manager') AND (? IS NULL OR home_branch_id=?))) ORDER BY access_level,display_name LIMIT 40`).bind(session.organisation_id,incident.branchId||null,incident.branchId||null).all();
   const deliveries=[];
   for(const recipient of recipients.results||[]){
     const result=await requestPlatformTransactionalEmail(env,{organisationId:session.organisation_id,templateKey:'incident_alert',sourceEventId:`care-incident:${incident.id}:recipient:${recipient.id}`,recipientEmail:recipient.email,recipientName:recipient.display_name,accessLabel:clean(recipient.access_level).replaceAll('_',' '),incidentReference:incident.reference,incidentSeverity:incident.severity,incidentOccurredAt:incident.occurredAt});
@@ -1534,6 +1537,39 @@ async function dashboardSummary(db, session) {
   const workforce=await workforceOverviewDataForSession(db,session);
   const live=calculateLiveDashboard({clients:clients.results,staff:staff.results,plans:plans.results,risks:risks.results,visits:visits.results,tasks:tasks.results,incidents:incidents.results,workforce},now);
   return json({...live,activity:auditRows.results||[],serviceDay:{start:serviceStart.toISOString(),end:serviceEnd.toISOString()},generatedAt:now.toISOString()});
+}
+
+async function managerAlertData(db,session){
+  const org=session.organisation_id,scoped=branchRestricted(session),branch=activeBranch(session),now=new Date();
+  const serviceStart=new Date(now);serviceStart.setHours(6,0,0,0);if(now<serviceStart)serviceStart.setDate(serviceStart.getDate()-1);
+  const serviceEnd=new Date(serviceStart);serviceEnd.setDate(serviceEnd.getDate()+1);
+  const [visits,incidents,tasks,careAlerts,medications,medicationExceptions,accessReviews,receipts]=await Promise.all([
+    db.prepare(`SELECT v.id,v.branch_id,v.client_id,v.staff_id,v.visit_type,v.scheduled_start,v.scheduled_end,v.status,v.rota_status,c.first_name||' '||c.last_name client_name,c.preferred_name,s.first_name||' '||s.last_name staff_name FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN staff s ON s.id=v.staff_id AND s.organisation_id=v.organisation_id WHERE v.organisation_id=? ${scoped?'AND v.branch_id=?':''} AND COALESCE(v.rota_status,'published')='published' AND datetime(v.scheduled_start)>=datetime(?) AND datetime(v.scheduled_start)<datetime(?) AND v.status!='cancelled' ORDER BY datetime(v.scheduled_start) LIMIT 500`).bind(org,...(scoped?[branch]:[]),serviceStart.toISOString(),serviceEnd.toISOString()).all(),
+    db.prepare(`SELECT i.id,i.reference_number,i.branch_id,i.client_id,i.category,i.severity,i.title,i.status,i.occurred_at,i.created_at,i.investigation_due_at,i.safeguarding_required,c.first_name||' '||c.last_name client_name,c.preferred_name FROM operations_incidents i LEFT JOIN clients c ON c.id=i.client_id AND c.organisation_id=i.organisation_id WHERE i.organisation_id=? ${scoped?'AND i.branch_id=?':''} AND i.status NOT IN ('closed','cancelled') ORDER BY CASE lower(i.severity) WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,datetime(COALESCE(i.occurred_at,i.created_at)) DESC LIMIT 250`).bind(org,...(scoped?[branch]:[])).all(),
+    db.prepare(`SELECT t.id,t.branch_id,t.client_id,t.title,t.priority,t.status,t.due_at,t.created_at,c.first_name||' '||c.last_name client_name,c.preferred_name FROM operations_tasks t LEFT JOIN clients c ON c.id=t.client_id AND c.organisation_id=t.organisation_id WHERE t.organisation_id=? ${scoped?'AND t.branch_id=?':''} AND t.status NOT IN ('completed','closed','cancelled') AND t.due_at IS NOT NULL AND datetime(t.due_at)<CURRENT_TIMESTAMP ORDER BY datetime(t.due_at) LIMIT 250`).bind(org,...(scoped?[branch]:[])).all(),
+    db.prepare(`SELECT a.id,a.alert_type,a.severity,a.title,a.message,a.due_date,a.status,a.created_at,c.branch_id,c.first_name||' '||c.last_name client_name,c.preferred_name FROM care_delivery_alerts a JOIN clients c ON c.id=a.client_id AND c.organisation_id=a.organisation_id WHERE a.organisation_id=? ${scoped?'AND c.branch_id=?':''} AND a.status='open' ORDER BY CASE a.severity WHEN 'critical' THEN 0 ELSE 1 END,date(a.due_date) LIMIT 250`).bind(org,...(scoped?[branch]:[])).all(),
+    db.prepare(`SELECT m.id,m.name,m.stock_quantity,m.stock_unit,m.low_stock_threshold,m.status,m.updated_at,c.branch_id,c.first_name||' '||c.last_name client_name,c.preferred_name FROM medications m JOIN clients c ON c.id=m.client_id AND c.organisation_id=m.organisation_id WHERE m.organisation_id=? ${scoped?'AND c.branch_id=?':''} AND m.status='active' AND m.stock_quantity IS NOT NULL AND m.stock_quantity<=m.low_stock_threshold ORDER BY m.stock_quantity LIMIT 250`).bind(org,...(scoped?[branch]:[])).all(),
+    db.prepare(`SELECT a.id,a.outcome,a.reason,a.administered_at,a.is_void,m.name medication_name,c.branch_id,c.first_name||' '||c.last_name client_name,c.preferred_name FROM medication_administrations a JOIN medications m ON m.id=a.medication_id AND m.organisation_id=a.organisation_id JOIN clients c ON c.id=a.client_id AND c.organisation_id=a.organisation_id WHERE a.organisation_id=? ${scoped?'AND c.branch_id=?':''} AND a.is_void=0 AND a.outcome IN ('refused','omitted','unavailable','missed') AND datetime(a.administered_at)>=datetime('now','-1 day') ORDER BY datetime(a.administered_at) DESC LIMIT 250`).bind(org,...(scoped?[branch]:[])).all(),
+    db.prepare(`SELECT u.id user_id,u.display_name,u.access_level,u.home_branch_id,u.status,r.next_review_date FROM users u JOIN user_access_reviews r ON r.id=(SELECT latest.id FROM user_access_reviews latest WHERE latest.organisation_id=u.organisation_id AND latest.user_id=u.id ORDER BY latest.reviewed_at DESC,latest.id DESC LIMIT 1) WHERE u.organisation_id=? ${scoped?'AND u.home_branch_id=?':''} AND u.status='active' AND r.next_review_date IS NOT NULL AND date(r.next_review_date)<date('now') ORDER BY date(r.next_review_date) LIMIT 250`).bind(org,...(scoped?[branch]:[])).all(),
+    db.prepare(`SELECT alert_key,acknowledged_at FROM manager_alert_acknowledgements WHERE organisation_id=? AND user_id=? ORDER BY datetime(acknowledged_at) DESC LIMIT 2000`).bind(org,session.user_id).all()
+  ]);
+  const calculated=buildManagerAlerts({visits:visits.results||[],incidents:incidents.results||[],tasks:tasks.results||[],careAlerts:careAlerts.results||[],medications:medications.results||[],medicationExceptions:medicationExceptions.results||[],accessReviews:accessReviews.results||[]},now).slice(0,250);
+  const alerts=attachManagerAlertAcknowledgements(calculated,receipts.results||[]);
+  return {alerts,summary:managerAlertSummary(alerts),generatedAt:now.toISOString(),pollAfterSeconds:60,serviceDay:{start:serviceStart.toISOString(),end:serviceEnd.toISOString()}};
+}
+
+async function managerAlerts(db,session){return json(await managerAlertData(db,session));}
+
+async function acknowledgeManagerAlert(request,db,session){
+  const input=await readJson(request),alertKey=clean(input.alertKey).slice(0,300);
+  if(!alertKey)return json({error:{code:'VALIDATION_ERROR',message:'Choose an alert to acknowledge.'}},400);
+  const current=await managerAlertData(db,session),alert=current.alerts.find(item=>item.key===alertKey);
+  if(!alert)return json({error:{code:'ALERT_RESOLVED',message:'This alert is no longer active. Refresh the alert centre.'}},409);
+  await db.batch([
+    db.prepare(`INSERT INTO manager_alert_acknowledgements(id,organisation_id,user_id,alert_key,source_type,source_id,severity) VALUES(?,?,?,?,?,?,?) ON CONFLICT(organisation_id,user_id,alert_key) DO UPDATE SET source_type=excluded.source_type,source_id=excluded.source_id,severity=excluded.severity,acknowledged_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP`).bind(crypto.randomUUID(),session.organisation_id,session.user_id,alert.key,alert.sourceType,alert.sourceId,alert.severity),
+    auditStatement(db,session.organisation_id,session.user_id,'manager_alert.acknowledged',alert.sourceType,alert.sourceId,{alertKey:alert.key,severity:alert.severity,category:alert.category})
+  ]);
+  return json({ok:true,alertKey:alert.key,acknowledgedAt:new Date().toISOString()});
 }
 
 const STAFF_COLUMNS = `s.id,s.first_name,s.last_name,s.preferred_name,s.job_title,s.employment_type,s.phone,s.email,s.start_date,s.status,s.dbs_expiry,s.training_expiry,s.notes,s.employee_number,s.line_manager_staff_id,s.contracted_hours,s.work_location,s.probation_end_date,s.end_date,s.emergency_contact_name,s.emergency_contact_relationship,s.emergency_contact_phone,s.supervision_frequency_days,s.next_supervision_date,s.next_appraisal_date,s.created_at,s.updated_at,
@@ -1976,8 +2012,8 @@ function developmentStatus(env, session) {
   return json({ database: { connected: Boolean(env.DB), binding: "DB" }, authentication: { mode: "D1 sessions", cookie: SESSION_COOKIE }, user: publicUser(session), organisation: { id: session.organisation_id, name: session.organisation_name }, deployment: { version: VERSION, checkedAt: new Date().toISOString() } });
 }
 
-function allowedAccessLevels(){return ["organisation_owner","organisation_admin","deputy_manager","branch_manager","office_staff","senior_carer","carer","auditor","family"]; }
-function legacyRole(level){return ({organisation_owner:"owner",organisation_admin:"manager",deputy_manager:"manager",branch_manager:"manager",office_staff:"manager",senior_carer:"carer",carer:"carer",auditor:"auditor",family:"auditor"})[level]||"auditor";}
+function allowedAccessLevels(){return ["organisation_owner","area_manager","organisation_admin","deputy_manager","branch_manager","office_staff","senior_carer","carer","auditor","family"]; }
+function legacyRole(level){return ({organisation_owner:"owner",area_manager:"manager",organisation_admin:"manager",deputy_manager:"manager",branch_manager:"manager",office_staff:"manager",senior_carer:"carer",carer:"carer",auditor:"auditor",family:"auditor"})[level]||"auditor";}
 function forbidden(message = "Your account does not have permission to perform this action.") { return json({ error: { code: "FORBIDDEN", message } }, 403); }
 async function permitted(db, session, permission, action) {
   if (!await userHasPermission(db, session, permission)) return forbidden();
@@ -2081,7 +2117,7 @@ async function medicationWitness(db,session,med,input){
   if(!email||!password)return {error:'A second authorised user must witness this controlled or witness-required administration.'};
   const witness=await db.prepare(`SELECT u.*,c.branch_id AS client_branch_id FROM users u JOIN clients c ON c.id=? AND c.organisation_id=u.organisation_id WHERE lower(u.email)=lower(?) AND u.organisation_id=? AND u.status='active' LIMIT 1`).bind(med.client_id||med.med_client_id,email,session.organisation_id).first();
   if(!witness||witness.id===session.user_id||!witness.password_hash||!await verifyPassword(password,witness.password_salt,witness.password_hash,witness.password_iterations||PASSWORD_ITERATIONS))return {error:'The witness credentials are invalid or belong to the recording user.'};
-  if(witness.client_branch_id&&witness.home_branch_id&&witness.client_branch_id!==witness.home_branch_id&&!['organisation_owner','organisation_admin'].includes(witness.access_level))return {error:'The witness is not authorised for this client branch.'};
+  if(witness.client_branch_id&&witness.home_branch_id&&witness.client_branch_id!==witness.home_branch_id&&!['organisation_owner','area_manager','organisation_admin'].includes(witness.access_level))return {error:'The witness is not authorised for this client branch.'};
   const witnessSession={...witness,user_id:witness.id,active_branch_id:witness.home_branch_id,is_platform_user:0};
   if(!await userHasPermission(db,witnessSession,'medication.administer'))return {error:'The witness does not have permission to administer medication.'};
   return {userId:witness.id,name:witness.display_name||witness.email};
@@ -2777,7 +2813,7 @@ async function getLaunchGovernance(env,session){
     db.prepare(`SELECT c.*,u.display_name completed_by_name FROM organisation_launch_governance_checks c LEFT JOIN users u ON u.id=c.completed_by WHERE c.organisation_id=? ORDER BY c.domain_key,c.check_key`).bind(session.organisation_id).all(),
     db.prepare("SELECT COUNT(*) total FROM sqlite_master WHERE type='trigger' AND name LIKE 'branch_guard_%'").first(),
     db.prepare('SELECT COUNT(*) total FROM organisation_security_policies WHERE organisation_id=? AND (require_mfa<>0 OR require_trusted_device<>0 OR allow_password_login<>1)').bind(session.organisation_id).first(),
-    db.prepare("SELECT COUNT(*) total FROM users WHERE organisation_id=? AND status='active' AND access_level IN ('platform_owner','organisation_owner','organisation_admin','branch_manager')").bind(session.organisation_id).first(),
+    db.prepare("SELECT COUNT(*) total FROM users WHERE organisation_id=? AND status='active' AND access_level IN ('platform_owner','organisation_owner','area_manager','organisation_admin','deputy_manager','branch_manager')").bind(session.organisation_id).first(),
     db.prepare("SELECT COUNT(*) total FROM users WHERE organisation_id=? AND status='active' AND access_level!='family' AND must_change_password=1").bind(session.organisation_id).first(),
     db.prepare("SELECT status,last_started_at,last_completed_at,error_message FROM system_maintenance_state WHERE job_key='hourly'").first()
   ]);
