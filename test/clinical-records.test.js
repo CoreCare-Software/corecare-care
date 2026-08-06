@@ -38,7 +38,7 @@ test('body-map input validates coordinates, progress notes and clinical states',
 });
 
 test('clinical workflows are wired through the live Worker and browser screens', () => {
-  assert.match(worker, /"care_plans\.edit", \(\) => createBodyMapRecord/);
+  assert.match(worker, /"body_map\.manage", \(\) => createBodyMapRecord/);
   assert.doesNotMatch(worker, /care_plans\.manage/);
   assert.match(worker, /carePlanReadiness\(toCarePlan\(plan\)/);
   assert.match(worker, /publicUser\(user\),permissions:access\.permissions,modules:access\.modules/);

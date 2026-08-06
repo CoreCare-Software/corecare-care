@@ -51,3 +51,23 @@ test('Care organisation summary uses the central support-ticket schema', async (
   assert.doesNotMatch(ticketQuery, /source_product/);
   assert.doesNotMatch(ticketQuery, /product_code/);
 });
+
+test('Care applies a Platform archive without deleting business records and revokes sessions', async () => {
+  const statements=[];
+  const database={
+    prepare(sql){return {bind(...values){return {sql,values,first:async()=>sql.includes('FROM organisations')?{id:'org-demo',name:'CoreCare',status:'active'}:null};}};},
+    async batch(items){statements.push(...items);return [{meta:{changes:1}},{meta:{changes:1}},{meta:{changes:4}}];},
+  };
+  const response=await handlePlatformOrganisation(new Request('https://care.example/api/platform/organisations/org-demo',{
+    method:'PATCH',headers:{'content-type':'application/json','x-corecare-product-key':'care-secret'},body:JSON.stringify({status:'archived',platformOrganisationId:'org-demo'}),
+  }),{DB:database,CORECARE_PRODUCT_KEY:'care-secret'},'org-demo');
+  const payload=await response.json();
+
+  assert.equal(response.status,200);
+  assert.equal(payload.organisation.status,'archived');
+  assert.equal(payload.revokedSessions,5);
+  assert.match(statements[0].sql,/UPDATE organisations SET status/);
+  assert.match(statements[1].sql,/UPDATE support_sessions SET ended_at/);
+  assert.match(statements[2].sql,/DELETE FROM sessions WHERE organisation_id/);
+  assert.ok(statements.every(statement=>!/^DELETE FROM organisations/i.test(statement.sql)));
+});

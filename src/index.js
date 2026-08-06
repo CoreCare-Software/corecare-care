@@ -3,15 +3,19 @@ import { exchangePlatformAccess } from './platform-access.js';
 import { handlePlatformOrganisation } from './platform-organisations.js';
 import { subscriptionAccess, subscriptionLimit, syncPlatformEntitlements } from './platform-entitlements.js';
 import { carePlanReadiness, validateAdministration, validateBodyMap, validateMedicationProfile } from './clinical-records.js';
-import { assessRotaPublication, calculateLiveDashboard, normaliseFamilyAccess } from './operational-workspaces.js';
+import { assessRotaPublication, calculateLiveDashboard } from './operational-workspaces.js';
 import { calculateFinanceMetrics, calculateReportSummary, incidentReference, normaliseFinanceTransaction, normaliseIncidentReport, normaliseIncidentReview, normaliseInvoice, validateFinanceSettings } from './business-workspaces.js';
 import { LAUNCH_GOVERNANCE_DOMAINS, deriveLaunchDomainStatus, deriveOverallLaunchStatus, launchGovernanceDomain, validateLaunchSignoff } from './launch-governance.js';
 import { requestPlatformSupportTicket, requestPlatformTransactionalEmail } from './platform-email.js';
 import { protectResponse, recordComplianceMutation } from './compliance-audit.js';
+import { calculateStaffReadiness, calculateWorkforceOverview, normaliseSupervisionActions, normaliseWorkforceSettings } from './workforce-records.js';
+import { workforceSetupStatements } from './workforce-seed.js';
+import { familyAccessReviewState, normaliseFamilyPortalAccess, normaliseFamilyPreferences, validateFamilyMessage, validateFamilyUpdate } from './family-portal.js';
+import { accessReviewState, canAssignStandardRole, impliedPermissionSources, publicStandardRoleProfiles, roleScope, standardPermissionsForRole } from './access-control.js';
 
-/** CoreCare Care 1.38.1 - Owner Platform custom-domain routing */
-const VERSION = "1.38.1";
-const RELEASE = "CoreCare Care 1.38.1 - Owner Platform custom-domain routing";
+/** CoreCare Care 1.41.0 - governed workforce access and role assurance */
+const VERSION = "1.41.0";
+const RELEASE = "CoreCare Care 1.41.0 - governed workforce access and role assurance";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -37,7 +41,7 @@ const application = {
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
       if (request.headers.get('x-corecare-product-key') && url.pathname === "/api/platform/organisations" && request.method === "POST") return handlePlatformOrganisation(request, env);
-      if (request.headers.get('x-corecare-product-key') && url.pathname.startsWith("/api/platform/organisations/") && request.method === "GET") return handlePlatformOrganisation(request, env, decodeURIComponent(url.pathname.slice("/api/platform/organisations/".length)));
+      if (request.headers.get('x-corecare-product-key') && url.pathname.startsWith("/api/platform/organisations/") && ["GET","PATCH"].includes(request.method)) return handlePlatformOrganisation(request, env, decodeURIComponent(url.pathname.slice("/api/platform/organisations/".length)));
 
       if (url.pathname.startsWith("/api/")) {
         if (!env.DB) return databaseRequired();
@@ -60,46 +64,46 @@ const application = {
         if (url.pathname === "/api/dashboard" && request.method === "GET") return await permitted(env.DB, session, "dashboard.view", () => dashboardSummary(env.DB, session));
         if (url.pathname === "/api/carer/dashboard" && request.method === "GET") return await permitted(env.DB, session, "visits.view", () => carerDashboard(env.DB, session));
         if (url.pathname === "/api/operations/board" && request.method === "GET") return operationsBoard(env.DB, session);
-        if (url.pathname === "/api/rota" && request.method === "GET") return requireManagementWorkspace(session) || await permitted(env.DB, session, "rota.view", () => rotaBoard(env.DB, session, url));
-        if (url.pathname === "/api/rota" && request.method === "POST") return requireManagementWorkspace(session) || await permitted(env.DB, session, "rota.create", () => createRotaVisit(request, env, session));
-        if (url.pathname === "/api/rota/publish" && request.method === "POST") return requireManagementWorkspace(session) || await permitted(env.DB, session, "rota.publish", () => publishRota(request, env.DB, session));
-        if (url.pathname === "/api/rota/templates" && request.method === "GET") return listRotaTemplates(env.DB, session);
-        if (url.pathname === "/api/rota/templates/visit" && request.method === "POST") return saveRotaVisitTemplate(request, env.DB, session);
-        if (url.pathname === "/api/rota/templates/working-pattern" && request.method === "POST") return saveWorkingPattern(request, env.DB, session);
-        if (url.pathname === "/api/rota/templates/exception" && request.method === "POST") return saveRotaException(request, env.DB, session);
-        if (url.pathname === "/api/rota/templates/generate" && request.method === "POST") return generateRotaFromTemplates(request, env, session);
+        if (url.pathname === "/api/rota" && request.method === "GET") return await permitted(env.DB, session, "rota.view", () => rotaBoard(env.DB, session, url));
+        if (url.pathname === "/api/rota" && request.method === "POST") return await permitted(env.DB, session, "rota.create", () => createRotaVisit(request, env, session));
+        if (url.pathname === "/api/rota/publish" && request.method === "POST") return await permitted(env.DB, session, "rota.publish", () => publishRota(request, env.DB, session));
+        if (url.pathname === "/api/rota/templates" && request.method === "GET") return await permitted(env.DB, session, "rota.templates.view", () => listRotaTemplates(env.DB, session));
+        if (url.pathname === "/api/rota/templates/visit" && request.method === "POST") return await permitted(env.DB, session, "rota.templates.manage", () => saveRotaVisitTemplate(request, env.DB, session));
+        if (url.pathname === "/api/rota/templates/working-pattern" && request.method === "POST") return await permitted(env.DB, session, "rota.templates.manage", () => saveWorkingPattern(request, env.DB, session));
+        if (url.pathname === "/api/rota/templates/exception" && request.method === "POST") return await permitted(env.DB, session, "rota.templates.manage", () => saveRotaException(request, env.DB, session));
+        if (url.pathname === "/api/rota/templates/generate" && request.method === "POST") return await permitted(env.DB, session, "rota.templates.generate", () => generateRotaFromTemplates(request, env, session));
         const templateDeleteMatch=url.pathname.match(/^\/api\/rota\/templates\/(visit|working-pattern|exception)\/([^/]+)$/);
-        if(templateDeleteMatch&&request.method === "DELETE") return deleteRotaTemplateItem(env.DB,session,templateDeleteMatch[1],decodeURIComponent(templateDeleteMatch[2]));
+        if(templateDeleteMatch&&request.method === "DELETE") return await permitted(env.DB, session, "rota.templates.manage", () => deleteRotaTemplateItem(env.DB,session,templateDeleteMatch[1],decodeURIComponent(templateDeleteMatch[2])));
         if (url.pathname === "/api/routing/settings") {
           if (request.method === "GET") return getRoutingSettings(env, session);
           if (request.method === "PUT") return updateRoutingSettings(request, env, session);
         }
         if (url.pathname === "/api/routing/recalculate" && request.method === "POST") return recalculateRouting(request, env, session);
         const requirementMatch = url.pathname.match(/^\/api\/clients\/([^/]+)\/visit-requirements$/);
-        if (requirementMatch && request.method === "GET") return listVisitRequirements(env.DB, session, decodeURIComponent(requirementMatch[1]));
-        if (requirementMatch && request.method === "POST") return saveVisitRequirements(request, env.DB, session, decodeURIComponent(requirementMatch[1]));
+        if (requirementMatch && request.method === "GET") return await permitted(env.DB, session, "clients.view", () => listVisitRequirements(env.DB, session, decodeURIComponent(requirementMatch[1])));
+        if (requirementMatch && request.method === "POST") return await permitted(env.DB, session, "rota.create", () => saveVisitRequirements(request, env.DB, session, decodeURIComponent(requirementMatch[1])));
         if (/^\/api\/rota\/[^/]+\/recurrence$/.test(url.pathname) && request.method === "POST") return await permitted(env.DB, session, "rota.edit", () => manageVisitRecurrence(request, env.DB, session, url.pathname.split("/")[3]));
         if (/^\/api\/rota\/[^/]+$/.test(url.pathname) && request.method === "PATCH") return await permitted(env.DB, session, "rota.edit", () => updateRotaVisit(request, env, session, url.pathname.split("/").pop()));
         if (/^\/api\/rota\/[^/]+\/cancel$/.test(url.pathname) && request.method === "POST") return await permitted(env.DB, session, "rota.cancel", () => cancelRotaVisit(request, env.DB, session, url.pathname.split("/")[3]));
-        if (url.pathname === "/api/visits/board" && request.method === "GET") return requireManagementWorkspace(session) || visitsBoard(env.DB, session);
-        if (url.pathname === "/api/visits" && request.method === "POST") return requireManagementWorkspace(session) || createVisit(request, env.DB, session);
-        if (url.pathname === "/api/visits/client-code" && request.method === "POST") return requireManagementWorkspace(session) || ensureClientVisitCode(request, env.DB, session);
-        if (url.pathname === "/api/visits/sync" && request.method === "POST") return syncVisitEvents(request, env.DB, session);
+        if (url.pathname === "/api/visits/board" && request.method === "GET") return await permitted(env.DB, session, "visits.view", () => visitsBoard(env.DB, session));
+        if (url.pathname === "/api/visits" && request.method === "POST") return await permitted(env.DB, session, "visits.create", () => createVisit(request, env.DB, session));
+        if (url.pathname === "/api/visits/client-code" && request.method === "POST") return await permitted(env.DB, session, "visits.codes.manage", () => ensureClientVisitCode(request, env.DB, session));
+        if (url.pathname === "/api/visits/sync" && request.method === "POST") return await permitted(env.DB, session, "visits.clock", () => syncVisitEvents(request, env.DB, session));
         const visitRecordMatch = url.pathname.match(/^\/api\/visits\/([^/]+)\/care-record$/);
-        if (visitRecordMatch && request.method === "GET") return getVisitCareRecord(env.DB, session, decodeURIComponent(visitRecordMatch[1]));
-        if (visitRecordMatch && request.method === "POST") return saveVisitCareRecord(request, env.DB, session, decodeURIComponent(visitRecordMatch[1]));
+        if (visitRecordMatch && request.method === "GET") return await permitted(env.DB, session, "visits.records.view", () => getVisitCareRecord(env.DB, session, decodeURIComponent(visitRecordMatch[1])));
+        if (visitRecordMatch && request.method === "POST") return await permitted(env.DB, session, "visits.records.manage", () => saveVisitCareRecord(request, env.DB, session, decodeURIComponent(visitRecordMatch[1])));
         if (url.pathname === "/api/operations/tasks" && request.method === "POST") return await permitted(env.DB, session, "tasks.manage", () => createOperationsTask(request, env.DB, session));
         const operationsTaskMatch = url.pathname.match(/^\/api\/operations\/tasks\/([^/]+)\/(complete|escalate)$/);
-        if (operationsTaskMatch && request.method === "POST") return await permitted(env.DB, session, "tasks.manage", () => updateOperationsTask(env.DB, session, decodeURIComponent(operationsTaskMatch[1]), operationsTaskMatch[2]));
-        if (url.pathname === "/api/operations/incidents" && request.method === "POST") return await permitted(env.DB, session, "incidents.manage", () => createOperationsIncident(request, env, session));
+        if (operationsTaskMatch && request.method === "POST") return await permitted(env.DB, session, "tasks.complete", () => updateOperationsTask(env.DB, session, decodeURIComponent(operationsTaskMatch[1]), operationsTaskMatch[2]));
+        if (url.pathname === "/api/operations/incidents" && request.method === "POST") return await permitted(env.DB, session, "incidents.create", () => createOperationsIncident(request, env, session));
         const operationsIncidentMatch = url.pathname.match(/^\/api\/operations\/incidents\/([^/]+)\/review$/);
-        if (operationsIncidentMatch && request.method === "POST") return await permitted(env.DB, session, "incidents.manage", () => reviewOperationsIncident(request, env.DB, session, decodeURIComponent(operationsIncidentMatch[1])));
+        if (operationsIncidentMatch && request.method === "POST") return await permitted(env.DB, session, "incidents.review", () => reviewOperationsIncident(request, env.DB, session, decodeURIComponent(operationsIncidentMatch[1])));
         if (url.pathname === "/api/finance" && request.method === "GET") return await permitted(env.DB, session, "finance.view", () => financeWorkspace(env.DB, session));
         if (url.pathname === "/api/finance/transactions" && request.method === "POST") return await permitted(env.DB, session, "finance.manage", () => createFinanceTransaction(request, env.DB, session));
         if (url.pathname === "/api/finance/invoices" && request.method === "POST") return await permitted(env.DB, session, "finance.manage", () => createFinanceInvoice(request, env.DB, session));
         const financeInvoiceStatusMatch = url.pathname.match(/^\/api\/finance\/invoices\/([^/]+)\/status$/);
         if (financeInvoiceStatusMatch && request.method === "POST") return await permitted(env.DB, session, "finance.manage", () => updateFinanceInvoiceStatus(request, env.DB, session, decodeURIComponent(financeInvoiceStatusMatch[1])));
-        if (url.pathname === "/api/finance/settings" && request.method === "PUT") return await permitted(env.DB, session, "finance.manage", () => updateFinanceSettings(request, env.DB, session));
+        if (url.pathname === "/api/finance/settings" && request.method === "PUT") return await permitted(env.DB, session, "finance.settings.manage", () => updateFinanceSettings(request, env.DB, session));
         if (url.pathname === "/api/reports" && request.method === "GET") return await permitted(env.DB, session, "reports.view", () => reportsWorkspace(env.DB, session, url));
         if (url.pathname === "/api/operations/handovers" && request.method === "POST") return await permitted(env.DB, session, "operations.manage", () => createShiftHandover(request, env.DB, session));
         const handoverAckMatch = url.pathname.match(/^\/api\/operations\/handovers\/([^/]+)\/acknowledge$/);
@@ -109,33 +113,33 @@ const application = {
         if (url.pathname === "/api/medication" && request.method === "GET") return await permitted(env.DB, session, "medication.view", () => listMedication(env.DB, session, url));
         if (url.pathname === "/api/medication" && request.method === "POST") return await permitted(env.DB, session, "medication.manage", () => saveMedication(request, env.DB, session));
         const medicationAdminMatch = url.pathname.match(/^\/api\/medication\/([^/]+)\/administer$/);
-        if (medicationAdminMatch && request.method === "POST") return await permitted(env.DB, session, "medication.manage", () => administerMedication(request, env.DB, session, decodeURIComponent(medicationAdminMatch[1])));
+        if (medicationAdminMatch && request.method === "POST") return await permitted(env.DB, session, "medication.administer", () => administerMedication(request, env.DB, session, decodeURIComponent(medicationAdminMatch[1])));
         if (url.pathname === "/api/medication/daily-mar" && request.method === "GET") return await permitted(env.DB, session, "medication.view", () => dailyMar(env.DB, session, url));
         const medicationStockMatch = url.pathname.match(/^\/api\/medication\/([^/]+)\/stock$/);
-        if (medicationStockMatch && request.method === "POST") return await permitted(env.DB, session, "medication.manage", () => adjustMedicationStock(request, env.DB, session, decodeURIComponent(medicationStockMatch[1])));
+        if (medicationStockMatch && request.method === "POST") return await permitted(env.DB, session, "medication.stock.manage", () => adjustMedicationStock(request, env.DB, session, decodeURIComponent(medicationStockMatch[1])));
         const medicationCorrectionMatch = url.pathname.match(/^\/api\/medication\/administrations\/([^/]+)\/correct$/);
-        if (medicationCorrectionMatch && request.method === "POST") return await permitted(env.DB, session, "medication.manage", () => correctMedicationAdministration(request, env.DB, session, decodeURIComponent(medicationCorrectionMatch[1])));
-        if (url.pathname === "/api/body-map" && request.method === "GET") return await permitted(env.DB, session, "clients.view", () => listBodyMap(env.DB, session, url));
-        if (url.pathname === "/api/body-map" && request.method === "POST") return await permitted(env.DB, session, "care_plans.edit", () => createBodyMapRecord(request, env.DB, session));
+        if (medicationCorrectionMatch && request.method === "POST") return await permitted(env.DB, session, "medication.correct", () => correctMedicationAdministration(request, env.DB, session, decodeURIComponent(medicationCorrectionMatch[1])));
+        if (url.pathname === "/api/body-map" && request.method === "GET") return await permitted(env.DB, session, "body_map.view", () => listBodyMap(env.DB, session, url));
+        if (url.pathname === "/api/body-map" && request.method === "POST") return await permitted(env.DB, session, "body_map.manage", () => createBodyMapRecord(request, env.DB, session));
         const bodyMapUpdateMatch = url.pathname.match(/^\/api\/body-map\/([^/]+)\/update$/);
-        if (bodyMapUpdateMatch && request.method === "POST") return await permitted(env.DB, session, "care_plans.edit", () => updateBodyMapRecord(request, env, session, decodeURIComponent(bodyMapUpdateMatch[1])));
+        if (bodyMapUpdateMatch && request.method === "POST") return await permitted(env.DB, session, "body_map.manage", () => updateBodyMapRecord(request, env, session, decodeURIComponent(bodyMapUpdateMatch[1])));
         const carePlanActionMatch = url.pathname.match(/^\/api\/care-plans\/([^/]+)\/(approve|generate-visits)$/);
-        if (carePlanActionMatch && request.method === "POST") return await permitted(env.DB, session, "care_plans.edit", () => carePlanAction(request, env.DB, session, decodeURIComponent(carePlanActionMatch[1]), carePlanActionMatch[2]));
+        if (carePlanActionMatch && request.method === "POST") return await permitted(env.DB, session, carePlanActionMatch[2] === 'approve' ? "care_plans.approve" : "care_plans.generate_visits", () => carePlanAction(request, env.DB, session, decodeURIComponent(carePlanActionMatch[1]), carePlanActionMatch[2]));
         const carePlanHistoryMatch = url.pathname.match(/^\/api\/care-plans\/([^/]+)\/history$/);
         if (carePlanHistoryMatch && request.method === "GET") return await permitted(env.DB, session, "care_plans.view", () => carePlanHistory(env.DB, session, decodeURIComponent(carePlanHistoryMatch[1])));
         const careAlertMatch = url.pathname.match(/^\/api\/care-delivery\/alerts\/([^/]+)\/acknowledge$/);
-        if (careAlertMatch && request.method === "POST") return acknowledgeCareAlert(env.DB, session, decodeURIComponent(careAlertMatch[1]));
-        if (url.pathname === "/api/support/tickets" && request.method === "GET") return listOrganisationTickets(env.DB, session, url);
-        if (url.pathname === "/api/support/tickets" && request.method === "POST") return createOrganisationTicket(request, env, session);
+        if (careAlertMatch && request.method === "POST") return await permitted(env.DB, session, "operations.manage", () => acknowledgeCareAlert(env.DB, session, decodeURIComponent(careAlertMatch[1])));
+        if (url.pathname === "/api/support/tickets" && request.method === "GET") return await permitted(env.DB, session, "support.tickets.view", () => listOrganisationTickets(env.DB, session, url));
+        if (url.pathname === "/api/support/tickets" && request.method === "POST") return await permitted(env.DB, session, "support.tickets.manage", () => createOrganisationTicket(request, env, session));
         const orgSupportTicketMatch = url.pathname.match(/^\/api\/support\/tickets\/([^/]+)$/);
-        if (orgSupportTicketMatch && request.method === "GET") return getOrganisationTicket(env.DB, session, decodeURIComponent(orgSupportTicketMatch[1]));
-        if (orgSupportTicketMatch && request.method === "PUT") return updateOrganisationTicket(request, env.DB, session, decodeURIComponent(orgSupportTicketMatch[1]));
+        if (orgSupportTicketMatch && request.method === "GET") return await permitted(env.DB, session, "support.tickets.view", () => getOrganisationTicket(env.DB, session, decodeURIComponent(orgSupportTicketMatch[1])));
+        if (orgSupportTicketMatch && request.method === "PUT") return await permitted(env.DB, session, "support.tickets.manage", () => updateOrganisationTicket(request, env.DB, session, decodeURIComponent(orgSupportTicketMatch[1])));
         const orgSupportMessageMatch = url.pathname.match(/^\/api\/support\/tickets\/([^/]+)\/messages$/);
-        if (orgSupportMessageMatch && request.method === "POST") return addOrganisationTicketMessage(request, env.DB, session, decodeURIComponent(orgSupportMessageMatch[1]));
+        if (orgSupportMessageMatch && request.method === "POST") return await permitted(env.DB, session, "support.tickets.manage", () => addOrganisationTicketMessage(request, env.DB, session, decodeURIComponent(orgSupportMessageMatch[1])));
         const orgSupportAttachmentMatch = url.pathname.match(/^\/api\/support\/tickets\/([^/]+)\/attachments$/);
-        if (orgSupportAttachmentMatch && request.method === "POST") return addOrganisationTicketAttachment(request, env.DB, session, decodeURIComponent(orgSupportAttachmentMatch[1]));
+        if (orgSupportAttachmentMatch && request.method === "POST") return await permitted(env.DB, session, "support.tickets.manage", () => addOrganisationTicketAttachment(request, env.DB, session, decodeURIComponent(orgSupportAttachmentMatch[1])));
         const orgSupportAttachmentGetMatch = url.pathname.match(/^\/api\/support\/attachments\/([^/]+)$/);
-        if (orgSupportAttachmentGetMatch && request.method === "GET") return getOrganisationTicketAttachment(env.DB, session, decodeURIComponent(orgSupportAttachmentGetMatch[1]));
+        if (orgSupportAttachmentGetMatch && request.method === "GET") return await permitted(env.DB, session, "support.tickets.view", () => getOrganisationTicketAttachment(env.DB, session, decodeURIComponent(orgSupportAttachmentGetMatch[1])));
         if (url.pathname === "/api/platform/dashboard" && request.method === "GET") return platformDashboard(env.DB, session);
         if (url.pathname === "/api/platform/revenue" && request.method === "GET") return platformRevenue(env.DB, session);
         if (url.pathname === "/api/platform/customer-success" && request.method === "GET") return platformCustomerSuccess(env.DB, session);
@@ -170,8 +174,8 @@ const application = {
         if (orgMatch && request.method === "PUT") return updateOrganisationAdmin(request, env.DB, session, decodeURIComponent(orgMatch[1]));
         if (url.pathname === "/api/platform/switch-organisation" && request.method === "POST") return switchOrganisation(request, env.DB, session);
         if (url.pathname === "/api/platform/exit-support" && request.method === "POST") return exitSupportMode(env.DB, session);
-        if (url.pathname === "/api/organisation/profile" && request.method === "GET") return getOrganisationProfile(env.DB, session);
-        if (url.pathname === "/api/organisation/profile" && request.method === "PUT") return updateOrganisationProfile(request, env.DB, session);
+        if (url.pathname === "/api/organisation/profile" && request.method === "GET") return await permitted(env.DB, session, "organisation.settings.view", () => getOrganisationProfile(env.DB, session));
+        if (url.pathname === "/api/organisation/profile" && request.method === "PUT") return await permitted(env.DB, session, "organisation.settings.manage", () => updateOrganisationProfile(request, env.DB, session));
         if (url.pathname === "/api/launch-governance" && request.method === "GET") return getLaunchGovernance(env, session);
         const launchSignoffMatch = url.pathname.match(/^\/api\/launch-governance\/([^/]+)\/signoff$/);
         if (launchSignoffMatch && request.method === "POST") return updateLaunchGovernanceSignoff(request, env.DB, session, decodeURIComponent(launchSignoffMatch[1]));
@@ -198,6 +202,8 @@ const application = {
         }
         if (url.pathname === "/api/security/login-history" && request.method === "GET") return listLoginHistory(env.DB, session);
         if (url.pathname === "/api/security/effective-access" && request.method === "GET") return effectiveAccess(env.DB, session, url);
+        if (url.pathname === "/api/security/access-governance" && request.method === "GET") return accessGovernance(env.DB, session);
+        if (url.pathname === "/api/security/access-reviews" && request.method === "POST") return recordUserAccessReview(request, env.DB, session);
         if (url.pathname === "/api/security/modules") {
           if (request.method === "GET") return listOrganisationModules(env.DB, session);
           if (request.method === "PUT") return updateOrganisationModules(request, env.DB, session);
@@ -210,12 +216,36 @@ const application = {
         }
         if (url.pathname === "/api/security/emergency-mode" && request.method === "PUT") return updateEmergencyMode(request, env.DB, session);
         if (url.pathname === "/api/branches") {
-          if (request.method === "GET") return listBranches(env.DB, session);
-          if (request.method === "POST") return createBranch(request, env.DB, session);
+          if (request.method === "GET") return await permitted(env.DB, session, "branches.view", () => listBranches(env.DB, session));
+          if (request.method === "POST") return await permitted(env.DB, session, "branches.manage", () => createBranch(request, env.DB, session));
         }
         const branchMatch = url.pathname.match(/^\/api\/branches\/([^/]+)$/);
-        if (branchMatch && request.method === "PUT") return updateBranch(request, env.DB, session, decodeURIComponent(branchMatch[1]));
+        if (branchMatch && request.method === "PUT") return await permitted(env.DB, session, "branches.manage", () => updateBranch(request, env.DB, session, decodeURIComponent(branchMatch[1])));
         if (url.pathname === "/api/family/portal" && request.method === "GET") return familyPortal(env.DB, session);
+        if (url.pathname === "/api/family/preferences") {
+          if (request.method === "GET") return getFamilyPreferences(env.DB, session);
+          if (request.method === "PUT") return updateFamilyPreferences(request, env.DB, session);
+          return methodNotAllowed(["GET", "PUT"]);
+        }
+        if (url.pathname === "/api/family/messages") {
+          if (request.method === "GET") return listFamilyMessages(env.DB, session);
+          if (request.method === "POST") return saveFamilyMessage(request, env.DB, session);
+          return methodNotAllowed(["GET", "POST"]);
+        }
+        const familyThreadMatch = url.pathname.match(/^\/api\/family\/messages\/([^/]+)$/);
+        if (familyThreadMatch && request.method === "PATCH") return updateFamilyMessageThread(request, env.DB, session, decodeURIComponent(familyThreadMatch[1]));
+        if (url.pathname === "/api/family/notifications/read-all" && request.method === "POST") return readAllFamilyNotifications(env.DB, session);
+        const familyNotificationMatch = url.pathname.match(/^\/api\/family\/notifications\/([^/]+)$/);
+        if (familyNotificationMatch && request.method === "PATCH") return readFamilyNotification(env.DB, session, decodeURIComponent(familyNotificationMatch[1]));
+        if (url.pathname === "/api/family/management" && request.method === "GET") return await permitted(env.DB, session, "family_portal.manage", () => familyManagementHub(env.DB, session));
+        if (url.pathname === "/api/family/updates" && request.method === "POST") return await permitted(env.DB, session, "family_portal.manage", () => publishFamilyUpdate(request, env.DB, session));
+        const familyUpdateMatch = url.pathname.match(/^\/api\/family\/updates\/([^/]+)$/);
+        if (familyUpdateMatch && request.method === "DELETE") return await permitted(env.DB, session, "family_portal.manage", () => withdrawFamilyUpdate(env.DB, session, decodeURIComponent(familyUpdateMatch[1])));
+        const familyDocumentShareMatch = url.pathname.match(/^\/api\/family\/documents\/([^/]+)\/share$/);
+        if (familyDocumentShareMatch) {
+          if (request.method === "PUT") return await permitted(env.DB, session, "family_portal.manage", () => shareFamilyDocument(request, env.DB, session, decodeURIComponent(familyDocumentShareMatch[1])));
+          if (request.method === "DELETE") return await permitted(env.DB, session, "family_portal.manage", () => unshareFamilyDocument(request, env.DB, session, decodeURIComponent(familyDocumentShareMatch[1])));
+        }
         if (url.pathname === "/api/family-access") {
           if (request.method === "GET") return await permitted(env.DB, session, "family_portal.manage", () => listFamilyAccess(env.DB, session));
           if (request.method === "POST") return await permitted(env.DB, session, "family_portal.manage", () => saveFamilyAccess(request, env.DB, session));
@@ -228,7 +258,40 @@ const application = {
         const familyAccountMatch = url.pathname.match(/^\/api\/family-access\/accounts\/([^/]+)$/);
         if (familyAccountMatch && request.method === "PUT") return await permitted(env.DB, session, "family_portal.manage", () => updateFamilyAccount(request, env, session, decodeURIComponent(familyAccountMatch[1])));
         const familyAccessMatch = url.pathname.match(/^\/api\/family-access\/([^/]+)$/);
-        if (familyAccessMatch && request.method === "DELETE") return await permitted(env.DB, session, "family_portal.manage", () => revokeFamilyAccess(env.DB, session, decodeURIComponent(familyAccessMatch[1])));
+        if (familyAccessMatch && request.method === "DELETE") return await permitted(env.DB, session, "family_portal.manage", () => revokeFamilyAccess(request, env.DB, session, decodeURIComponent(familyAccessMatch[1])));
+        if (url.pathname === "/api/workforce/overview" && request.method === "GET") return await permitted(env.DB, session, "staff.records.view", () => workforceOverview(env.DB, session));
+        if (url.pathname === "/api/workforce/settings") {
+          if (request.method === "GET") return await permitted(env.DB, session, "staff.records.view", () => getWorkforceSettings(env.DB, session));
+          if (request.method === "PUT") return await permitted(env.DB, session, "staff.records.manage", () => updateWorkforceSettings(request, env.DB, session));
+          return methodNotAllowed(["GET", "PUT"]);
+        }
+        if (url.pathname === "/api/workforce/training-catalog") {
+          if (request.method === "GET") return await permitted(env.DB, session, "staff.training.view", () => getTrainingCatalogue(env.DB, session));
+          if (request.method === "POST") return await permitted(env.DB, session, "staff.training.manage", () => saveTrainingCatalogue(request, env.DB, session));
+          return methodNotAllowed(["GET", "POST"]);
+        }
+        const trainingCatalogueMatch = url.pathname.match(/^\/api\/workforce\/training-catalog\/([^/]+)$/);
+        if (trainingCatalogueMatch && request.method === "PUT") return await permitted(env.DB, session, "staff.training.manage", () => saveTrainingCatalogue(request, env.DB, session, decodeURIComponent(trainingCatalogueMatch[1])));
+        if (url.pathname === "/api/staff/me/workforce" && request.method === "GET") return getMyStaffWorkforce(env.DB, session);
+        const staffWorkforceMatch = url.pathname.match(/^\/api\/staff\/([^/]+)\/workforce$/);
+        if (staffWorkforceMatch && request.method === "GET") return await permitted(env.DB, session, "staff.records.view", () => getStaffWorkforce(env.DB, session, decodeURIComponent(staffWorkforceMatch[1])));
+        const staffDocumentFileMatch = url.pathname.match(/^\/api\/staff\/([^/]+)\/documents\/([^/]+)\/file$/);
+        if (staffDocumentFileMatch && request.method === "GET") return staffDocumentFile(env, session, decodeURIComponent(staffDocumentFileMatch[1]), decodeURIComponent(staffDocumentFileMatch[2]));
+        const staffDocumentMatch = url.pathname.match(/^\/api\/staff\/([^/]+)\/documents\/([^/]+)$/);
+        if (staffDocumentMatch && request.method === "DELETE") return await permitted(env.DB, session, "staff.documents.manage", () => archiveStaffDocument(env.DB, session, decodeURIComponent(staffDocumentMatch[1]), decodeURIComponent(staffDocumentMatch[2])));
+        const staffDocumentsMatch = url.pathname.match(/^\/api\/staff\/([^/]+)\/documents$/);
+        if (staffDocumentsMatch && request.method === "POST") return await permitted(env.DB, session, "staff.documents.manage", () => uploadStaffDocument(request, env, session, decodeURIComponent(staffDocumentsMatch[1])));
+        const staffAcknowledgeMatch = url.pathname.match(/^\/api\/staff\/([^/]+)\/workforce\/(supervisions|appraisals)\/([^/]+)\/acknowledge$/);
+        if (staffAcknowledgeMatch && request.method === "POST") return acknowledgeStaffRecord(request, env.DB, session, decodeURIComponent(staffAcknowledgeMatch[1]), staffAcknowledgeMatch[2], decodeURIComponent(staffAcknowledgeMatch[3]));
+        const staffRecordMatch = url.pathname.match(/^\/api\/staff\/([^/]+)\/workforce\/(recruitment|employment|supervisions|training|competencies|qualifications|appraisals|absences|hr)\/([^/]+)$/);
+        if (staffRecordMatch) {
+          const staffId=decodeURIComponent(staffRecordMatch[1]),section=staffRecordMatch[2],recordId=decodeURIComponent(staffRecordMatch[3]);
+          if (request.method === "PUT") return await permitted(env.DB, session, workforcePermission(section, "manage"), () => saveStaffWorkforceRecord(request, env.DB, session, staffId, section, recordId));
+          if (request.method === "DELETE") return await permitted(env.DB, session, workforcePermission(section, "manage"), () => archiveStaffWorkforceRecord(env.DB, session, staffId, section, recordId));
+          return methodNotAllowed(["PUT", "DELETE"]);
+        }
+        const staffRecordCollectionMatch = url.pathname.match(/^\/api\/staff\/([^/]+)\/workforce\/(recruitment|employment|supervisions|training|competencies|qualifications|appraisals|absences|hr)$/);
+        if (staffRecordCollectionMatch && request.method === "POST") return await permitted(env.DB, session, workforcePermission(staffRecordCollectionMatch[2], "manage"), () => saveStaffWorkforceRecord(request, env.DB, session, decodeURIComponent(staffRecordCollectionMatch[1]), staffRecordCollectionMatch[2]));
         if (url.pathname === "/api/staff") {
           if (request.method === "GET") return await permitted(env.DB, session, "staff.view", () => listStaff(env.DB, session, url));
           if (request.method === "POST") return await permitted(env.DB, session, "staff.create", () => createStaff(request, env, session));
@@ -295,14 +358,14 @@ const application = {
           return methodNotAllowed(["GET", "PUT", "DELETE"]);
         }
         if (url.pathname === "/api/users") {
-          if (request.method === "GET") return listUsers(env.DB, session);
+          if (request.method === "GET") return await permitted(env.DB, session, "security.users.view", () => listUsers(env.DB, session));
           if (request.method === "POST") return createUser(request, env, session);
           return methodNotAllowed(["GET", "POST"]);
         }
         const userMatch = url.pathname.match(/^\/api\/users\/([^/]+)$/);
         if (userMatch && request.method === "PUT") return updateUser(request, env, session, decodeURIComponent(userMatch[1]));
-        if (url.pathname === "/api/audit" && request.method === "GET") return listAudit(env.DB, session, url);
-        if (url.pathname === "/api/organisation" && request.method === "PUT") return updateOrganisation(request, env.DB, session);
+        if (url.pathname === "/api/audit" && request.method === "GET") return await permitted(env.DB, session, "security.audit.view", () => listAudit(env.DB, session, url));
+        if (url.pathname === "/api/organisation" && request.method === "PUT") return await permitted(env.DB, session, "organisation.settings.manage", () => updateOrganisation(request, env.DB, session));
         return json({ error: { code: "API_ROUTE_NOT_FOUND", message: "The requested API route does not exist." } }, 404);
       }
       return env.ASSETS.fetch(request);
@@ -319,7 +382,7 @@ async function requestPasswordReset(request,env){
   if(!env.DB)return databaseRequired();
   const input=await readJson(request),email=clean(input.email).toLowerCase().slice(0,320);
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))return passwordResetResponse();
-  const user=await env.DB.prepare(`SELECT u.id,u.organisation_id,u.email,u.display_name,u.access_level,o.name organisation_name FROM users u JOIN organisations o ON o.id=u.organisation_id WHERE lower(u.email)=lower(?) AND u.status='active' LIMIT 1`).bind(email).first();
+  const user=await env.DB.prepare(`SELECT u.id,u.organisation_id,u.email,u.display_name,u.access_level,o.name organisation_name FROM users u JOIN organisations o ON o.id=u.organisation_id WHERE lower(u.email)=lower(?) AND u.status='active' AND o.status='active' LIMIT 1`).bind(email).first();
   if(!user)return passwordResetResponse();
   const ipHash=await sha256Base64(clean(request.headers.get('cf-connecting-ip'))||'unknown');
   const [byUser,byIp]=await Promise.all([env.DB.prepare("SELECT COUNT(*) total FROM password_reset_tokens WHERE user_id=? AND created_at>=datetime('now','-1 hour')").bind(user.id).first(),env.DB.prepare("SELECT COUNT(*) total FROM password_reset_tokens WHERE request_ip_hash=? AND created_at>=datetime('now','-1 hour')").bind(ipHash).first()]);
@@ -356,7 +419,7 @@ export class IdentityBroker extends WorkerEntrypoint {
   async accountExists(email) {
     const normalised = clean(email).toLowerCase().slice(0, 320);
     if (!normalised || !this.env.DB) return false;
-    const row = await this.env.DB.prepare("SELECT id FROM users WHERE lower(email)=lower(?) AND status='active' LIMIT 1").bind(normalised).first();
+    const row = await this.env.DB.prepare("SELECT u.id FROM users u JOIN organisations o ON o.id=u.organisation_id WHERE lower(u.email)=lower(?) AND u.status='active' AND o.status='active' LIMIT 1").bind(normalised).first();
     return Boolean(row);
   }
 
@@ -507,8 +570,8 @@ async function login(request, env) {
     return json({ error: { code: "ACCOUNT_TEMPORARILY_LOCKED", message: "Too many unsuccessful attempts. Try again in 15 minutes." } }, 429);
   }
 
-  const user = await env.DB.prepare(`SELECT u.id,u.organisation_id,u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.status,u.password_hash,u.password_salt,u.password_iterations,u.must_change_password,o.name AS organisation_name,COALESCE(p.session_hours,12) AS session_hours FROM users u JOIN organisations o ON o.id=u.organisation_id LEFT JOIN organisation_security_policies p ON p.organisation_id=u.organisation_id WHERE lower(u.email)=lower(?) LIMIT 1`).bind(email).first();
-  const valid = user && user.status === "active" && user.password_hash && user.password_salt
+  const user = await env.DB.prepare(`SELECT u.id,u.organisation_id,u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.status,u.password_hash,u.password_salt,u.password_iterations,u.must_change_password,o.name AS organisation_name,o.status AS organisation_status,COALESCE(p.session_hours,12) AS session_hours FROM users u JOIN organisations o ON o.id=u.organisation_id LEFT JOIN organisation_security_policies p ON p.organisation_id=u.organisation_id WHERE lower(u.email)=lower(?) LIMIT 1`).bind(email).first();
+  const valid = user && user.status === "active" && user.organisation_status === "active" && user.password_hash && user.password_salt
     ? await verifyPassword(password, user.password_salt, user.password_hash, user.password_iterations || PASSWORD_ITERATIONS)
     : false;
   if (!valid) {
@@ -588,10 +651,10 @@ async function requireSession(request, env) {
   const row = await db.prepare(`SELECT s.id AS session_id,s.expires_at,s.last_seen_at,s.user_id,s.organisation_id,s.active_branch_id,s.support_mode,s.support_origin_organisation_id,s.support_started_at,COALESCE(p.idle_timeout_minutes,60) AS idle_timeout_minutes,
     (SELECT ss.reason FROM support_sessions ss WHERE ss.session_id=s.id AND ss.ended_at IS NULL ORDER BY ss.started_at DESC LIMIT 1) AS support_reason,
     (SELECT ss.access_mode FROM support_sessions ss WHERE ss.session_id=s.id AND ss.ended_at IS NULL ORDER BY ss.started_at DESC LIMIT 1) AS support_access_mode,
-    u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.staff_id,u.status,u.must_change_password,o.name AS organisation_name,b.name AS branch_name
+    u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.staff_id,u.status,u.must_change_password,o.name AS organisation_name,o.status AS organisation_status,b.name AS branch_name
     FROM sessions s JOIN users u ON u.id=s.user_id JOIN organisations o ON o.id=s.organisation_id LEFT JOIN branches b ON b.id=s.active_branch_id LEFT JOIN organisation_security_policies p ON p.organisation_id=s.organisation_id
     WHERE s.token_hash=? AND s.expires_at>CURRENT_TIMESTAMP LIMIT 1`).bind(await sha256Base64(token)).first();
-  if (!row || row.status !== "active") return unauthorised();
+  if (!row || row.status !== "active" || row.organisation_status !== "active") return unauthorised();
   if(!row.support_mode)row.subscription_access=await currentSubscriptionAccess(env,row.organisation_id);
   const idleMinutes = Math.max(5, Math.min(1440, Number(row.idle_timeout_minutes) || 60));
   if (row.last_seen_at && Date.now() - databaseTimestampMs(row.last_seen_at) > idleMinutes * 60000) {
@@ -628,7 +691,7 @@ async function changePassword(request, env, session) {
   return json({ ok: true, emailDelivery });
 }
 
-function branchRestricted(session){ return !session.is_platform_user && ["branch_manager","senior_carer","carer","office_staff"].includes(session.access_level) && Boolean(session.active_branch_id || session.home_branch_id); }
+function branchRestricted(session){ return !session.is_platform_user && ['assigned_branch','assigned_work'].includes(roleScope(session.access_level)) && Boolean(session.active_branch_id || session.home_branch_id); }
 function activeBranch(session){ return session.active_branch_id || session.home_branch_id || null; }
 
 function mutationOriginAllowed(request) {
@@ -699,7 +762,6 @@ async function getClient(db, session, id) {
 
 async function createClient(request, env, session) {
   const db=env.DB;
-  if (!hasRole(session, ["owner", "manager", "carer"])) return forbidden();
   const raw = await readJson(request);
   const input = normaliseClient(raw);
   const validation = validateClient(input);
@@ -772,7 +834,6 @@ async function listVisitRequirements(db,session,clientId){
   return json({requirements:(rows.results||[]).map(r=>({...r,days:JSON.parse(r.days_json||'[]')}))});
 }
 async function saveVisitRequirements(request,db,session,clientId){
-  if(!hasRole(session,['owner','manager','carer']))return forbidden();
   const input=await readJson(request),requirements=normaliseVisitRequirements(input.requirements,input.startDate);
   if(!requirements.length)return json({error:{code:'VALIDATION_ERROR',message:'Add at least one valid visit requirement.'}},400);
   const client=await db.prepare('SELECT id FROM clients WHERE id=? AND organisation_id=?').bind(clientId,session.organisation_id).first();if(!client)return notFound('Client');
@@ -784,7 +845,6 @@ async function saveVisitRequirements(request,db,session,clientId){
 
 async function updateClient(request, env, session, id) {
   const db=env.DB;
-  if (!hasRole(session, ["owner", "manager", "carer"])) return forbidden();
   const raw = await readJson(request);
   const input = normaliseClient(raw);
   const validation = validateClient(input);
@@ -815,7 +875,6 @@ async function updateClient(request, env, session, id) {
 }
 
 async function archiveClient(db, session, id) {
-  if (!hasRole(session, ["owner", "manager"])) return forbidden();
   const existing = await db.prepare("SELECT first_name,last_name FROM clients WHERE id=? AND organisation_id=?").bind(id, session.organisation_id).first();
   if (!existing) return json({ error: { code: "CLIENT_NOT_FOUND", message: "Client record not found." } }, 404);
   await db.batch([
@@ -913,7 +972,6 @@ async function rotaBoard(db, session, url) {
 }
 
 async function listRotaTemplates(db,session){
-  if(!await userHasPermission(db,session,'rota.templates.view')&&!hasRole(session,['owner','manager','scheduler','organisation_owner','organisation_admin','branch_manager']))return forbidden();
   const org=session.organisation_id,scoped=branchRestricted(session),branch=activeBranch(session);
   const [visitTemplates,patterns,exceptions,runs,clients,staff]=await Promise.all([
     db.prepare(`SELECT t.*,c.first_name||' '||c.last_name client_name,p.first_name||' '||p.last_name preferred_staff_name,b.first_name||' '||b.last_name backup_staff_name FROM rota_visit_templates t LEFT JOIN clients c ON c.id=t.client_id AND c.organisation_id=t.organisation_id LEFT JOIN staff p ON p.id=t.preferred_staff_id AND p.organisation_id=t.organisation_id LEFT JOIN staff b ON b.id=t.backup_staff_id AND b.organisation_id=t.organisation_id WHERE t.organisation_id=? ${scoped?'AND c.branch_id=?':''} ORDER BY t.day_of_week,t.preferred_time,c.last_name`).bind(org,...(scoped?[branch]:[])).all(),
@@ -926,30 +984,26 @@ async function listRotaTemplates(db,session){
   return json({visitTemplates:visitTemplates.results||[],workingPatterns:patterns.results||[],exceptions:exceptions.results||[],runs:runs.results||[],clients:clients.results||[],staff:staff.results||[]});
 }
 async function saveRotaVisitTemplate(request,db,session){
-  if(!await userHasPermission(db,session,'rota.templates.manage')&&!hasRole(session,['owner','manager','scheduler','organisation_owner','organisation_admin','branch_manager']))return forbidden();
   const i=await readJson(request),clientId=clean(i.clientId),time=clean(i.preferredTime),day=Number(i.dayOfWeek),duration=Math.max(15,Number(i.durationMinutes)||30);
   if(!clientId||!time||day<1||day>7)return json({error:{code:'VALIDATION_ERROR',message:'Select a client, day and preferred time.'}},400);
   const id=clean(i.id)||crypto.randomUUID();
   await db.batch([db.prepare(`INSERT INTO rota_visit_templates(id,organisation_id,client_id,name,visit_type,day_of_week,preferred_time,duration_minutes,carers_required,preferred_staff_id,backup_staff_id,window_minutes,effective_from,effective_to,status,notes,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET client_id=excluded.client_id,name=excluded.name,visit_type=excluded.visit_type,day_of_week=excluded.day_of_week,preferred_time=excluded.preferred_time,duration_minutes=excluded.duration_minutes,carers_required=excluded.carers_required,preferred_staff_id=excluded.preferred_staff_id,backup_staff_id=excluded.backup_staff_id,window_minutes=excluded.window_minutes,effective_from=excluded.effective_from,effective_to=excluded.effective_to,status=excluded.status,notes=excluded.notes,updated_at=CURRENT_TIMESTAMP`).bind(id,session.organisation_id,clientId,clean(i.name)||'Recurring care visit',clean(i.visitType)||'Care visit',day,time,duration,Math.max(1,Number(i.carersRequired)||1),clean(i.preferredStaffId)||null,clean(i.backupStaffId)||null,Math.max(0,Number(i.windowMinutes)||15),clean(i.effectiveFrom)||null,clean(i.effectiveTo)||null,clean(i.status)||'active',clean(i.notes),session.user_id),auditStatement(db,session.organisation_id,session.user_id,'rota.template_saved','rota_visit_template',id,{clientId,day,time})]);return json({ok:true,id});
 }
 async function saveWorkingPattern(request,db,session){
-  if(!await userHasPermission(db,session,'rota.templates.manage')&&!hasRole(session,['owner','manager','scheduler','organisation_owner','organisation_admin','branch_manager']))return forbidden();
   const i=await readJson(request),staffId=clean(i.staffId),day=Number(i.dayOfWeek),start=clean(i.startTime),end=clean(i.endTime),cycle=Math.min(8,Math.max(1,Number(i.cycleWeeks)||1)),week=Math.min(cycle,Math.max(1,Number(i.weekNumber)||1));
   if(!staffId||day<1||day>7||!start||!end||end<=start)return json({error:{code:'VALIDATION_ERROR',message:'Select a carer, day and valid start/end times.'}},400);
   const id=clean(i.id)||crypto.randomUUID();await db.batch([db.prepare(`INSERT INTO staff_working_patterns(id,organisation_id,staff_id,name,cycle_weeks,week_number,day_of_week,start_time,end_time,status,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET staff_id=excluded.staff_id,name=excluded.name,cycle_weeks=excluded.cycle_weeks,week_number=excluded.week_number,day_of_week=excluded.day_of_week,start_time=excluded.start_time,end_time=excluded.end_time,status=excluded.status,updated_at=CURRENT_TIMESTAMP`).bind(id,session.organisation_id,staffId,clean(i.name)||'Normal working pattern',cycle,week,day,start,end,clean(i.status)||'active',session.user_id),auditStatement(db,session.organisation_id,session.user_id,'rota.working_pattern_saved','staff_working_pattern',id,{staffId,day,start,end})]);return json({ok:true,id});
 }
 async function saveRotaException(request,db,session){
-  if(!await userHasPermission(db,session,'rota.templates.manage')&&!hasRole(session,['owner','manager','scheduler','organisation_owner','organisation_admin','branch_manager']))return forbidden();
   const i=await readJson(request),start=clean(i.startAt),type=clean(i.exceptionType)||'other';if(!start)return json({error:{code:'VALIDATION_ERROR',message:'Enter the exception start date and time.'}},400);
   const id=clean(i.id)||crypto.randomUUID();await db.batch([db.prepare(`INSERT INTO rota_template_exceptions(id,organisation_id,exception_type,staff_id,client_id,template_id,start_at,end_at,action,replacement_staff_id,reason,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET exception_type=excluded.exception_type,staff_id=excluded.staff_id,client_id=excluded.client_id,template_id=excluded.template_id,start_at=excluded.start_at,end_at=excluded.end_at,action=excluded.action,replacement_staff_id=excluded.replacement_staff_id,reason=excluded.reason`).bind(id,session.organisation_id,type,clean(i.staffId)||null,clean(i.clientId)||null,clean(i.templateId)||null,start,clean(i.endAt)||null,clean(i.action)||'exclude',clean(i.replacementStaffId)||null,clean(i.reason),session.user_id),auditStatement(db,session.organisation_id,session.user_id,'rota.exception_saved','rota_exception',id,{type,start})]);return json({ok:true,id});
 }
 async function deleteRotaTemplateItem(db,session,type,id){
-  if(!await userHasPermission(db,session,'rota.templates.manage')&&!hasRole(session,['owner','manager','scheduler','organisation_owner','organisation_admin','branch_manager']))return forbidden();
   const table=type==='visit'?'rota_visit_templates':type==='working-pattern'?'staff_working_patterns':'rota_template_exceptions';await db.batch([db.prepare(`DELETE FROM ${table} WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'rota.template_deleted',type,id,{})]);return json({ok:true});
 }
 function mondayOf(value){const d=new Date(`${value}T00:00:00`);const shift=(d.getDay()+6)%7;d.setDate(d.getDate()-shift);return d;}
 async function generateRotaFromTemplates(request,env,session){
-  const db=env.DB;if(!await userHasPermission(db,session,'rota.templates.generate')&&!hasRole(session,['owner','manager','scheduler','organisation_owner','organisation_admin','branch_manager']))return forbidden();
+  const db=env.DB;
   const i=await readJson(request),weekValue=clean(i.weekCommencing);if(!weekValue)return json({error:{code:'VALIDATION_ERROR',message:'Select a week to generate.'}},400);const week=mondayOf(weekValue),weekEnd=new Date(week);weekEnd.setDate(weekEnd.getDate()+7);const mode=['fill','regenerate'].includes(clean(i.mode))?clean(i.mode):'fill',scoped=branchRestricted(session),branch=activeBranch(session);
   if(mode==='regenerate')await db.prepare(`DELETE FROM care_visits WHERE organisation_id=? ${scoped?'AND branch_id=?':''} AND rota_source='template' AND status='scheduled' AND datetime(scheduled_start)>=datetime(?) AND datetime(scheduled_start)<datetime(?) AND COALESCE(manually_overridden,0)=0`).bind(session.organisation_id,...(scoped?[branch]:[]),week.toISOString(),weekEnd.toISOString()).run();
   const templates=(await db.prepare(`SELECT t.* FROM rota_visit_templates t JOIN clients c ON c.id=t.client_id AND c.organisation_id=t.organisation_id WHERE t.organisation_id=? ${scoped?'AND c.branch_id=?':''} AND t.status='active' ORDER BY t.day_of_week,t.preferred_time`).bind(session.organisation_id,...(scoped?[branch]:[])).all()).results||[];let created=0,skipped=0,unallocated=0;const warnings=[],statements=[];
@@ -1004,7 +1058,6 @@ async function publishRota(request,db,session){
 }
 
 async function manageVisitRecurrence(request,db,session,id){
-  if(!await userHasPermission(db,session,'rota.templates.manage')&&!hasRole(session,['owner','manager','scheduler','organisation_owner','organisation_admin','branch_manager']))return forbidden();
   const visit=await db.prepare(`SELECT * FROM care_visits WHERE id=? AND organisation_id=? ${branchRestricted(session)?'AND branch_id=?':''}`).bind(id,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first();if(!visit)return notFound('Rota visit');
   const i=await readJson(request),action=clean(i.action)||'create';
   const existing=visit.template_id?await db.prepare(`SELECT * FROM rota_visit_templates WHERE id=? AND organisation_id=?`).bind(visit.template_id,session.organisation_id).first():null;
@@ -1037,8 +1090,8 @@ async function authoriseProtectedVisitChange(db,session,visit,input,newStart){
   const manager=await db.prepare(`SELECT id,email,role,access_level,status,password_hash,password_salt,password_iterations FROM users WHERE organisation_id=? AND lower(email)=lower(?) LIMIT 1`).bind(session.organisation_id,email).first();
   const valid=manager&&manager.status==='active'&&await verifyPassword(password,manager.password_salt,manager.password_hash,manager.password_iterations||PASSWORD_ITERATIONS);
   if(!valid)return {error:json({error:{code:'MANAGER_AUTH_FAILED',message:'The manager email address or password is incorrect.'}},401)};
-  const managerSession={...session,user_id:manager.id,role:manager.role,access_level:manager.access_level,is_platform_user:false};
-  const allowed=['owner','manager'].includes(manager.role)||['organisation_owner','organisation_admin','branch_manager'].includes(manager.access_level)||await userHasPermission(db,managerSession,'rota.time_critical.override');
+  const managerSession={...session,user_id:manager.id,role:manager.role,access_level:manager.access_level,is_platform_user:false,_permissionFacts:null};
+  const allowed=await userHasPermission(db,managerSession,'rota.time_critical.override');
   if(!allowed)return {error:json({error:{code:'MANAGER_AUTH_FORBIDDEN',message:'This account is not authorised to override protected visit times.'}},403)};
   return {manager,reason,statement:db.prepare(`INSERT INTO protected_visit_authorisations(id,organisation_id,visit_id,requested_by,authorised_by,previous_start,new_start,reason) VALUES(?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,visit.id,session.user_id,manager.id,visit.scheduled_start,newStart,reason)};
 }
@@ -1184,6 +1237,7 @@ async function saveVisitCareRecord(request,db,session,visitId){
   if(['carer','senior_carer'].includes(session.access_level)&&(!session.staff_id||visit.staff_id!==session.staff_id))return forbidden('This visit is allocated to another care worker.');
   if(!['in_progress','completed'].includes(visit.status))return json({error:{code:'VISIT_NOT_STARTED',message:'Clock into the visit before recording care delivery.'}},409);
   const notes=clean(i.careNotes);if(!notes)return json({error:{code:'VALIDATION_ERROR',message:'Enter the care notes before completing the visit.'}},400);
+  if(i.incidentRequired&&!await userHasPermission(db,session,'incidents.create'))return forbidden('You do not have permission to create an incident from this care record.');
   const recordId=crypto.randomUUID(),tasks=Array.isArray(i.tasks)?i.tasks:[],meds=Array.isArray(i.medication)?i.medication:[],statements=[];
   if(meds.some(m=>clean(m?.outcome)&&clean(m.outcome)!=='not_required'))return json({error:{code:'EMAR_REQUIRED',message:'Medication administrations must be recorded in eMAR so that stock, witness and audit controls are applied.'}},409);
   statements.push(db.prepare(`INSERT INTO visit_care_records(id,organisation_id,visit_id,client_id,staff_id,mood,wellbeing,care_notes,fluid_intake_ml,nutrition,toileting,mobility_support,skin_observation,body_map_notes,follow_up_required,follow_up_notes,completed_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(organisation_id,visit_id) DO UPDATE SET mood=excluded.mood,wellbeing=excluded.wellbeing,care_notes=excluded.care_notes,fluid_intake_ml=excluded.fluid_intake_ml,nutrition=excluded.nutrition,toileting=excluded.toileting,mobility_support=excluded.mobility_support,skin_observation=excluded.skin_observation,body_map_notes=excluded.body_map_notes,follow_up_required=excluded.follow_up_required,follow_up_notes=excluded.follow_up_notes,completed_by=excluded.completed_by,completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP`).bind(recordId,session.organisation_id,visitId,visit.client_id,visit.staff_id||session.staff_id||null,clean(i.mood)||'not_recorded',clean(i.wellbeing)||'no_change',notes,Math.max(0,Number(i.fluidIntakeMl)||0),clean(i.nutrition)||'not_recorded',clean(i.toileting)||'not_recorded',clean(i.mobilitySupport),clean(i.skinObservation),clean(i.bodyMapNotes),i.followUpRequired?1:0,clean(i.followUpNotes),session.user_id));
@@ -1200,7 +1254,6 @@ async function ensureClientVisitCode(request,db,session){
   const i=await readJson(request),clientId=clean(i.clientId),regenerate=Boolean(i.regenerate);if(!clientId)return json({error:{code:'VALIDATION_ERROR',message:'Select a client.'}},400);
   const client=await ensureClient(db,session,clientId);if(!client)return notFound('Client');
   let row=await db.prepare("SELECT code,created_at,expires_at FROM client_visit_codes WHERE organisation_id=? AND client_id=? AND active=1 AND datetime(COALESCE(expires_at,'1970-01-01'))>CURRENT_TIMESTAMP ORDER BY created_at DESC").bind(session.organisation_id,clientId).first();
-  if(regenerate&&!hasRole(session,['owner','manager','organisation_owner','organisation_admin','branch_manager']))return forbidden();
   if(regenerate||!row){
     const code='CC-'+crypto.randomUUID().replaceAll('-','').slice(0,20).toUpperCase(),createdAt=new Date().toISOString(),expiresAt=new Date(Date.now()+90*86400000).toISOString();
     await db.batch([db.prepare('UPDATE client_visit_codes SET active=0,revoked_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND client_id=? AND active=1').bind(session.organisation_id,clientId),db.prepare('INSERT INTO client_visit_codes(id,organisation_id,client_id,code,active,created_by,expires_at) VALUES(?,?,?,?,1,?,?)').bind(crypto.randomUUID(),session.organisation_id,clientId,code,session.user_id,expiresAt),auditStatement(db,session.organisation_id,session.user_id,regenerate?'client.verification_code_regenerated':'client.verification_code_issued','client',clientId,{expiresAt})]);
@@ -1348,7 +1401,7 @@ async function reportsWorkspace(db,session,url){
     db.prepare(`SELECT id,status,risk FROM clients WHERE organisation_id=? ${scoped?'AND branch_id=?':''} AND archived_at IS NULL`).bind(org,...(scoped?[branch]:[])).all(),
     canFinance?db.prepare(`SELECT * FROM finance_transactions WHERE organisation_id=? ${scoped?'AND branch_id=?':''} AND date(transaction_date) BETWEEN date(?) AND date(?) LIMIT 10000`).bind(org,...(scoped?[branch]:[]),range.from,range.to).all():Promise.resolve({results:[]}),
     canFinance?db.prepare(`SELECT * FROM finance_invoices WHERE organisation_id=? ${scoped?'AND branch_id=?':''} AND date(issue_date) BETWEEN date(?) AND date(?) LIMIT 10000`).bind(org,...(scoped?[branch]:[]),range.from,range.to).all():Promise.resolve({results:[]}),
-    userHasPermission(db,session,'data.export')
+    userHasPermission(db,session,'reports.export')
   ]);
   const visitRows=visits.results||[],incidentRows=incidents.results||[],summary=calculateReportSummary({visits:visitRows,incidents:incidentRows,tasks:tasks.results||[],staff:staff.results||[],plans:plans.results||[]});
   const dailyMap=new Map();for(const visit of visitRows){const day=String(visit.scheduled_start||'').slice(0,10),row=dailyMap.get(day)||{date:day,total:0,completed:0,missed:0,minutes:0};row.total++;if(visit.status==='completed')row.completed++;if(visit.status==='missed')row.missed++;const start=new Date(visit.actual_start||visit.scheduled_start).getTime(),end=new Date(visit.actual_end||visit.scheduled_end||visit.scheduled_start).getTime();if(Number.isFinite(start)&&Number.isFinite(end)&&end>start)row.minutes+=Math.round((end-start)/60000);dailyMap.set(day,row);}
@@ -1396,7 +1449,6 @@ async function careDeliveryDashboard(db,session){
   return json({metrics:{activePlans:active.length,pendingApproval:pending,overdueReviews:overdue,highRisks:high,openAlerts:(alerts.results||[]).length,futureVisits:Number(visits?.total||0),draftVisits:Number(visits?.draft||0)},alerts:alerts.results||[],reviews:reviews.results||[],plans:(plans.results||[]).map(r=>({...toCarePlan(r),clientName:r.client_name})),risks:risks.results||[]});
 }
 async function carePlanAction(request,db,session,id,action){
-  if(!hasRole(session,['owner','manager','organisation_owner','organisation_admin','branch_manager']))return forbidden();
   const plan=await db.prepare(`SELECT * FROM care_plans WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id).first(); if(!plan)return notFound('Care plan');
   if(action==='approve'){
     const policy=await db.prepare('SELECT require_independent_care_plan_approval FROM organisation_security_policies WHERE organisation_id=?').bind(session.organisation_id).first();
@@ -1479,29 +1531,37 @@ async function dashboardSummary(db, session) {
     db.prepare(`SELECT i.id,i.status,i.severity,i.title,i.client_id FROM operations_incidents i LEFT JOIN clients c ON c.id=i.client_id AND c.organisation_id=i.organisation_id WHERE i.organisation_id=? ${scoped?'AND c.branch_id=?':''} AND i.status!='closed' ORDER BY i.created_at DESC`).bind(org,...(scoped?[branch]:[])).all(),
     db.prepare(`SELECT a.action,a.entity_type,a.entity_id,a.created_at,u.display_name AS user_name FROM audit_log a LEFT JOIN users u ON u.id=a.user_id AND u.organisation_id=a.organisation_id WHERE a.organisation_id=? ORDER BY a.created_at DESC LIMIT 10`).bind(org).all()
   ]);
-  const live=calculateLiveDashboard({clients:clients.results,staff:staff.results,plans:plans.results,risks:risks.results,visits:visits.results,tasks:tasks.results,incidents:incidents.results},now);
+  const workforce=await workforceOverviewDataForSession(db,session);
+  const live=calculateLiveDashboard({clients:clients.results,staff:staff.results,plans:plans.results,risks:risks.results,visits:visits.results,tasks:tasks.results,incidents:incidents.results,workforce},now);
   return json({...live,activity:auditRows.results||[],serviceDay:{start:serviceStart.toISOString(),end:serviceEnd.toISOString()},generatedAt:now.toISOString()});
 }
 
-const STAFF_COLUMNS = `s.id,s.first_name,s.last_name,s.preferred_name,s.job_title,s.employment_type,s.phone,s.email,s.start_date,s.status,s.dbs_expiry,s.training_expiry,s.notes,s.created_at,s.updated_at,
+const STAFF_COLUMNS = `s.id,s.first_name,s.last_name,s.preferred_name,s.job_title,s.employment_type,s.phone,s.email,s.start_date,s.status,s.dbs_expiry,s.training_expiry,s.notes,s.employee_number,s.line_manager_staff_id,s.contracted_hours,s.work_location,s.probation_end_date,s.end_date,s.emergency_contact_name,s.emergency_contact_relationship,s.emergency_contact_phone,s.supervision_frequency_days,s.next_supervision_date,s.next_appraisal_date,s.created_at,s.updated_at,
   u.id AS login_user_id,u.email AS login_email,u.access_level AS login_access_level,u.status AS login_status,u.must_change_password,u.last_login_at`;
 async function listStaff(db, session, url) {
   const includeInactive = url.searchParams.get("includeInactive") === "true";
   const result = await db.prepare(`SELECT ${STAFF_COLUMNS} FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.organisation_id=? ${branchRestricted(session)?"AND s.branch_id=?":""} ${includeInactive ? "" : "AND s.status='Active'"} ORDER BY s.last_name COLLATE NOCASE,s.first_name COLLATE NOCASE`).bind(session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).all();
   return json({ staff: result.results.map(toStaff) });
 }
+async function validateStaffManager(db,session,managerId,staffId=''){
+  if(!managerId)return '';
+  if(staffId&&managerId===staffId)return 'A staff member cannot be their own line manager.';
+  const row=await db.prepare(`SELECT id FROM staff WHERE id=? AND organisation_id=? ${branchRestricted(session)?'AND branch_id=?':''}`).bind(managerId,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first();
+  return row?'':'Choose a line manager from this organisation and branch.';
+}
 async function createStaff(request, env, session) {
   const db=env.DB;
-  if (!hasRole(session,["owner","manager"])) return forbidden();
   const input = await readJson(request); const v = validateStaff(input); if (v.error) return json({error:{code:"VALIDATION_ERROR",message:v.error}},400);
+  const managerError=await validateStaffManager(db,session,v.values[13]);if(managerError)return json({error:{code:'VALIDATION_ERROR',message:managerError}},400);
   const createLogin = input.createLogin === true || clean(input.createLogin)==='on' || clean(input.createLogin)==='true';
   const loginEmail = clean(input.loginEmail || input.email).toLowerCase();
   const accessLevel = clean(input.loginAccessLevel)||'carer';
   const temporaryPassword = String(input.temporaryPassword||'');
   if(createLogin && (!loginEmail || !allowedAccessLevels().includes(accessLevel) || !strongTemporaryPassword(temporaryPassword))) return json({error:{code:'VALIDATION_ERROR',message:'Enter a login email, valid access level and temporary password of at least 12 characters with upper-case, lower-case and a number.'}},400);
+  if(createLogin&&(!await userHasPermission(db,session,'security.users.manage')||!canAssignStandardRole(session.access_level||session.role,accessLevel)))return forbidden('You cannot assign that access level.');
   if(createLogin){const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;}
   const id=crypto.randomUUID(), statements=[];let invitation=null;
-  statements.push(db.prepare(`INSERT INTO staff (id,organisation_id,branch_id,first_name,last_name,preferred_name,job_title,employment_type,phone,email,start_date,status,dbs_expiry,training_expiry,notes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,activeBranch(session),...v.values));
+  statements.push(db.prepare(`INSERT INTO staff (id,organisation_id,branch_id,first_name,last_name,preferred_name,job_title,employment_type,phone,email,start_date,status,dbs_expiry,training_expiry,notes,employee_number,line_manager_staff_id,contracted_hours,work_location,probation_end_date,end_date,emergency_contact_name,emergency_contact_relationship,emergency_contact_phone,supervision_frequency_days,next_supervision_date,next_appraisal_date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,activeBranch(session),...v.values));
   if(createLogin){
     const secured=await hashPassword(temporaryPassword), userId=crypto.randomUUID(), displayName=`${v.values[0]} ${v.values[1]}`.trim();
     statements.push(db.prepare(`INSERT INTO users (id,organisation_id,staff_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',1)`).bind(userId,session.organisation_id,id,loginEmail,displayName,legacyRole(accessLevel),accessLevel,activeBranch(session),secured.hash,secured.salt,PASSWORD_ITERATIONS));
@@ -1515,15 +1575,16 @@ async function createStaff(request, env, session) {
 }
 async function updateStaff(request, env, session, id) {
   const db=env.DB;
-  if (!hasRole(session,["owner","manager"])) return forbidden();
   const input=await readJson(request); const v=validateStaff(input); if(v.error) return json({error:{code:"VALIDATION_ERROR",message:v.error}},400);
-  const existing=await db.prepare(`SELECT s.id,u.id login_user_id,u.status login_status FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.id=? AND s.organisation_id=?`).bind(id,session.organisation_id).first();
+  const managerError=await validateStaffManager(db,session,v.values[13],id);if(managerError)return json({error:{code:'VALIDATION_ERROR',message:managerError}},400);
+  const existing=await db.prepare(`SELECT s.id,u.id login_user_id,u.status login_status,u.access_level login_access_level FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.id=? AND s.organisation_id=?`).bind(id,session.organisation_id).first();
   if(!existing)return json({error:{code:'STAFF_NOT_FOUND',message:'Staff record not found.'}},404);
-  const statements=[db.prepare(`UPDATE staff SET first_name=?,last_name=?,preferred_name=?,job_title=?,employment_type=?,phone=?,email=?,start_date=?,status=?,dbs_expiry=?,training_expiry=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(...v.values,id,session.organisation_id)];let invitation=null;
+  const statements=[db.prepare(`UPDATE staff SET first_name=?,last_name=?,preferred_name=?,job_title=?,employment_type=?,phone=?,email=?,start_date=?,status=?,dbs_expiry=?,training_expiry=?,notes=?,employee_number=?,line_manager_staff_id=?,contracted_hours=?,work_location=?,probation_end_date=?,end_date=?,emergency_contact_name=?,emergency_contact_relationship=?,emergency_contact_phone=?,supervision_frequency_days=?,next_supervision_date=?,next_appraisal_date=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(...v.values,id,session.organisation_id)];let invitation=null;
   const createLogin=input.createLogin===true||clean(input.createLogin)==='on'||clean(input.createLogin)==='true';
   if(createLogin&&!existing.login_user_id){
     const loginEmail=clean(input.loginEmail||input.email).toLowerCase(),accessLevel=clean(input.loginAccessLevel)||'carer',temporaryPassword=String(input.temporaryPassword||'');
     if(!loginEmail||!allowedAccessLevels().includes(accessLevel)||!strongTemporaryPassword(temporaryPassword))return json({error:{code:'VALIDATION_ERROR',message:'Enter a login email, valid access level and temporary password of at least 12 characters with upper-case, lower-case and a number.'}},400);
+    if(!await userHasPermission(db,session,'security.users.manage')||!canAssignStandardRole(session.access_level||session.role,accessLevel))return forbidden('You cannot assign that access level.');
     const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;
     const secured=await hashPassword(temporaryPassword),userId=crypto.randomUUID(),displayName=`${v.values[0]} ${v.values[1]}`.trim();
     statements.push(db.prepare(`INSERT INTO users (id,organisation_id,staff_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',1)`).bind(userId,session.organisation_id,id,loginEmail,displayName,legacyRole(accessLevel),accessLevel,activeBranch(session),secured.hash,secured.salt,PASSWORD_ITERATIONS));
@@ -1533,6 +1594,7 @@ async function updateStaff(request, env, session, id) {
     const loginStatus=v.values[8]==='Inactive'?'disabled':(clean(input.loginStatus)||'active');
     if(loginStatus==='active'&&existing.login_status!=='active'){const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;}
     const accessLevel=allowedAccessLevels().includes(clean(input.loginAccessLevel))?clean(input.loginAccessLevel):null;
+    if((accessLevel||loginStatus!==existing.login_status)&&(!await userHasPermission(db,session,'security.users.manage')||!mayManageUser(session,{access_level:existing.login_access_level})||(accessLevel&&!canAssignStandardRole(session.access_level||session.role,accessLevel))))return forbidden('You cannot change this account or assign that access level.');
     if(accessLevel) statements.push(db.prepare(`UPDATE users SET display_name=?,role=?,access_level=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(`${v.values[0]} ${v.values[1]}`.trim(),legacyRole(accessLevel),accessLevel,loginStatus,existing.login_user_id,session.organisation_id));
     else statements.push(db.prepare(`UPDATE users SET display_name=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(`${v.values[0]} ${v.values[1]}`.trim(),loginStatus,existing.login_user_id,session.organisation_id));
     if(loginStatus==='disabled')statements.push(db.prepare('DELETE FROM sessions WHERE user_id=?').bind(existing.login_user_id));
@@ -1543,12 +1605,164 @@ async function updateStaff(request, env, session, id) {
   const row=await db.prepare(`SELECT ${STAFF_COLUMNS} FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.id=? AND s.organisation_id=?`).bind(id,session.organisation_id).first(); return json({staff:toStaff(row),emailDelivery});
 }
 function validateStaff(input){
-  const values=[clean(input.firstName),clean(input.lastName),clean(input.preferredName),clean(input.jobTitle)||"Carer",clean(input.employmentType)||"Employee",clean(input.phone),clean(input.email),clean(input.startDate),clean(input.status)||"Active",clean(input.dbsExpiry),clean(input.trainingExpiry),clean(input.notes)];
+  const hours=clean(input.contractedHours),frequency=clean(input.supervisionFrequencyDays);
+  const values=[clean(input.firstName),clean(input.lastName),clean(input.preferredName),clean(input.jobTitle)||"Carer",clean(input.employmentType)||"Employee",clean(input.phone),clean(input.email),clean(input.startDate),clean(input.status)||"Active",clean(input.dbsExpiry),clean(input.trainingExpiry),clean(input.notes),clean(input.employeeNumber)||null,clean(input.lineManagerStaffId)||null,hours===''?null:Math.max(0,Math.min(168,Number(hours)||0)),clean(input.workLocation),clean(input.probationEndDate)||null,clean(input.endDate)||null,clean(input.emergencyContactName),clean(input.emergencyContactRelationship),clean(input.emergencyContactPhone),frequency===''?null:Math.max(7,Math.min(365,Number(frequency)||30)),clean(input.nextSupervisionDate)||null,clean(input.nextAppraisalDate)||null];
   if(!values[0]||!values[1]) return {error:"Enter the staff member's first and last name."};
   if(!["Active","Inactive"].includes(values[8])) return {error:"Choose a valid staff status."};
   return {values};
 }
-function toStaff(row){return {id:row.id,firstName:row.first_name,lastName:row.last_name,preferredName:row.preferred_name||"",jobTitle:row.job_title,employmentType:row.employment_type,phone:row.phone||"",email:row.email||"",startDate:row.start_date||"",status:row.status,dbsExpiry:row.dbs_expiry||"",trainingExpiry:row.training_expiry||"",notes:row.notes||"",loginUserId:row.login_user_id||"",loginEmail:row.login_email||"",loginAccessLevel:row.login_access_level||"carer",loginStatus:row.login_status||"",mustChangePassword:Boolean(row.must_change_password),lastLoginAt:row.last_login_at||"",createdAt:row.created_at,updatedAt:row.updated_at};}
+function toStaff(row){return {id:row.id,firstName:row.first_name,lastName:row.last_name,preferredName:row.preferred_name||"",jobTitle:row.job_title,employmentType:row.employment_type,phone:row.phone||"",email:row.email||"",startDate:row.start_date||"",status:row.status,dbsExpiry:row.dbs_expiry||"",trainingExpiry:row.training_expiry||"",notes:row.notes||"",employeeNumber:row.employee_number||"",lineManagerStaffId:row.line_manager_staff_id||"",contractedHours:row.contracted_hours??"",workLocation:row.work_location||"",probationEndDate:row.probation_end_date||"",endDate:row.end_date||"",emergencyContactName:row.emergency_contact_name||"",emergencyContactRelationship:row.emergency_contact_relationship||"",emergencyContactPhone:row.emergency_contact_phone||"",supervisionFrequencyDays:row.supervision_frequency_days??"",nextSupervisionDate:row.next_supervision_date||"",nextAppraisalDate:row.next_appraisal_date||"",loginUserId:row.login_user_id||"",loginEmail:row.login_email||"",loginAccessLevel:row.login_access_level||"carer",loginStatus:row.login_status||"",mustChangePassword:Boolean(row.must_change_password),lastLoginAt:row.last_login_at||"",createdAt:row.created_at,updatedAt:row.updated_at};}
+
+const WORKFORCE_TABLES={recruitment:'staff_recruitment_checks',employment:'staff_employment_history',supervisions:'staff_supervisions',training:'staff_training_records',competencies:'staff_competencies',qualifications:'staff_qualifications',appraisals:'staff_appraisals',absences:'staff_absences',hr:'staff_hr_cases'};
+function workforcePermission(section,mode='view'){
+  if(section==='hr'||section==='absences')return `staff.hr.${mode}`;
+  if(section==='supervisions'||section==='appraisals')return `staff.supervision.${mode}`;
+  if(section==='training'||section==='competencies'||section==='qualifications')return `staff.training.${mode}`;
+  return `staff.records.${mode}`;
+}
+function staffBranchRestricted(session){return !session.is_platform_user&&['assigned_branch','assigned_work'].includes(roleScope(session.access_level))&&Boolean(session.active_branch_id||session.home_branch_id);}
+async function ensureWorkforceStaff(db,session,staffId){return db.prepare(`SELECT s.* FROM staff s WHERE s.id=? AND s.organisation_id=? ${staffBranchRestricted(session)?'AND s.branch_id=?':''} LIMIT 1`).bind(staffId,session.organisation_id,...(staffBranchRestricted(session)?[session.active_branch_id||session.home_branch_id]:[])).first();}
+async function workforceSettingsRow(db,organisationId){
+  await db.prepare('INSERT OR IGNORE INTO organisation_workforce_settings(organisation_id) VALUES(?)').bind(organisationId).run();
+  return db.prepare('SELECT * FROM organisation_workforce_settings WHERE organisation_id=?').bind(organisationId).first();
+}
+function workforceSettingsPayload(row){const value=normaliseWorkforceSettings(row||{});return {...value,updatedAt:row?.updated_at||''};}
+async function getWorkforceSettings(db,session){return json({settings:workforceSettingsPayload(await workforceSettingsRow(db,session.organisation_id))});}
+async function updateWorkforceSettings(request,db,session){
+  const value=normaliseWorkforceSettings(await readJson(request));
+  await db.batch([
+    db.prepare(`INSERT INTO organisation_workforce_settings(organisation_id,supervision_frequency_days,new_starter_supervision_days,appraisal_frequency_days,expiry_warning_days,probation_review_days,require_staff_acknowledgement,block_expired_critical_competencies,updated_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+      ON CONFLICT(organisation_id) DO UPDATE SET supervision_frequency_days=excluded.supervision_frequency_days,new_starter_supervision_days=excluded.new_starter_supervision_days,appraisal_frequency_days=excluded.appraisal_frequency_days,expiry_warning_days=excluded.expiry_warning_days,probation_review_days=excluded.probation_review_days,require_staff_acknowledgement=excluded.require_staff_acknowledgement,block_expired_critical_competencies=excluded.block_expired_critical_competencies,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,value.supervisionFrequencyDays,value.newStarterSupervisionDays,value.appraisalFrequencyDays,value.expiryWarningDays,value.probationReviewDays,value.requireStaffAcknowledgement?1:0,value.blockExpiredCriticalCompetencies?1:0,session.user_id),
+    auditStatement(db,session.organisation_id,session.user_id,'staff.workforce_settings_updated','organisation',session.organisation_id,{supervisionFrequencyDays:value.supervisionFrequencyDays,newStarterSupervisionDays:value.newStarterSupervisionDays,appraisalFrequencyDays:value.appraisalFrequencyDays,expiryWarningDays:value.expiryWarningDays})
+  ]);
+  return getWorkforceSettings(db,session);
+}
+async function getTrainingCatalogue(db,session){
+  const result=await db.prepare('SELECT * FROM staff_training_catalog WHERE organisation_id=? ORDER BY active DESC,category,name').bind(session.organisation_id).all();
+  return json({catalogue:(result.results||[]).map(row=>({...row,roleScopes:safeJson(row.role_scope_json,[]),evidenceRequired:Boolean(row.evidence_required),criticalForAllocation:Boolean(row.critical_for_allocation),active:Boolean(row.active)}))});
+}
+async function saveTrainingCatalogue(request,db,session,catalogueId=null){
+  const input=await readJson(request),name=clean(input.name).slice(0,200),category=(clean(input.category)||'Core skills').slice(0,120),description=clean(input.description).slice(0,3000),level=clean(input.requirementLevel)||'role';
+  const allowedLevels=['core','role','optional'],allowedScopes=['all','care','clinical','management','office'];
+  const roleScopes=[...new Set((Array.isArray(input.roleScopes)?input.roleScopes:[]).map(value=>clean(value).toLowerCase()).filter(value=>allowedScopes.includes(value)))];
+  const renewalInput=clean(input.renewalMonths),renewalMonths=renewalInput===''?null:Number(renewalInput);
+  if(!name||!allowedLevels.includes(level)||!roleScopes.length)return json({error:{code:'VALIDATION_ERROR',message:'Enter a training name, requirement level and at least one applicable workforce group.'}},400);
+  if(renewalMonths!==null&&(!Number.isInteger(renewalMonths)||renewalMonths<1||renewalMonths>120))return json({error:{code:'VALIDATION_ERROR',message:'Renewal must be between 1 and 120 months, or left blank.'}},400);
+  const id=catalogueId||crypto.randomUUID();
+  if(catalogueId){const existing=await db.prepare('SELECT id FROM staff_training_catalog WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();if(!existing)return notFound('Training catalogue item');}
+  const values=[name,category,description,level,JSON.stringify(roleScopes.includes('all')?['all']:roleScopes),renewalMonths,input.evidenceRequired===false?0:1,input.criticalForAllocation?1:0,input.active===false?0:1];
+  try{
+    const statement=catalogueId
+      ?db.prepare('UPDATE staff_training_catalog SET name=?,category=?,description=?,requirement_level=?,role_scope_json=?,renewal_months=?,evidence_required=?,critical_for_allocation=?,active=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?').bind(...values,id,session.organisation_id)
+      :db.prepare('INSERT INTO staff_training_catalog(id,organisation_id,name,category,description,requirement_level,role_scope_json,renewal_months,evidence_required,critical_for_allocation,active,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').bind(id,session.organisation_id,...values,session.user_id);
+    await db.batch([statement,auditStatement(db,session.organisation_id,session.user_id,catalogueId?'staff.training_catalog.updated':'staff.training_catalog.created','training_catalog',id,{name,requirementLevel:level,roleScopes})]);
+  }catch(error){if(String(error).includes('UNIQUE'))return json({error:{code:'TRAINING_NAME_EXISTS',message:'A training requirement with this name already exists.'}},409);throw error;}
+  return json({ok:true,id},catalogueId?200:201);
+}
+function workforceEventStatement(db,session,staffId,eventType,recordType,recordId,summary,metadata={}){return db.prepare('INSERT INTO staff_record_events(id,organisation_id,staff_id,event_type,record_type,record_id,summary,metadata_json,created_by) VALUES(?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),session.organisation_id,staffId,eventType,recordType,recordId||null,summary,JSON.stringify(metadata),session.user_id);}
+async function workforceRows(db,organisationId,staffId){
+  const [recruitment,employment,supervisions,catalogue,training,competencies,qualifications,appraisals,absences,hr,documents,events]=await Promise.all([
+    db.prepare('SELECT r.*,u.display_name verified_by_name FROM staff_recruitment_checks r LEFT JOIN users u ON u.id=r.verified_by AND u.organisation_id=r.organisation_id WHERE r.organisation_id=? AND r.staff_id=? ORDER BY r.check_type,r.created_at DESC').bind(organisationId,staffId).all(),
+    db.prepare('SELECT h.*,u.display_name verified_by_name FROM staff_employment_history h LEFT JOIN users u ON u.id=h.verified_by AND u.organisation_id=h.organisation_id WHERE h.organisation_id=? AND h.staff_id=? ORDER BY COALESCE(h.started_on,\'0000-00-00\') DESC').bind(organisationId,staffId).all(),
+    db.prepare(`SELECT s.*,sup.first_name||' '||sup.last_name supervisor_name,mu.display_name manager_signed_name FROM staff_supervisions s LEFT JOIN staff sup ON sup.id=s.supervisor_staff_id AND sup.organisation_id=s.organisation_id LEFT JOIN users mu ON mu.id=s.manager_signed_by AND mu.organisation_id=s.organisation_id WHERE s.organisation_id=? AND s.staff_id=? ORDER BY datetime(s.scheduled_at) DESC`).bind(organisationId,staffId).all(),
+    db.prepare('SELECT * FROM staff_training_catalog WHERE organisation_id=? AND active=1 ORDER BY category,name').bind(organisationId).all(),
+    db.prepare('SELECT t.*,c.name training_name,c.category,c.requirement_level,c.role_scope_json,c.renewal_months,c.evidence_required,c.critical_for_allocation FROM staff_training_records t JOIN staff_training_catalog c ON c.id=t.training_catalog_id AND c.organisation_id=t.organisation_id WHERE t.organisation_id=? AND t.staff_id=? ORDER BY c.category,c.name').bind(organisationId,staffId).all(),
+    db.prepare('SELECT * FROM staff_competencies WHERE organisation_id=? AND staff_id=? ORDER BY category,name').bind(organisationId,staffId).all(),
+    db.prepare('SELECT q.*,u.display_name verified_by_name FROM staff_qualifications q LEFT JOIN users u ON u.id=q.verified_by AND u.organisation_id=q.organisation_id WHERE q.organisation_id=? AND q.staff_id=? ORDER BY q.status,q.name').bind(organisationId,staffId).all(),
+    db.prepare(`SELECT a.*,m.first_name||' '||m.last_name manager_name,u.display_name manager_signed_name FROM staff_appraisals a LEFT JOIN staff m ON m.id=a.manager_staff_id AND m.organisation_id=a.organisation_id LEFT JOIN users u ON u.id=a.manager_signed_by AND u.organisation_id=a.organisation_id WHERE a.organisation_id=? AND a.staff_id=? ORDER BY datetime(a.scheduled_at) DESC`).bind(organisationId,staffId).all(),
+    db.prepare('SELECT * FROM staff_absences WHERE organisation_id=? AND staff_id=? ORDER BY datetime(started_at) DESC').bind(organisationId,staffId).all(),
+    db.prepare('SELECT h.*,u.display_name owner_name FROM staff_hr_cases h LEFT JOIN users u ON u.id=h.owner_user_id AND u.organisation_id=h.organisation_id WHERE h.organisation_id=? AND h.staff_id=? ORDER BY datetime(h.opened_at) DESC').bind(organisationId,staffId).all(),
+    db.prepare("SELECT id,title,document_type,issue_date,expiry_date,status,sensitive,retention_until,original_file_name,mime_type,size_bytes,notes,created_at FROM staff_documents WHERE organisation_id=? AND staff_id=? AND status<>'archived' ORDER BY created_at DESC").bind(organisationId,staffId).all(),
+    db.prepare(`SELECT e.*,u.display_name created_by_name FROM staff_record_events e LEFT JOIN users u ON u.id=e.created_by AND u.organisation_id=e.organisation_id WHERE e.organisation_id=? AND e.staff_id=? ORDER BY e.created_at DESC LIMIT 100`).bind(organisationId,staffId).all()
+  ]);
+  const map=result=>result.results||[];
+  const supervisionRows=map(supervisions).map(row=>({...row,actions:safeJson(row.actions_json,[]),objectives:undefined}));
+  const appraisalRows=map(appraisals).map(row=>({...row,objectives:safeJson(row.objectives_json,[])}));
+  return {recruitment:map(recruitment),employmentHistory:map(employment),supervisions:supervisionRows,trainingCatalogue:map(catalogue),training:map(training),competencies:map(competencies),qualifications:map(qualifications),appraisals:appraisalRows,absences:map(absences),hrCases:map(hr),documents:map(documents),events:map(events)};
+}
+async function getStaffWorkforce(db,session,staffId){
+  const staffRow=await ensureWorkforceStaff(db,session,staffId);if(!staffRow)return notFound('Staff record');
+  const [records,settings,canSupervision,canTraining,canDocuments,canHr]=await Promise.all([workforceRows(db,session.organisation_id,staffId),workforceSettingsRow(db,session.organisation_id),userHasPermission(db,session,'staff.supervision.view'),userHasPermission(db,session,'staff.training.view'),userHasPermission(db,session,'staff.documents.view'),userHasPermission(db,session,'staff.hr.view')]);
+  const readiness=calculateStaffReadiness(staffRow,records,settings);
+  const visible={recruitment:records.recruitment.filter(row=>!Number(row.restricted)||canHr),employmentHistory:records.employmentHistory,events:records.events.filter(row=>canHr||!['hr','absences'].includes(row.record_type))};
+  if(canSupervision)Object.assign(visible,{supervisions:records.supervisions,appraisals:records.appraisals});
+  if(canTraining)Object.assign(visible,{trainingCatalogue:records.trainingCatalogue,training:records.training,competencies:records.competencies,qualifications:records.qualifications});
+  if(canDocuments)visible.documents=records.documents;
+  if(canHr)Object.assign(visible,{absences:records.absences,hrCases:records.hrCases});
+  return json({staff:toStaff(staffRow),settings:workforceSettingsPayload(settings),readiness,records:visible,access:{canViewSupervision:canSupervision,canViewTraining:canTraining,canViewDocuments:canDocuments,canManageRecords:await userHasPermission(db,session,'staff.records.manage'),canManageSupervision:await userHasPermission(db,session,'staff.supervision.manage'),canManageTraining:await userHasPermission(db,session,'staff.training.manage'),canManageDocuments:await userHasPermission(db,session,'staff.documents.manage'),canViewHr:canHr,canManageHr:await userHasPermission(db,session,'staff.hr.manage'),self:false}});
+}
+async function getMyStaffWorkforce(db,session){
+  if(!session.staff_id)return json({error:{code:'STAFF_LINK_REQUIRED',message:'Your login is not linked to a staff record. Ask your manager to link it.'}},404);
+  const staffRow=await ensureWorkforceStaff(db,session,session.staff_id);if(!staffRow)return notFound('Staff record');
+  const [records,settings]=await Promise.all([workforceRows(db,session.organisation_id,session.staff_id),workforceSettingsRow(db,session.organisation_id)]);
+  const visible={supervisions:records.supervisions.filter(row=>row.status==='completed'||row.status==='planned').map(({safeguarding_discussion,incidents_discussion,...row})=>row),trainingCatalogue:records.trainingCatalogue,training:records.training,competencies:records.competencies,qualifications:records.qualifications,appraisals:records.appraisals.filter(row=>row.status==='completed'||row.status==='planned'),documents:records.documents.filter(row=>!row.sensitive&&['qualification','training_certificate','professional_registration','employment_contract','supervision_evidence','appraisal_evidence','other'].includes(row.document_type)),events:records.events.filter(row=>!['hr','absence','absences','recruitment'].includes(row.record_type))};
+  return json({staff:toStaff(staffRow),settings:workforceSettingsPayload(settings),readiness:calculateStaffReadiness(staffRow,records,settings),records:visible,access:{self:true,canViewSupervision:true,canViewTraining:true,canViewDocuments:true,canManageRecords:false,canManageSupervision:false,canManageTraining:false,canManageDocuments:false,canViewHr:false,canManageHr:false}});
+}
+async function workforceOverviewDataForSession(db,session){
+  const scoped=staffBranchRestricted(session),branch=session.active_branch_id||session.home_branch_id;
+  const [staffResult,settings,catalogue,recruitment,employment,supervisions,training,competencies,qualifications,appraisals,documents]=await Promise.all([
+    db.prepare(`SELECT * FROM staff WHERE organisation_id=? ${scoped?'AND branch_id=?':''} ORDER BY last_name,first_name`).bind(session.organisation_id,...(scoped?[branch]:[])).all(),workforceSettingsRow(db,session.organisation_id),
+    db.prepare('SELECT * FROM staff_training_catalog WHERE organisation_id=? AND active=1').bind(session.organisation_id).all(),db.prepare('SELECT * FROM staff_recruitment_checks WHERE organisation_id=?').bind(session.organisation_id).all(),db.prepare('SELECT * FROM staff_employment_history WHERE organisation_id=?').bind(session.organisation_id).all(),db.prepare('SELECT * FROM staff_supervisions WHERE organisation_id=?').bind(session.organisation_id).all(),db.prepare('SELECT * FROM staff_training_records WHERE organisation_id=?').bind(session.organisation_id).all(),db.prepare('SELECT * FROM staff_competencies WHERE organisation_id=?').bind(session.organisation_id).all(),db.prepare('SELECT * FROM staff_qualifications WHERE organisation_id=?').bind(session.organisation_id).all(),db.prepare('SELECT * FROM staff_appraisals WHERE organisation_id=?').bind(session.organisation_id).all(),db.prepare("SELECT * FROM staff_documents WHERE organisation_id=? AND status<>'archived'").bind(session.organisation_id).all()
+  ]);
+  const rows=staffResult.results||[],allowed=new Set(rows.map(row=>row.id)),records={};for(const id of allowed)records[id]={trainingCatalogue:catalogue.results||[],recruitment:[],employmentHistory:[],supervisions:[],training:[],competencies:[],qualifications:[],appraisals:[],documents:[]};
+  const assign=(result,key)=>{for(const row of result.results||[])if(allowed.has(row.staff_id))records[row.staff_id][key].push(row);};assign(recruitment,'recruitment');assign(employment,'employmentHistory');assign(supervisions,'supervisions');assign(training,'training');assign(competencies,'competencies');assign(qualifications,'qualifications');assign(appraisals,'appraisals');assign(documents,'documents');
+  const overview=calculateWorkforceOverview(rows,records,settings);return {...overview,settings:workforceSettingsPayload(settings)};
+}
+async function workforceOverview(db,session){return json(await workforceOverviewDataForSession(db,session));}
+function workforceRecordTitle(section,input){return clean(input.title||input.name||input.trainingName||input.employerName||input.appraisalType||input.meetingType||input.caseType||input.checkType||section).slice(0,160);}
+async function saveStaffWorkforceRecord(request,db,session,staffId,section,recordId=null){
+  const staffRow=await ensureWorkforceStaff(db,session,staffId);if(!staffRow)return notFound('Staff record');
+  const table=WORKFORCE_TABLES[section];if(!table)return notFound('Workforce section');
+  const input=await readJson(request);let existing=null;if(recordId){existing=await db.prepare(`SELECT id FROM ${table} WHERE id=? AND organisation_id=? AND staff_id=?`).bind(recordId,session.organisation_id,staffId).first();if(!existing)return notFound('Workforce record');}
+  const id=recordId||crypto.randomUUID(),statements=[];let summary=workforceRecordTitle(section,input),eventType=existing?'updated':'created';
+  if(section==='recruitment'){
+    const type=clean(input.checkType),status=clean(input.status)||'pending',allowedTypes=['identity','right_to_work','dbs','reference','employment_history','qualification','professional_registration','health_declaration','interview','other'],allowedStatus=['pending','verified','concern','expired','not_required'];if(!allowedTypes.includes(type)||!allowedStatus.includes(status)||!clean(input.title))return json({error:{code:'VALIDATION_ERROR',message:'Choose a check type, title and valid status.'}},400);
+    const values=[type,clean(input.title).slice(0,200),status,clean(input.checkedAt)||null,clean(input.expiryDate)||null,clean(input.reference).slice(0,250),status==='verified'?session.user_id:null,clean(input.outcome).slice(0,2000),clean(input.notes).slice(0,5000),input.restricted?1:0];
+    statements.push(existing?db.prepare(`UPDATE staff_recruitment_checks SET check_type=?,title=?,status=?,checked_at=?,expiry_date=?,reference=?,verified_by=?,outcome=?,notes=?,restricted=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND staff_id=?`).bind(...values,id,session.organisation_id,staffId):db.prepare(`INSERT INTO staff_recruitment_checks(id,organisation_id,staff_id,check_type,title,status,checked_at,expiry_date,reference,verified_by,outcome,notes,restricted,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,staffId,...values,session.user_id));summary=clean(input.title);
+  }else if(section==='employment'){
+    if(!clean(input.employerName))return json({error:{code:'VALIDATION_ERROR',message:'Enter the employer or organisation name.'}},400);const verified=input.verified?1:0,values=[clean(input.employerName).slice(0,200),clean(input.jobTitle).slice(0,160),clean(input.startedOn)||null,clean(input.endedOn)||null,clean(input.reasonForLeaving).slice(0,1000),clean(input.gapExplanation).slice(0,2000),verified,verified?session.user_id:null,verified?new Date().toISOString():null,clean(input.notes).slice(0,3000)];
+    statements.push(existing?db.prepare(`UPDATE staff_employment_history SET employer_name=?,job_title=?,started_on=?,ended_on=?,reason_for_leaving=?,gap_explanation=?,verified=?,verified_by=?,verified_at=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND staff_id=?`).bind(...values,id,session.organisation_id,staffId):db.prepare(`INSERT INTO staff_employment_history(id,organisation_id,staff_id,employer_name,job_title,started_on,ended_on,reason_for_leaving,gap_explanation,verified,verified_by,verified_at,notes,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,staffId,...values,session.user_id));summary=clean(input.employerName);
+  }else if(section==='supervisions'){
+    const type=clean(input.meetingType)||'formal',status=clean(input.status)||'planned',scheduled=clean(input.scheduledAt),allowedTypes=['formal','probation','return_to_work','clinical','competency','wellbeing','ad_hoc'],allowedStatus=['draft','planned','completed','cancelled','missed'];if(!scheduled||!allowedTypes.includes(type)||!allowedStatus.includes(status))return json({error:{code:'VALIDATION_ERROR',message:'Choose a valid supervision type, status and scheduled date.'}},400);if(status==='completed'&&!clean(input.reflectiveDiscussion)&&!clean(input.performanceSummary))return json({error:{code:'VALIDATION_ERROR',message:'Completed supervision requires a reflective discussion or performance summary.'}},400);
+    const completed=status==='completed'?(clean(input.completedAt)||new Date().toISOString()):null,actions=normaliseSupervisionActions(input.actions).map(action=>({...action,completedAt:action.status==='completed'?(action.completedAt||new Date().toISOString()):''})),values=[clean(input.supervisorStaffId)||null,type,status,scheduled,completed,clean(input.location).slice(0,160),input.wellbeingRating?Math.max(1,Math.min(5,Number(input.wellbeingRating))):null,clean(input.agenda).slice(0,5000),clean(input.reflectiveDiscussion).slice(0,10000),clean(input.performanceSummary).slice(0,10000),clean(input.safeguardingDiscussion).slice(0,5000),clean(input.incidentsDiscussion).slice(0,5000),clean(input.trainingDiscussion).slice(0,5000),clean(input.supportRequired).slice(0,5000),clean(input.agreedOutcomes).slice(0,5000),JSON.stringify(actions),clean(input.nextSupervisionDate)||null,status==='completed'?session.user_id:null,status==='completed'?new Date().toISOString():null];
+    statements.push(existing?db.prepare(`UPDATE staff_supervisions SET supervisor_staff_id=?,meeting_type=?,status=?,scheduled_at=?,completed_at=?,location=?,wellbeing_rating=?,agenda=?,reflective_discussion=?,performance_summary=?,safeguarding_discussion=?,incidents_discussion=?,training_discussion=?,support_required=?,agreed_outcomes=?,actions_json=?,next_supervision_date=?,manager_signed_by=?,manager_signed_at=?,staff_acknowledged_by=NULL,staff_acknowledged_at=NULL,staff_comments=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND staff_id=?`).bind(...values,id,session.organisation_id,staffId):db.prepare(`INSERT INTO staff_supervisions(id,organisation_id,staff_id,supervisor_staff_id,meeting_type,status,scheduled_at,completed_at,location,wellbeing_rating,agenda,reflective_discussion,performance_summary,safeguarding_discussion,incidents_discussion,training_discussion,support_required,agreed_outcomes,actions_json,next_supervision_date,manager_signed_by,manager_signed_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,staffId,...values,session.user_id));if(clean(input.nextSupervisionDate))statements.push(db.prepare('UPDATE staff SET next_supervision_date=? WHERE id=? AND organisation_id=?').bind(clean(input.nextSupervisionDate),staffId,session.organisation_id));summary=`${type.replaceAll('_',' ')} supervision`;
+  }else if(section==='training'){
+    const catalogId=clean(input.trainingCatalogId),catalog=await db.prepare('SELECT * FROM staff_training_catalog WHERE id=? AND organisation_id=? AND active=1').bind(catalogId,session.organisation_id).first();if(!catalog)return json({error:{code:'VALIDATION_ERROR',message:'Choose a valid training requirement.'}},400);const status=clean(input.status)||'assigned',allowed=['assigned','booked','in_progress','completed','failed','expired','exempt'];if(!allowed.includes(status))return json({error:{code:'VALIDATION_ERROR',message:'Choose a valid training status.'}},400);let expiry=clean(input.expiryDate)||null;if(!expiry&&status==='completed'&&clean(input.completedDate)&&Number(catalog.renewal_months)){const date=new Date(`${clean(input.completedDate)}T12:00:00Z`);date.setUTCMonth(date.getUTCMonth()+Number(catalog.renewal_months));expiry=date.toISOString().slice(0,10);}const values=[catalogId,status,clean(input.assignedAt)||new Date().toISOString(),clean(input.requiredBy)||null,clean(input.bookedFor)||null,clean(input.completedDate)||null,expiry,clean(input.provider).slice(0,200),clean(input.certificateReference).slice(0,250),clean(input.result).slice(0,500),clean(input.assessorName).slice(0,160),input.competencyConfirmed?1:0,clean(input.exemptionReason).slice(0,1000),clean(input.notes).slice(0,5000)];
+    statements.push(existing?db.prepare(`UPDATE staff_training_records SET training_catalog_id=?,status=?,assigned_at=?,required_by=?,booked_for=?,completed_date=?,expiry_date=?,provider=?,certificate_reference=?,result=?,assessor_name=?,competency_confirmed=?,exemption_reason=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND staff_id=?`).bind(...values,id,session.organisation_id,staffId):db.prepare(`INSERT INTO staff_training_records(id,organisation_id,staff_id,training_catalog_id,status,assigned_at,required_by,booked_for,completed_date,expiry_date,provider,certificate_reference,result,assessor_name,competency_confirmed,exemption_reason,notes,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(organisation_id,staff_id,training_catalog_id) DO UPDATE SET status=excluded.status,assigned_at=excluded.assigned_at,required_by=excluded.required_by,booked_for=excluded.booked_for,completed_date=excluded.completed_date,expiry_date=excluded.expiry_date,provider=excluded.provider,certificate_reference=excluded.certificate_reference,result=excluded.result,assessor_name=excluded.assessor_name,competency_confirmed=excluded.competency_confirmed,exemption_reason=excluded.exemption_reason,notes=excluded.notes,updated_at=CURRENT_TIMESTAMP`).bind(id,session.organisation_id,staffId,...values,session.user_id));summary=catalog.name;
+  }else if(section==='competencies'){
+    const name=clean(input.name),status=clean(input.status)||'planned',allowed=['planned','observed','competent','development_required','restricted','expired'];if(!name||!allowed.includes(status))return json({error:{code:'VALIDATION_ERROR',message:'Enter a competency name and valid status.'}},400);const values=[name.slice(0,200),clean(input.category).slice(0,120)||'Care practice',status,input.criticalForAllocation?1:0,clean(input.assessedAt)||null,clean(input.expiryDate)||null,clean(input.assessorName).slice(0,160),clean(input.observation).slice(0,5000),clean(input.outcome).slice(0,3000),clean(input.restrictions).slice(0,3000),clean(input.nextReviewDate)||null];
+    statements.push(existing?db.prepare(`UPDATE staff_competencies SET name=?,category=?,status=?,critical_for_allocation=?,assessed_at=?,expiry_date=?,assessor_name=?,observation=?,outcome=?,restrictions=?,next_review_date=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND staff_id=?`).bind(...values,id,session.organisation_id,staffId):db.prepare(`INSERT INTO staff_competencies(id,organisation_id,staff_id,name,category,status,critical_for_allocation,assessed_at,expiry_date,assessor_name,observation,outcome,restrictions,next_review_date,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,staffId,...values,session.user_id));summary=name;
+  }else if(section==='qualifications'){
+    const name=clean(input.name),status=clean(input.status)||'current',allowed=['studying','current','expired','suspended','archived'];if(!name||!allowed.includes(status))return json({error:{code:'VALIDATION_ERROR',message:'Enter a qualification name and valid status.'}},400);const verified=input.verified?1:0,values=[name.slice(0,200),clean(input.qualificationLevel).slice(0,100),clean(input.awardingBody).slice(0,200),clean(input.registrationNumber).slice(0,160),status,clean(input.issuedDate)||null,clean(input.expiryDate)||null,verified,verified?session.user_id:null,verified?new Date().toISOString():null,clean(input.notes).slice(0,3000)];
+    statements.push(existing?db.prepare(`UPDATE staff_qualifications SET name=?,qualification_level=?,awarding_body=?,registration_number=?,status=?,issued_date=?,expiry_date=?,verified=?,verified_by=?,verified_at=?,notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND staff_id=?`).bind(...values,id,session.organisation_id,staffId):db.prepare(`INSERT INTO staff_qualifications(id,organisation_id,staff_id,name,qualification_level,awarding_body,registration_number,status,issued_date,expiry_date,verified,verified_by,verified_at,notes,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,staffId,...values,session.user_id));summary=name;
+  }else if(section==='appraisals'){
+    const type=clean(input.appraisalType)||'annual',status=clean(input.status)||'planned',scheduled=clean(input.scheduledAt),allowedTypes=['annual','probation','development','performance','career'],allowedStatus=['draft','planned','completed','cancelled'];if(!scheduled||!allowedTypes.includes(type)||!allowedStatus.includes(status))return json({error:{code:'VALIDATION_ERROR',message:'Choose a valid appraisal type, status and date.'}},400);const completed=status==='completed'?(clean(input.completedAt)||new Date().toISOString()):null,objectives=Array.isArray(input.objectives)?input.objectives.slice(0,20):[],values=[clean(input.managerStaffId)||null,type,status,clean(input.periodStart)||null,clean(input.periodEnd)||null,scheduled,completed,input.performanceRating?Math.max(1,Math.min(5,Number(input.performanceRating))):null,clean(input.performanceSummary).slice(0,10000),clean(input.achievements).slice(0,5000),clean(input.strengths).slice(0,5000),JSON.stringify(objectives),clean(input.developmentPlan).slice(0,10000),clean(input.careerAspirations).slice(0,5000),clean(input.staffComments).slice(0,5000),clean(input.nextAppraisalDate)||null,status==='completed'?session.user_id:null,status==='completed'?new Date().toISOString():null];
+    statements.push(existing?db.prepare(`UPDATE staff_appraisals SET manager_staff_id=?,appraisal_type=?,status=?,period_start=?,period_end=?,scheduled_at=?,completed_at=?,performance_rating=?,performance_summary=?,achievements=?,strengths=?,objectives_json=?,development_plan=?,career_aspirations=?,staff_comments=?,next_appraisal_date=?,manager_signed_by=?,manager_signed_at=?,staff_acknowledged_by=NULL,staff_acknowledged_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND staff_id=?`).bind(...values,id,session.organisation_id,staffId):db.prepare(`INSERT INTO staff_appraisals(id,organisation_id,staff_id,manager_staff_id,appraisal_type,status,period_start,period_end,scheduled_at,completed_at,performance_rating,performance_summary,achievements,strengths,objectives_json,development_plan,career_aspirations,staff_comments,next_appraisal_date,manager_signed_by,manager_signed_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,staffId,...values,session.user_id));if(clean(input.nextAppraisalDate))statements.push(db.prepare('UPDATE staff SET next_appraisal_date=? WHERE id=? AND organisation_id=?').bind(clean(input.nextAppraisalDate),staffId,session.organisation_id));summary=`${type} appraisal`;
+  }else if(section==='absences'){
+    const type=clean(input.absenceType)||'sickness',status=clean(input.status)||'open',started=clean(input.startedAt),allowedTypes=['sickness','authorised','unpaid','family','bereavement','medical','other'],allowedStatus=['planned','open','closed','cancelled'];if(!started||!allowedTypes.includes(type)||!allowedStatus.includes(status))return json({error:{code:'VALIDATION_ERROR',message:'Choose a valid absence type, status and start date.'}},400);const values=[type,status,started,clean(input.endedAt)||null,clean(input.reasonSummary).slice(0,2000),input.fitNoteRequired?1:0,input.fitNoteReceived?1:0,input.returnToWorkRequired===false?0:1,clean(input.returnToWorkCompletedAt)||null,clean(input.returnToWorkNotes).slice(0,5000),1];
+    statements.push(existing?db.prepare(`UPDATE staff_absences SET absence_type=?,status=?,started_at=?,ended_at=?,reason_summary=?,fit_note_required=?,fit_note_received=?,return_to_work_required=?,return_to_work_completed_at=?,return_to_work_notes=?,restricted=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND staff_id=?`).bind(...values,id,session.organisation_id,staffId):db.prepare(`INSERT INTO staff_absences(id,organisation_id,staff_id,absence_type,status,started_at,ended_at,reason_summary,fit_note_required,fit_note_received,return_to_work_required,return_to_work_completed_at,return_to_work_notes,restricted,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,staffId,...values,session.user_id));summary=`${type} absence`;
+  }else if(section==='hr'){
+    const type=clean(input.caseType),status=clean(input.status)||'open',summaryText=clean(input.summary),allowedTypes=['capability','disciplinary','grievance','safeguarding','conduct','complaint','other'],allowedStatus=['open','investigating','hearing','action_plan','closed','appealed'];if(!allowedTypes.includes(type)||!allowedStatus.includes(status)||!summaryText)return json({error:{code:'VALIDATION_ERROR',message:'Choose a case type, status and enter a factual summary.'}},400);const reference=clean(input.referenceNumber)||`HR-${new Date().getUTCFullYear()}-${crypto.randomUUID().slice(0,8).toUpperCase()}`,values=[reference.slice(0,80),type,status,clean(input.openedAt)||new Date().toISOString(),status==='closed'?(clean(input.closedAt)||new Date().toISOString()):null,summaryText.slice(0,10000),clean(input.actionsTaken).slice(0,10000),clean(input.outcome).slice(0,10000),session.user_id,1];
+    statements.push(existing?db.prepare(`UPDATE staff_hr_cases SET reference_number=?,case_type=?,status=?,opened_at=?,closed_at=?,summary=?,actions_taken=?,outcome=?,owner_user_id=?,restricted=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND staff_id=?`).bind(...values,id,session.organisation_id,staffId):db.prepare(`INSERT INTO staff_hr_cases(id,organisation_id,staff_id,reference_number,case_type,status,opened_at,closed_at,summary,actions_taken,outcome,owner_user_id,restricted,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,staffId,...values,session.user_id));summary=`${reference} · ${type}`;
+  }
+  statements.push(workforceEventStatement(db,session,staffId,eventType,section,id,`${existing?'Updated':'Created'} ${summary}`,{}),auditStatement(db,session.organisation_id,session.user_id,`staff.${section}.${eventType}`,'staff',staffId,{recordId:id}));await db.batch(statements);return json({ok:true,id},existing?200:201);
+}
+async function archiveStaffWorkforceRecord(db,session,staffId,section,recordId){
+  if(!await ensureWorkforceStaff(db,session,staffId))return notFound('Staff record');const table=WORKFORCE_TABLES[section];if(!table)return notFound('Workforce section');const existing=await db.prepare(`SELECT id FROM ${table} WHERE id=? AND organisation_id=? AND staff_id=?`).bind(recordId,session.organisation_id,staffId).first();if(!existing)return notFound('Workforce record');
+  const transitions={recruitment:["status='not_required'"],supervisions:["status='cancelled'"],training:["status='exempt'"],qualifications:["status='archived'"],appraisals:["status='cancelled'"],absences:["status='cancelled'"],hr:["status='closed',closed_at=COALESCE(closed_at,CURRENT_TIMESTAMP)"]};if(!transitions[section])return json({error:{code:'RECORD_RETENTION_REQUIRED',message:'This record is part of the retained workforce history. Correct it rather than deleting it.'}},409);
+  await db.batch([db.prepare(`UPDATE ${table} SET ${transitions[section][0]},updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND staff_id=?`).bind(recordId,session.organisation_id,staffId),workforceEventStatement(db,session,staffId,'archived',section,recordId,`Archived ${section} record`,{}),auditStatement(db,session.organisation_id,session.user_id,`staff.${section}.archived`,'staff',staffId,{recordId})]);return json({ok:true});
+}
+async function acknowledgeStaffRecord(request,db,session,staffId,section,recordId){
+  if(!session.staff_id||session.staff_id!==staffId)return forbidden('Only the staff member can acknowledge their own record.');if(!await ensureWorkforceStaff(db,session,staffId))return notFound('Staff record');const table=section==='supervisions'?'staff_supervisions':'staff_appraisals',comments=clean((await readJson(request)).comments).slice(0,5000),existing=await db.prepare(`SELECT id,status FROM ${table} WHERE id=? AND organisation_id=? AND staff_id=?`).bind(recordId,session.organisation_id,staffId).first();if(!existing)return notFound('Staff record');if(existing.status!=='completed')return json({error:{code:'RECORD_NOT_COMPLETE',message:'Only a completed record can be acknowledged.'}},409);
+  const commentSql=section==='supervisions'?',staff_comments=?':'';await db.batch([db.prepare(`UPDATE ${table} SET staff_acknowledged_by=?,staff_acknowledged_at=CURRENT_TIMESTAMP${commentSql},updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND staff_id=?`).bind(session.user_id,...(section==='supervisions'?[comments]:[]),recordId,session.organisation_id,staffId),workforceEventStatement(db,session,staffId,'acknowledged',section,recordId,`Staff member acknowledged ${section.slice(0,-1)} record`,{}),auditStatement(db,session.organisation_id,session.user_id,`staff.${section}.acknowledged`,'staff',staffId,{recordId})]);return json({ok:true});
+}
+async function uploadStaffDocument(request,env,session,staffId){
+  if(!env.CLIENT_FILES)return json({error:{code:'STORAGE_UNAVAILABLE',message:'Private staff document storage is not configured.'}},503);if(!await ensureWorkforceStaff(env.DB,session,staffId))return notFound('Staff record');let form;try{form=await readFormData(request,11*1024*1024);}catch{return json({error:{code:'FILE_TOO_LARGE',message:'The document upload is too large or invalid.'}},413);}const file=form.get('file'),title=clean(form.get('title')),type=clean(form.get('documentType')),allowed=['identity','right_to_work','reference','qualification','training_certificate','professional_registration','employment_contract','fit_note','supervision_evidence','appraisal_evidence','other'];if(!title||!allowed.includes(type))return json({error:{code:'VALIDATION_ERROR',message:'Enter a title and choose a supported staff document type. DBS certificates should be recorded as check metadata, not uploaded.'}},400);if(!file||typeof file.arrayBuffer!=='function'||!Number(file.size))return json({error:{code:'VALIDATION_ERROR',message:'Choose a PDF, JPEG or PNG file.'}},400);if(Number(file.size)>10*1024*1024)return json({error:{code:'FILE_TOO_LARGE',message:'Staff document files must be 10 MB or smaller.'}},413);const buffer=await file.arrayBuffer(),detected=detectedDocumentType(new Uint8Array(buffer));if(!detected)return json({error:{code:'UNSUPPORTED_FILE',message:'Only genuine PDF, JPEG and PNG files are accepted.'}},415);const id=crypto.randomUUID(),originalName=safeDownloadName(file.name),key=`${session.organisation_id}/staff/${staffId}/${id}.${detected.extension}`,sensitive=['identity','right_to_work','fit_note','employment_contract'].includes(type)?1:(clean(form.get('sensitive'))==='true'?1:0);await env.CLIENT_FILES.put(key,buffer,{httpMetadata:{contentType:detected.mime,contentDisposition:`attachment; filename="${originalName}"`},customMetadata:{organisationId:session.organisation_id,staffId,documentId:id,recordClass:'staff'}});try{await env.DB.batch([env.DB.prepare(`INSERT INTO staff_documents(id,organisation_id,staff_id,title,document_type,issue_date,expiry_date,status,sensitive,retention_until,storage_key,original_file_name,mime_type,size_bytes,notes,uploaded_by) VALUES(?,?,?,?,?,?,?,'current',?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,staffId,title.slice(0,200),type,clean(form.get('issueDate'))||null,clean(form.get('expiryDate'))||null,sensitive,clean(form.get('retentionUntil'))||null,key,originalName,detected.mime,Number(file.size),clean(form.get('notes')).slice(0,3000),session.user_id),workforceEventStatement(env.DB,session,staffId,'uploaded','documents',id,`Uploaded ${title}`,{documentType:type}),auditStatement(env.DB,session.organisation_id,session.user_id,'staff.documents.uploaded','staff',staffId,{recordId:id,documentType:type,sizeBytes:Number(file.size)})]);}catch(error){await env.CLIENT_FILES.delete(key);throw error;}return json({ok:true,id},201);
+}
+async function staffDocumentFile(env,session,staffId,documentId){
+  if(!env.CLIENT_FILES)return json({error:{code:'STORAGE_UNAVAILABLE',message:'Private staff document storage is not configured.'}},503);if(!await ensureWorkforceStaff(env.DB,session,staffId))return notFound('Staff record');const self=session.staff_id===staffId;let allowed=self;if(!self)allowed=await userHasPermission(env.DB,session,'staff.documents.view');if(!allowed)return forbidden();const row=await env.DB.prepare("SELECT * FROM staff_documents WHERE id=? AND organisation_id=? AND staff_id=? AND status<>'archived'").bind(documentId,session.organisation_id,staffId).first();if(!row)return notFound('Staff document');const selfDocumentTypes=['qualification','training_certificate','professional_registration','employment_contract','supervision_evidence','appraisal_evidence','other'];if(self&&(Number(row.sensitive)||!selfDocumentTypes.includes(row.document_type)))return forbidden('This document is available to authorised managers only.');const object=await env.CLIENT_FILES.get(row.storage_key);if(!object)return notFound('Staff document file');const headers=new Headers({'cache-control':'private, no-store','x-content-type-options':'nosniff','content-disposition':`attachment; filename="${safeDownloadName(row.original_file_name||row.title)}"`});object.writeHttpMetadata(headers);headers.set('content-disposition',`attachment; filename="${safeDownloadName(row.original_file_name||row.title)}"`);headers.set('etag',object.httpEtag);await audit(env.DB,session.organisation_id,session.user_id,'staff.documents.downloaded','staff',staffId,{recordId:documentId,self});return new Response(object.body,{headers});
+}
+async function archiveStaffDocument(db,session,staffId,documentId){if(!await ensureWorkforceStaff(db,session,staffId))return notFound('Staff record');const result=await db.prepare("UPDATE staff_documents SET status='archived',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND staff_id=? AND status<>'archived'").bind(documentId,session.organisation_id,staffId).run();if(!result.meta.changes)return notFound('Staff document');await db.batch([workforceEventStatement(db,session,staffId,'archived','documents',documentId,'Archived staff document',{}),auditStatement(db,session.organisation_id,session.user_id,'staff.documents.archived','staff',staffId,{recordId:documentId})]);return json({ok:true});}
 
 
 async function ensureClient(db, session, clientId) {
@@ -1597,21 +1811,19 @@ async function listAllCarePlans(db, session, url){
   return json({carePlans:result.results.map(row=>{const plan={...toCarePlan(row),sections:sections[row.id]||[],clientName:[row.preferred_name||row.first_name,row.last_name].filter(Boolean).join(" ")};return {...plan,readiness:carePlanReadiness(plan,plan.sections)};})});
 }
 async function createCarePlan(request,db,session,clientId){
-  if(!hasRole(session,["owner","manager","organisation_owner","organisation_admin","branch_manager","office_staff","senior_carer"])) return forbidden();
   if(!await ensureClient(db,session,clientId)) return json({error:{code:"CLIENT_NOT_FOUND",message:"Client not found."}},404);
   const parsed=carePlanInput(await readJson(request)); if(parsed.error)return json({error:{code:"VALIDATION_ERROR",message:parsed.error}},400); const v=parsed.v,id=crypto.randomUUID();
   const statements=[db.prepare(`INSERT INTO care_plans (id,organisation_id,branch_id,client_id,title,status,effective_date,review_date,author_name,plan_type,plan_summary,what_matters,preferences,consent_status,capacity_status,decision_maker,review_notes,approval_status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?)`).bind(id,session.organisation_id,client.branch_id||null,clientId,v.title,v.status==='Active'?'Draft':v.status,v.effectiveDate||null,v.reviewDate,v.authorName,v.planType||'Comprehensive care plan',v.planSummary,v.whatMatters,v.preferences,v.consentStatus,v.capacityStatus,v.decisionMaker,v.reviewNotes,session.user_id),...sectionStatements(db,session,id,v.sections),auditStatement(db,session.organisation_id,session.user_id,"care_plan.created","care_plan",id,{clientId,title:v.title,status:'Draft',sections:v.sections.length})];
   await db.batch(statements); const row=await db.prepare("SELECT * FROM care_plans WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).first(); return json({carePlan:{...toCarePlan(row),sections:v.sections}},201);
 }
 async function updateCarePlan(request,db,session,id){
-  if(!hasRole(session,["owner","manager","organisation_owner","organisation_admin","branch_manager","office_staff","senior_carer"])) return forbidden();
   const existing=await db.prepare("SELECT * FROM care_plans WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).first(); if(!existing)return json({error:{code:"NOT_FOUND",message:"Care plan not found."}},404);
   const parsed=carePlanInput(await readJson(request)); if(parsed.error)return json({error:{code:"VALIDATION_ERROR",message:parsed.error}},400); const v=parsed.v,next=Number(existing.version||1)+1;
   const oldSections=await carePlanSections(db,session.organisation_id,[id]); const snapshot={...toCarePlan(existing),sections:oldSections[id]||[]};
   const statements=[db.prepare("INSERT INTO care_plan_versions (id,organisation_id,care_plan_id,version,snapshot_json,created_by) VALUES (?,?,?,?,?,?)").bind(crypto.randomUUID(),session.organisation_id,id,existing.version||1,JSON.stringify(snapshot),session.user_id),db.prepare(`UPDATE care_plans SET title=?,status=?,version=?,effective_date=?,review_date=?,author_name=?,plan_type=?,plan_summary=?,what_matters=?,preferences=?,consent_status=?,capacity_status=?,decision_maker=?,review_notes=?,approval_status='pending',approved_by=NULL,approved_at=NULL,submitted_by=?,submitted_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(v.title,v.status==='Active'?'Under review':v.status,next,v.effectiveDate||null,v.reviewDate,v.authorName,v.planType||'Comprehensive care plan',v.planSummary,v.whatMatters,v.preferences,v.consentStatus,v.capacityStatus,v.decisionMaker,v.reviewNotes,session.user_id,id,session.organisation_id),...sectionStatements(db,session,id,v.sections),auditStatement(db,session.organisation_id,session.user_id,"care_plan.updated","care_plan",id,{version:next,status:v.status,sections:v.sections.length})];
   await db.batch(statements); return json({carePlan:{...toCarePlan(await db.prepare("SELECT * FROM care_plans WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).first()),sections:v.sections}});
 }
-async function archiveCarePlan(db,session,id){if(!hasRole(session,["owner","manager","organisation_owner","organisation_admin","branch_manager"]))return forbidden();const r=await db.prepare("UPDATE care_plans SET status='Archived',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).run();if(!r.meta.changes)return json({error:{code:"NOT_FOUND",message:"Care plan not found."}},404);await audit(db,session.organisation_id,session.user_id,"care_plan.archived","care_plan",id,{});return json({ok:true});}
+async function archiveCarePlan(db,session,id){const r=await db.prepare("UPDATE care_plans SET status='Archived',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).run();if(!r.meta.changes)return json({error:{code:"NOT_FOUND",message:"Care plan not found."}},404);await audit(db,session.organisation_id,session.user_id,"care_plan.archived","care_plan",id,{});return json({ok:true});}
 async function carePlanHistory(db,session,id){
   const current=await db.prepare(`SELECT cp.*,u.display_name AS approved_by_name FROM care_plans cp LEFT JOIN users u ON u.id=cp.approved_by AND u.organisation_id=cp.organisation_id WHERE cp.id=? AND cp.organisation_id=?`).bind(id,session.organisation_id).first();
   if(!current)return notFound('Care plan');
@@ -1622,13 +1834,13 @@ function toCarePlan(r){return {id:r.id,clientId:r.client_id,title:r.title,status
 
 function riskInput(input){const v={category:clean(input.category)||"General Risk",title:clean(input.title),severity:clean(input.severity)||"Medium",likelihood:clean(input.likelihood)||"Possible",controls:clean(input.controls),actions:clean(input.actions),status:clean(input.status)||"Active",reviewDate:clean(input.reviewDate)};if(!v.title||!v.reviewDate)return {error:"Enter a risk title and review date."};return {v};}
 async function listRisks(db,session,clientId){if(!await ensureClient(db,session,clientId))return json({error:{code:"CLIENT_NOT_FOUND",message:"Client not found."}},404);const r=await db.prepare("SELECT * FROM risk_assessments WHERE organisation_id=? AND client_id=? ORDER BY CASE severity WHEN 'High' THEN 0 WHEN 'Medium' THEN 1 ELSE 2 END, review_date").bind(session.organisation_id,clientId).all();return json({risks:r.results.map(toRisk)});}
-async function createRisk(request,db,session,clientId){if(!hasRole(session,["owner","manager","carer"]))return forbidden();const client=await ensureClient(db,session,clientId);if(!client)return notFound('Client');const p=riskInput(await readJson(request));if(p.error)return json({error:{code:"VALIDATION_ERROR",message:p.error}},400);const v=p.v,id=crypto.randomUUID();await db.batch([db.prepare("INSERT INTO risk_assessments (id,organisation_id,branch_id,client_id,category,title,severity,likelihood,controls,actions,status,review_date,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(id,session.organisation_id,client.branch_id||null,clientId,v.category,v.title,v.severity,v.likelihood,v.controls,v.actions,v.status,v.reviewDate,session.user_id),auditStatement(db,session.organisation_id,session.user_id,"risk.created","risk",id,{clientId,title:v.title,severity:v.severity})]);return json({risk:toRisk(await db.prepare("SELECT * FROM risk_assessments WHERE id=?").bind(id).first())},201);}
-async function updateRisk(request,db,session,id){if(!hasRole(session,["owner","manager","carer"]))return forbidden();const p=riskInput(await readJson(request));if(p.error)return json({error:{code:"VALIDATION_ERROR",message:p.error}},400);const v=p.v,r=await db.prepare("UPDATE risk_assessments SET category=?,title=?,severity=?,likelihood=?,controls=?,actions=?,status=?,review_date=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(v.category,v.title,v.severity,v.likelihood,v.controls,v.actions,v.status,v.reviewDate,id,session.organisation_id).run();if(!r.meta.changes)return json({error:{code:"NOT_FOUND",message:"Risk assessment not found."}},404);await audit(db,session.organisation_id,session.user_id,"risk.updated","risk",id,{severity:v.severity,status:v.status});return json({risk:toRisk(await db.prepare("SELECT * FROM risk_assessments WHERE id=?").bind(id).first())});}
+async function createRisk(request,db,session,clientId){const client=await ensureClient(db,session,clientId);if(!client)return notFound('Client');const p=riskInput(await readJson(request));if(p.error)return json({error:{code:"VALIDATION_ERROR",message:p.error}},400);const v=p.v,id=crypto.randomUUID();await db.batch([db.prepare("INSERT INTO risk_assessments (id,organisation_id,branch_id,client_id,category,title,severity,likelihood,controls,actions,status,review_date,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)").bind(id,session.organisation_id,client.branch_id||null,clientId,v.category,v.title,v.severity,v.likelihood,v.controls,v.actions,v.status,v.reviewDate,session.user_id),auditStatement(db,session.organisation_id,session.user_id,"risk.created","risk",id,{clientId,title:v.title,severity:v.severity})]);return json({risk:toRisk(await db.prepare("SELECT * FROM risk_assessments WHERE id=?").bind(id).first())},201);}
+async function updateRisk(request,db,session,id){const p=riskInput(await readJson(request));if(p.error)return json({error:{code:"VALIDATION_ERROR",message:p.error}},400);const v=p.v,r=await db.prepare("UPDATE risk_assessments SET category=?,title=?,severity=?,likelihood=?,controls=?,actions=?,status=?,review_date=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(v.category,v.title,v.severity,v.likelihood,v.controls,v.actions,v.status,v.reviewDate,id,session.organisation_id).run();if(!r.meta.changes)return json({error:{code:"NOT_FOUND",message:"Risk assessment not found."}},404);await audit(db,session.organisation_id,session.user_id,"risk.updated","risk",id,{severity:v.severity,status:v.status});return json({risk:toRisk(await db.prepare("SELECT * FROM risk_assessments WHERE id=?").bind(id).first())});}
 function toRisk(r){return {id:r.id,clientId:r.client_id,category:r.category,title:r.title,severity:r.severity,likelihood:r.likelihood,controls:r.controls||"",actions:r.actions||"",status:r.status,reviewDate:r.review_date,createdAt:r.created_at,updatedAt:r.updated_at};}
 
 function documentInput(input){const v={name:clean(input.name),documentType:clean(input.documentType)||"Other",documentDate:clean(input.documentDate),reviewDate:clean(input.reviewDate),referenceUrl:clean(input.referenceUrl),notes:clean(input.notes),status:clean(input.status)||"Current"};if(!v.name)return {error:"Enter a document name."};if(v.referenceUrl){try{if(new URL(v.referenceUrl).protocol!=='https:')throw new Error('protocol');}catch{return {error:'Document links must use a valid secure https address.'};}}return {v};}
 async function listDocuments(db,session,clientId){if(!await ensureClient(db,session,clientId))return json({error:{code:"CLIENT_NOT_FOUND",message:"Client not found."}},404);const r=await db.prepare("SELECT * FROM client_documents WHERE organisation_id=? AND client_id=? ORDER BY created_at DESC").bind(session.organisation_id,clientId).all();return json({documents:r.results.map(toDocument)});}
-async function createDocument(request,db,session,clientId){if(!hasRole(session,["owner","manager","carer"]))return forbidden();const client=await ensureClient(db,session,clientId);if(!client)return notFound('Client');const p=documentInput(await readJson(request));if(p.error)return json({error:{code:"VALIDATION_ERROR",message:p.error}},400);const v=p.v,id=crypto.randomUUID();await db.batch([db.prepare("INSERT INTO client_documents (id,organisation_id,branch_id,client_id,name,document_type,document_date,review_date,reference_url,notes,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").bind(id,session.organisation_id,client.branch_id||null,clientId,v.name,v.documentType,v.documentDate||null,v.reviewDate||null,v.referenceUrl,v.notes,v.status,session.user_id),auditStatement(db,session.organisation_id,session.user_id,"document.added","document",id,{clientId,name:v.name,type:v.documentType})]);return json({document:toDocument(await db.prepare("SELECT * FROM client_documents WHERE id=?").bind(id).first())},201);}
+async function createDocument(request,db,session,clientId){const client=await ensureClient(db,session,clientId);if(!client)return notFound('Client');const p=documentInput(await readJson(request));if(p.error)return json({error:{code:"VALIDATION_ERROR",message:p.error}},400);const v=p.v,id=crypto.randomUUID();await db.batch([db.prepare("INSERT INTO client_documents (id,organisation_id,branch_id,client_id,name,document_type,document_date,review_date,reference_url,notes,status,created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)").bind(id,session.organisation_id,client.branch_id||null,clientId,v.name,v.documentType,v.documentDate||null,v.reviewDate||null,v.referenceUrl,v.notes,v.status,session.user_id),auditStatement(db,session.organisation_id,session.user_id,"document.added","document",id,{clientId,name:v.name,type:v.documentType})]);return json({document:toDocument(await db.prepare("SELECT * FROM client_documents WHERE id=?").bind(id).first())},201);}
 function detectedDocumentType(bytes){
   if(bytes.length>=5&&bytes[0]===0x25&&bytes[1]===0x50&&bytes[2]===0x44&&bytes[3]===0x46&&bytes[4]===0x2d)return {mime:'application/pdf',extension:'pdf'};
   if(bytes.length>=3&&bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff)return {mime:'image/jpeg',extension:'jpg'};
@@ -1656,7 +1868,7 @@ async function uploadDocument(request,env,session,clientId){
 async function documentFile(env,session,id){
   if(!env.CLIENT_FILES)return json({error:{code:'STORAGE_UNAVAILABLE',message:'Private document storage is not configured.'}},503);
   let row;
-  if(session.access_level==='family')row=await env.DB.prepare(`SELECT d.* FROM client_documents d JOIN family_client_access f ON f.client_id=d.client_id AND f.organisation_id=d.organisation_id WHERE d.id=? AND d.organisation_id=? AND d.status!='Archived' AND f.user_id=? AND f.status='active' AND f.can_view_documents=1 LIMIT 1`).bind(id,session.organisation_id,session.user_id).first();
+  if(session.access_level==='family')row=await env.DB.prepare(`SELECT d.* FROM client_documents d JOIN family_document_shares s ON s.document_id=d.id AND s.organisation_id=d.organisation_id AND s.status='active' JOIN family_client_access f ON f.id=s.access_id AND f.organisation_id=s.organisation_id WHERE d.id=? AND d.organisation_id=? AND d.status!='Archived' AND f.user_id=? AND f.status='active' AND f.can_view_documents=1 LIMIT 1`).bind(id,session.organisation_id,session.user_id).first();
   else {if(!await userHasPermission(env.DB,session,'documents.view'))return forbidden();row=await env.DB.prepare(`SELECT * FROM client_documents WHERE id=? AND organisation_id=? AND status!='Archived' LIMIT 1`).bind(id,session.organisation_id).first();}
   if(!row?.storage_key)return notFound('Document file');
   const object=await env.CLIENT_FILES.get(row.storage_key);if(!object)return notFound('Document file');
@@ -1665,13 +1877,22 @@ async function documentFile(env,session,id){
   await audit(env.DB,session.organisation_id,session.user_id,'document.downloaded','document',id,{familyAccess:session.access_level==='family'});
   return new Response(object.body,{headers});
 }
-async function archiveDocument(db,session,id){if(!hasRole(session,["owner","manager"]))return forbidden();const r=await db.prepare("UPDATE client_documents SET status='Archived',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).run();if(!r.meta.changes)return json({error:{code:"NOT_FOUND",message:"Document not found."}},404);await audit(db,session.organisation_id,session.user_id,"document.archived","document",id,{});return json({ok:true});}
+async function archiveDocument(db,session,id){const r=await db.prepare("UPDATE client_documents SET status='Archived',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(id,session.organisation_id).run();if(!r.meta.changes)return json({error:{code:"NOT_FOUND",message:"Document not found."}},404);await audit(db,session.organisation_id,session.user_id,"document.archived","document",id,{});return json({ok:true});}
 function toDocument(r){return {id:r.id,clientId:r.client_id,name:r.name,documentType:r.document_type,documentDate:r.document_date||"",reviewDate:r.review_date||"",referenceUrl:r.reference_url||"",storedFile:Boolean(r.storage_key),originalFileName:r.original_file_name||"",mimeType:r.mime_type||"",sizeBytes:Number(r.size_bytes)||0,notes:r.notes||"",status:r.status,createdAt:r.created_at};}
 
 async function listUsers(db, session) {
-  if (!hasRole(session, ["owner", "manager", "auditor"])) return forbidden();
-  const result = await db.prepare("SELECT u.id,u.email,u.display_name,u.role,u.access_level,u.home_branch_id,u.status,u.must_change_password,u.last_login_at,u.created_at,ucr.role_id AS custom_role_id,cr.name AS custom_role_name FROM users u LEFT JOIN user_custom_roles ucr ON ucr.user_id=u.id AND ucr.organisation_id=u.organisation_id LEFT JOIN custom_roles cr ON cr.id=ucr.role_id WHERE u.organisation_id=? ORDER BY u.display_name COLLATE NOCASE").bind(session.organisation_id).all();
+  const scoped=branchRestricted(session);
+  const result = await db.prepare(`SELECT u.id,u.email,u.display_name,u.role,u.access_level,u.home_branch_id,u.status,u.must_change_password,u.last_login_at,u.created_at,ucr.role_id AS custom_role_id,cr.name AS custom_role_name FROM users u LEFT JOIN user_custom_roles ucr ON ucr.user_id=u.id AND ucr.organisation_id=u.organisation_id LEFT JOIN custom_roles cr ON cr.id=ucr.role_id WHERE u.organisation_id=? ${scoped?'AND u.home_branch_id=?':''} ORDER BY u.display_name COLLATE NOCASE`).bind(session.organisation_id,...(scoped?[activeBranch(session)]:[])).all();
   return json({ users: result.results.map(toUser) });
+}
+
+async function customRoleAssignmentAllowed(db,session,roleId){
+  if(!roleId)return true;
+  const role=await db.prepare('SELECT id FROM custom_roles WHERE id=? AND organisation_id=? AND is_active=1').bind(roleId,session.organisation_id).first();
+  if(!role)return false;
+  const rows=await db.prepare('SELECT permission_key FROM custom_role_permissions WHERE role_id=?').bind(roleId).all();
+  for(const row of rows.results||[])if(!await mayGrantPermission(db,session,row.permission_key))return false;
+  return true;
 }
 
 async function createUser(request, env, session) {
@@ -1682,10 +1903,12 @@ async function createUser(request, env, session) {
   const name = clean(input.displayName);
   const accessLevel = clean(input.accessLevel || input.role);
   const role = legacyRole(accessLevel);
-  const branchId = clean(input.branchId) || null;
+  const branchId = branchRestricted(session)?activeBranch(session):(clean(input.branchId)||null);
   const customRoleId = clean(input.customRoleId) || null;
   const password = String(input.temporaryPassword || "");
   if (!email || !name || !allowedAccessLevels().includes(accessLevel) || !strongTemporaryPassword(password)) return json({ error: { code: "VALIDATION_ERROR", message: "Enter a name, valid email, role and temporary password of at least 12 characters with upper-case, lower-case and a number." } }, 400);
+  if(!canAssignStandardRole(session.access_level||session.role,accessLevel))return forbidden('You cannot assign that access level.');
+  if(!await customRoleAssignmentAllowed(db,session,customRoleId))return forbidden('You cannot assign that custom role.');
   const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;
   const secured = await hashPassword(password);
   const id = crypto.randomUUID();
@@ -1711,12 +1934,19 @@ async function updateUser(request, env, session, id) {
   const name = clean(input.displayName);
   const accessLevel = clean(input.accessLevel || input.role);
   const role = legacyRole(accessLevel);
-  const branchId = clean(input.branchId) || null;
+  const branchId = branchRestricted(session)?activeBranch(session):(clean(input.branchId)||null);
   const status = clean(input.status);
   const customRoleId = clean(input.customRoleId) || null;
   if (!name || !allowedAccessLevels().includes(accessLevel) || !["active", "disabled"].includes(status)) return json({ error: { code: "VALIDATION_ERROR", message: "Enter a name, valid access level and status." } }, 400);
-  const existing=await db.prepare('SELECT id,status FROM users WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();
+  const existing=await db.prepare('SELECT id,status,role,access_level,home_branch_id FROM users WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();
   if(!existing)return notFound('User');
+  if(branchRestricted(session)&&existing.home_branch_id!==activeBranch(session))return forbidden();
+  if(!mayManageUser(session,existing)||!canAssignStandardRole(session.access_level||session.role,accessLevel))return forbidden('You cannot change this account or assign that access level.');
+  if(!await customRoleAssignmentAllowed(db,session,customRoleId))return forbidden('You cannot assign that custom role.');
+  if(existing.access_level==='organisation_owner'&&(accessLevel!=='organisation_owner'||status==='disabled')){
+    const owners=await db.prepare("SELECT COUNT(*) total FROM users WHERE organisation_id=? AND access_level='organisation_owner' AND status='active'").bind(session.organisation_id).first();
+    if(Number(owners?.total||0)<=1)return json({error:{code:'LAST_OWNER_REQUIRED',message:'Add another active organisation owner before disabling or changing this account.'}},409);
+  }
   if(status==='active'&&existing.status!=='active'){const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;}
   const statements = [db.prepare("UPDATE users SET display_name=?,role=?,access_level=?,home_branch_id=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(name, role, accessLevel, branchId, status, id, session.organisation_id), db.prepare("DELETE FROM user_custom_roles WHERE user_id=? AND organisation_id=?").bind(id,session.organisation_id)];
   if(customRoleId) statements.push(db.prepare("INSERT INTO user_custom_roles(user_id,role_id,organisation_id,branch_id,assigned_by) SELECT ?,id,?,?,? FROM custom_roles WHERE id=? AND organisation_id=? AND is_active=1").bind(id,session.organisation_id,branchId,session.user_id,customRoleId,session.organisation_id));
@@ -1727,7 +1957,6 @@ async function updateUser(request, env, session, id) {
 }
 
 async function updateOrganisation(request, db, session) {
-  if (!hasRole(session, ["owner"])) return forbidden();
   const input = await readJson(request), name = clean(input.name);
   if (name.length < 2) return json({ error: { code: "VALIDATION_ERROR", message: "Enter an organisation name." } }, 400);
   await db.batch([
@@ -1738,7 +1967,6 @@ async function updateOrganisation(request, db, session) {
 }
 
 async function listAudit(db, session, url) {
-  if (!hasRole(session, ["owner", "manager", "auditor"])) return forbidden();
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 100);
   const result = await db.prepare(`SELECT a.id,a.action,a.entity_type,a.entity_id,a.detail_json,a.created_at,u.display_name AS user_name,u.email AS user_email FROM audit_log a LEFT JOIN users u ON u.id=a.user_id AND u.organisation_id=a.organisation_id WHERE a.organisation_id=? ORDER BY a.created_at DESC LIMIT ?`).bind(session.organisation_id, limit).all();
   return json({ events: result.results });
@@ -1748,15 +1976,8 @@ function developmentStatus(env, session) {
   return json({ database: { connected: Boolean(env.DB), binding: "DB" }, authentication: { mode: "D1 sessions", cookie: SESSION_COOKIE }, user: publicUser(session), organisation: { id: session.organisation_id, name: session.organisation_name }, deployment: { version: VERSION, checkedAt: new Date().toISOString() } });
 }
 
-function allowedRoles() { return ["owner", "manager", "carer", "auditor"]; }
-function allowedAccessLevels(){return ["organisation_owner","organisation_admin","branch_manager","senior_carer","carer","office_staff","auditor","family"]; }
-function legacyRole(level){return ({organisation_owner:"owner",organisation_admin:"owner",branch_manager:"manager",senior_carer:"carer",carer:"carer",office_staff:"manager",auditor:"auditor",family:"auditor"})[level]||"auditor";}
-function hasRole(session, roles) { if (session.is_platform_user) return true; return roles.includes(session.role) || roles.includes(session.access_level); }
-function requireManagementWorkspace(session) {
-  if (session.is_platform_user) return null;
-  const allowed = ['organisation_owner','organisation_admin','branch_manager','office_staff','auditor','owner','manager'];
-  return allowed.includes(session.access_level) || allowed.includes(session.role) ? null : forbidden();
-}
+function allowedAccessLevels(){return ["organisation_owner","organisation_admin","deputy_manager","branch_manager","office_staff","senior_carer","carer","auditor","family"]; }
+function legacyRole(level){return ({organisation_owner:"owner",organisation_admin:"manager",deputy_manager:"manager",branch_manager:"manager",office_staff:"manager",senior_carer:"carer",carer:"carer",auditor:"auditor",family:"auditor"})[level]||"auditor";}
 function forbidden(message = "Your account does not have permission to perform this action.") { return json({ error: { code: "FORBIDDEN", message } }, 403); }
 async function permitted(db, session, permission, action) {
   if (!await userHasPermission(db, session, permission)) return forbidden();
@@ -1862,7 +2083,7 @@ async function medicationWitness(db,session,med,input){
   if(!witness||witness.id===session.user_id||!witness.password_hash||!await verifyPassword(password,witness.password_salt,witness.password_hash,witness.password_iterations||PASSWORD_ITERATIONS))return {error:'The witness credentials are invalid or belong to the recording user.'};
   if(witness.client_branch_id&&witness.home_branch_id&&witness.client_branch_id!==witness.home_branch_id&&!['organisation_owner','organisation_admin'].includes(witness.access_level))return {error:'The witness is not authorised for this client branch.'};
   const witnessSession={...witness,user_id:witness.id,active_branch_id:witness.home_branch_id,is_platform_user:0};
-  if(!await userHasPermission(db,witnessSession,'medication.manage'))return {error:'The witness does not have permission to manage medication.'};
+  if(!await userHasPermission(db,witnessSession,'medication.administer'))return {error:'The witness does not have permission to administer medication.'};
   return {userId:witness.id,name:witness.display_name||witness.email};
 }
 async function administerMedication(request,db,session,id){
@@ -2201,6 +2422,7 @@ async function createOrganisation(request, db, session) {
   await db.batch([
     db.prepare("INSERT INTO organisations(id,name,slug,status,subscription_plan) VALUES(?,?,?,?,?)").bind(id,name,slug,"active",plan),
     db.prepare("INSERT INTO branches(id,organisation_id,name,code,status) VALUES(?,?,?,?,?)").bind(branchId,id,"Main Branch","MAIN","active"),
+    ...workforceSetupStatements(db,id,session.user_id),
     auditStatement(db,session.organisation_id,session.user_id,"platform.organisation_created","organisation",id,{name})
   ]);
   return json({organisation:{id,name,slug,status:"active",subscription_plan:plan}},201);
@@ -2293,7 +2515,6 @@ async function getOrganisationProfile(db,session){
   return json({organisation:normaliseOrganisation(org)});
 }
 async function updateOrganisationProfile(request,db,session){
-  if(!hasRole(session,["owner","organisation_owner","organisation_admin"]))return forbidden();
   const i=await readJson(request),name=clean(i.name),colour=clean(i.primaryColour)||"#1f6f5f",secondary=clean(i.secondaryColour)||"#0f172a";
   if(!name)return json({error:{code:"VALIDATION_ERROR",message:"Enter an organisation name."}},400);
   const terminology=JSON.stringify(i.terminology||{}),widgets=JSON.stringify(i.dashboardWidgets||["metrics","attention","activity","compliance"]),sidebar=JSON.stringify(i.sidebarOrder||[]);
@@ -2304,9 +2525,9 @@ async function updateOrganisationProfile(request,db,session){
   return getOrganisationProfile(db,session);
 }
 async function listBranches(db,session){const r=await db.prepare("SELECT * FROM branches WHERE organisation_id=? ORDER BY status,name COLLATE NOCASE").bind(session.organisation_id).all();return json({branches:r.results});}
-async function createBranch(request,db,session){if(!hasRole(session,["owner","manager","organisation_owner","organisation_admin"]))return forbidden();const i=await readJson(request),name=clean(i.name);if(!name)return json({error:{code:"VALIDATION_ERROR",message:"Enter a branch name."}},400);const id=crypto.randomUUID();await db.batch([db.prepare("INSERT INTO branches(id,organisation_id,name,code,address,phone,email,status) VALUES(?,?,?,?,?,?,?,?)").bind(id,session.organisation_id,name,clean(i.code),clean(i.address),clean(i.phone),clean(i.email),"active"),auditStatement(db,session.organisation_id,session.user_id,"branch.created","branch",id,{name})]);return json({branch:{id,name,status:"active"}},201);}
-async function updateBranch(request,db,session,id){if(!hasRole(session,["owner","manager","organisation_owner","organisation_admin"]))return forbidden();const i=await readJson(request),name=clean(i.name),status=clean(i.status)||"active";if(!name)return json({error:{code:"VALIDATION_ERROR",message:"Enter a branch name."}},400);if(!["active","inactive"].includes(status))return json({error:{code:"VALIDATION_ERROR",message:"Choose a valid branch status."}},400);const existing=await db.prepare("SELECT id,name,code,address,phone,email,status FROM branches WHERE id=? AND organisation_id=? LIMIT 1").bind(id,session.organisation_id).first();if(!existing)return json({error:{code:"NOT_FOUND",message:"Branch not found."}},404);await db.batch([db.prepare("UPDATE branches SET name=?,code=?,address=?,phone=?,email=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(name,clean(i.code),clean(i.address),clean(i.phone),clean(i.email),status,id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,"branch.updated","branch",id,{before:existing,after:{name,code:clean(i.code),address:clean(i.address),phone:clean(i.phone),email:clean(i.email),status}})]);return json({ok:true});}
-function familyAccessView(row){return {id:row.id,userId:row.user_id,clientId:row.client_id,displayName:row.display_name,email:row.email,userStatus:row.user_status||'active',clientName:[row.preferred_name||row.first_name,row.last_name].filter(Boolean).join(' '),status:row.status,canViewProfile:Boolean(row.can_view_profile),canViewVisits:Boolean(row.can_view_visits),canViewCareUpdates:Boolean(row.can_view_care_updates),canViewDocuments:Boolean(row.can_view_documents),canViewMedication:Boolean(row.can_view_medication),consentBasis:row.consent_basis||'',consentRecordedAt:row.consent_recorded_at||null,createdAt:row.created_at};}
+async function createBranch(request,db,session){const i=await readJson(request),name=clean(i.name);if(!name)return json({error:{code:"VALIDATION_ERROR",message:"Enter a branch name."}},400);const id=crypto.randomUUID();await db.batch([db.prepare("INSERT INTO branches(id,organisation_id,name,code,address,phone,email,status) VALUES(?,?,?,?,?,?,?,?)").bind(id,session.organisation_id,name,clean(i.code),clean(i.address),clean(i.phone),clean(i.email),"active"),auditStatement(db,session.organisation_id,session.user_id,"branch.created","branch",id,{name})]);return json({branch:{id,name,status:"active"}},201);}
+async function updateBranch(request,db,session,id){const i=await readJson(request),name=clean(i.name),status=clean(i.status)||"active";if(!name)return json({error:{code:"VALIDATION_ERROR",message:"Enter a branch name."}},400);if(!["active","inactive"].includes(status))return json({error:{code:"VALIDATION_ERROR",message:"Choose a valid branch status."}},400);const existing=await db.prepare("SELECT id,name,code,address,phone,email,status FROM branches WHERE id=? AND organisation_id=? LIMIT 1").bind(id,session.organisation_id).first();if(!existing)return json({error:{code:"NOT_FOUND",message:"Branch not found."}},404);await db.batch([db.prepare("UPDATE branches SET name=?,code=?,address=?,phone=?,email=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(name,clean(i.code),clean(i.address),clean(i.phone),clean(i.email),status,id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,"branch.updated","branch",id,{before:existing,after:{name,code:clean(i.code),address:clean(i.address),phone:clean(i.phone),email:clean(i.email),status}})]);return json({ok:true});}
+function familyAccessView(row){return {id:row.id,userId:row.user_id,clientId:row.client_id,displayName:row.display_name,email:row.email,userStatus:row.user_status||'active',clientName:[row.preferred_name||row.first_name,row.last_name].filter(Boolean).join(' '),status:row.status,relationship:row.relationship_label||'',canViewProfile:Boolean(row.can_view_profile),canViewVisits:Boolean(row.can_view_visits),canViewCareUpdates:Boolean(row.can_view_care_updates),canViewDocuments:Boolean(row.can_view_documents),canViewMedication:Boolean(row.can_view_medication),canViewCarePlan:Boolean(row.can_view_care_plan),canMessageTeam:Boolean(row.can_message_team),consentBasis:row.consent_basis||'',consentRecordedAt:row.consent_recorded_at||null,accessReviewDate:row.access_review_date||null,reviewState:familyAccessReviewState(row.access_review_date),revokedAt:row.revoked_at||null,createdAt:row.created_at};}
 async function listFamilyAccess(db,session){
   const branch=activeBranch(session),restricted=branchRestricted(session);
   const r=await db.prepare(`SELECT f.*,u.display_name,u.email,u.status user_status,c.first_name,c.last_name,c.preferred_name FROM family_client_access f JOIN users u ON u.id=f.user_id AND u.organisation_id=f.organisation_id JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.organisation_id=? ${restricted?'AND c.branch_id=?':''} ORDER BY CASE f.status WHEN 'active' THEN 0 ELSE 1 END,u.display_name,c.last_name`).bind(session.organisation_id,...(restricted?[branch]:[])).all();
@@ -2320,8 +2541,8 @@ async function listFamilyAccounts(db,session){
 function strongTemporaryPassword(password){return password.length>=12&&/[A-Z]/.test(password)&&/[a-z]/.test(password)&&/[0-9]/.test(password);}
 async function createFamilyAccount(request,env,session){
   const db=env.DB;
-  const input=await readJson(request),email=clean(input.email).toLowerCase(),name=clean(input.displayName),password=String(input.temporaryPassword||''),clientId=clean(input.clientId),flags=normaliseFamilyAccess(input),consentBasis=clean(input.consentBasis).slice(0,1000);
-  if(!name||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!strongTemporaryPassword(password)||consentBasis.length<8)return json({error:{code:'VALIDATION_ERROR',message:'Enter a name, valid email, strong temporary password and a clear authority or consent basis.'}},400);
+  const input=await readJson(request),email=clean(input.email).toLowerCase(),name=clean(input.displayName),password=String(input.temporaryPassword||''),clientId=clean(input.clientId),flags=normaliseFamilyPortalAccess(input),consentBasis=clean(input.consentBasis).slice(0,1000);
+  if(!name||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!strongTemporaryPassword(password)||consentBasis.length<8||flags.relationship.length<2||!/^\d{4}-\d{2}-\d{2}$/.test(flags.accessReviewDate))return json({error:{code:'VALIDATION_ERROR',message:'Enter a name, valid email, relationship, access review date, strong temporary password and a clear authority or consent basis.'}},400);
   const restricted=branchRestricted(session),branch=activeBranch(session);
   const client=await db.prepare(`SELECT id,branch_id FROM clients WHERE id=? AND organisation_id=? ${restricted?'AND branch_id=?':''} AND archived_at IS NULL`).bind(clientId,session.organisation_id,...(restricted?[branch]:[])).first();
   if(!client)return json({error:{code:'VALIDATION_ERROR',message:'Choose an active client from this organisation or branch.'}},400);
@@ -2330,7 +2551,7 @@ async function createFamilyAccount(request,env,session){
   try{
     await db.batch([
       db.prepare("INSERT INTO users (id,organisation_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password) VALUES (?,?,?,?,?,'family',?,?,?,?, 'active',1)").bind(userId,session.organisation_id,email,name,role,client.branch_id||null,secured.hash,secured.salt,PASSWORD_ITERATIONS),
-      db.prepare("INSERT INTO family_client_access(id,organisation_id,user_id,client_id,can_view_profile,can_view_visits,can_view_care_updates,can_view_documents,can_view_medication,status,consent_basis,consent_recorded_at,consent_recorded_by) VALUES(?,?,?,?,?,?,?,?,?,'active',?,CURRENT_TIMESTAMP,?)").bind(accessId,session.organisation_id,userId,client.id,flags.canViewProfile?1:0,flags.canViewVisits?1:0,flags.canViewCareUpdates?1:0,flags.canViewDocuments?1:0,flags.canViewMedication?1:0,consentBasis,session.user_id),
+      db.prepare("INSERT INTO family_client_access(id,organisation_id,user_id,client_id,can_view_profile,can_view_visits,can_view_care_updates,can_view_documents,can_view_medication,can_view_care_plan,can_message_team,relationship_label,access_review_date,status,consent_basis,consent_recorded_at,consent_recorded_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,CURRENT_TIMESTAMP,?,CURRENT_TIMESTAMP)").bind(accessId,session.organisation_id,userId,client.id,flags.canViewProfile?1:0,flags.canViewVisits?1:0,flags.canViewCareUpdates?1:0,flags.canViewDocuments?1:0,flags.canViewMedication?1:0,flags.canViewCarePlan?1:0,flags.canMessageTeam?1:0,flags.relationship,flags.accessReviewDate,consentBasis,session.user_id),
       auditStatement(db,session.organisation_id,session.user_id,'family.account_created','user',userId,{email,clientId:client.id}),
       auditStatement(db,session.organisation_id,session.user_id,'family.access_granted','family_client_access',accessId,{userId,clientId:client.id,...flags,consentBasisRecorded:true})
     ]);
@@ -2355,37 +2576,172 @@ async function updateFamilyAccount(request,env,session,id){
   return json({ok:true,emailDelivery});
 }
 async function saveFamilyAccess(request,db,session){
-  const i=await readJson(request),userId=clean(i.userId),clientId=clean(i.clientId),flags=normaliseFamilyAccess(i),consentBasis=clean(i.consentBasis).slice(0,1000);
-  if(consentBasis.length<8)return json({error:{code:'VALIDATION_ERROR',message:'Record the authority or consent basis before granting family access.'}},400);
+  const i=await readJson(request),userId=clean(i.userId),clientId=clean(i.clientId),flags=normaliseFamilyPortalAccess(i),consentBasis=clean(i.consentBasis).slice(0,1000);
+  if(consentBasis.length<8||flags.relationship.length<2||!/^\d{4}-\d{2}-\d{2}$/.test(flags.accessReviewDate))return json({error:{code:'VALIDATION_ERROR',message:'Record the family relationship, review date and authority or consent basis before granting access.'}},400);
   const restricted=branchRestricted(session),branch=activeBranch(session);
   const user=await db.prepare(`SELECT u.id FROM users u WHERE u.id=? AND u.organisation_id=? AND u.access_level='family' AND u.status='active' ${restricted?'AND (u.home_branch_id=? OR EXISTS (SELECT 1 FROM family_client_access f JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.user_id=u.id AND f.organisation_id=u.organisation_id AND c.branch_id=?))':''}`).bind(userId,session.organisation_id,...(restricted?[branch,branch]:[])).first(),client=await db.prepare(`SELECT id FROM clients WHERE id=? AND organisation_id=? ${restricted?'AND branch_id=?':''} AND archived_at IS NULL`).bind(clientId,session.organisation_id,...(restricted?[branch]:[])).first();
   if(!user||!client)return json({error:{code:"VALIDATION_ERROR",message:"Choose an active family user and client from this organisation or branch."}},400);
   const existing=await db.prepare(`SELECT id FROM family_client_access WHERE organisation_id=? AND user_id=? AND client_id=?`).bind(session.organisation_id,userId,clientId).first(),id=existing?.id||crypto.randomUUID();
   await db.batch([
-    db.prepare(`INSERT INTO family_client_access(id,organisation_id,user_id,client_id,can_view_profile,can_view_visits,can_view_care_updates,can_view_documents,can_view_medication,status,consent_basis,consent_recorded_at,consent_recorded_by) VALUES(?,?,?,?,?,?,?,?,?,'active',?,CURRENT_TIMESTAMP,?) ON CONFLICT(user_id,client_id) DO UPDATE SET can_view_profile=excluded.can_view_profile,can_view_visits=excluded.can_view_visits,can_view_care_updates=excluded.can_view_care_updates,can_view_documents=excluded.can_view_documents,can_view_medication=excluded.can_view_medication,status='active',consent_basis=excluded.consent_basis,consent_recorded_at=CURRENT_TIMESTAMP,consent_recorded_by=excluded.consent_recorded_by`).bind(id,session.organisation_id,userId,clientId,flags.canViewProfile?1:0,flags.canViewVisits?1:0,flags.canViewCareUpdates?1:0,flags.canViewDocuments?1:0,flags.canViewMedication?1:0,consentBasis,session.user_id),
+    db.prepare(`INSERT INTO family_client_access(id,organisation_id,user_id,client_id,can_view_profile,can_view_visits,can_view_care_updates,can_view_documents,can_view_medication,can_view_care_plan,can_message_team,relationship_label,access_review_date,status,consent_basis,consent_recorded_at,consent_recorded_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,CURRENT_TIMESTAMP,?,CURRENT_TIMESTAMP) ON CONFLICT(user_id,client_id) DO UPDATE SET can_view_profile=excluded.can_view_profile,can_view_visits=excluded.can_view_visits,can_view_care_updates=excluded.can_view_care_updates,can_view_documents=excluded.can_view_documents,can_view_medication=excluded.can_view_medication,can_view_care_plan=excluded.can_view_care_plan,can_message_team=excluded.can_message_team,relationship_label=excluded.relationship_label,access_review_date=excluded.access_review_date,status='active',consent_basis=excluded.consent_basis,consent_recorded_at=CURRENT_TIMESTAMP,consent_recorded_by=excluded.consent_recorded_by,revoked_at=NULL,revoked_by=NULL,revoke_reason='',updated_at=CURRENT_TIMESTAMP`).bind(id,session.organisation_id,userId,clientId,flags.canViewProfile?1:0,flags.canViewVisits?1:0,flags.canViewCareUpdates?1:0,flags.canViewDocuments?1:0,flags.canViewMedication?1:0,flags.canViewCarePlan?1:0,flags.canMessageTeam?1:0,flags.relationship,flags.accessReviewDate,consentBasis,session.user_id),
     auditStatement(db,session.organisation_id,session.user_id,existing?'family.access_updated':'family.access_granted','family_client_access',id,{userId,clientId,...flags,consentBasisRecorded:true})
   ]);
   return json({ok:true,id,consentBasis,flags},existing?200:201);
 }
-async function revokeFamilyAccess(db,session,id){
+async function revokeFamilyAccess(request,db,session,id){
+  const input=await readJson(request),reason=clean(input.reason).slice(0,1000);
+  if(reason.length<8)return json({error:{code:'REASON_REQUIRED',message:'Record why this family access is being revoked.'}},400);
   const restricted=branchRestricted(session),branch=activeBranch(session);
   const row=await db.prepare(`SELECT f.id,f.user_id,f.client_id FROM family_client_access f JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.id=? AND f.organisation_id=? ${restricted?'AND c.branch_id=?':''}`).bind(id,session.organisation_id,...(restricted?[branch]:[])).first();if(!row)return notFound('Family access');
-  await db.batch([db.prepare(`UPDATE family_client_access SET status='revoked' WHERE id=? AND organisation_id=?`).bind(id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'family.access_revoked','family_client_access',id,{userId:row.user_id,clientId:row.client_id})]);return json({ok:true});
+  await db.batch([db.prepare(`UPDATE family_client_access SET status='revoked',revoked_at=CURRENT_TIMESTAMP,revoked_by=?,revoke_reason=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(session.user_id,reason,id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'family.access_revoked','family_client_access',id,{userId:row.user_id,clientId:row.client_id,reason})]);return json({ok:true});
 }
+function familyPreferenceView(row={}){return {inAppNotifications:row.in_app_notifications===undefined?true:Boolean(row.in_app_notifications),emailNotifications:row.email_notifications===undefined?true:Boolean(row.email_notifications),visitNotifications:row.visit_notifications===undefined?true:Boolean(row.visit_notifications),careUpdateNotifications:row.care_update_notifications===undefined?true:Boolean(row.care_update_notifications),documentNotifications:row.document_notifications===undefined?true:Boolean(row.document_notifications),messageNotifications:row.message_notifications===undefined?true:Boolean(row.message_notifications),digestFrequency:row.digest_frequency||'immediate'};}
+function familyNotificationStatement(db,organisationId,userId,clientId,type,title,body,relatedType,relatedId){return db.prepare(`INSERT INTO family_notifications(id,organisation_id,user_id,client_id,notification_type,title,body,related_type,related_id) SELECT ?,?,?,?,?,?,?,?,? WHERE COALESCE((SELECT CASE ? WHEN 'care_update' THEN care_update_notifications WHEN 'document' THEN document_notifications WHEN 'message' THEN message_notifications WHEN 'visit' THEN visit_notifications ELSE in_app_notifications END FROM family_portal_preferences WHERE organisation_id=? AND user_id=?),1)=1 AND COALESCE((SELECT in_app_notifications FROM family_portal_preferences WHERE organisation_id=? AND user_id=?),1)=1`).bind(crypto.randomUUID(),organisationId,userId,clientId||null,type,title,body||'',relatedType||null,relatedId||null,type,organisationId,userId,organisationId,userId);}
+async function requireFamilyManager(db,session){return session.access_level!=='family'&&await userHasPermission(db,session,'family_portal.manage');}
+
+async function getFamilyPreferences(db,session){
+  if(session.access_level!=='family')return forbidden();
+  const row=await db.prepare('SELECT * FROM family_portal_preferences WHERE organisation_id=? AND user_id=?').bind(session.organisation_id,session.user_id).first();
+  return json({preferences:familyPreferenceView(row||{})});
+}
+async function updateFamilyPreferences(request,db,session){
+  if(session.access_level!=='family')return forbidden();
+  const value=normaliseFamilyPreferences(await readJson(request));
+  await db.batch([
+    db.prepare(`INSERT INTO family_portal_preferences(user_id,organisation_id,in_app_notifications,email_notifications,visit_notifications,care_update_notifications,document_notifications,message_notifications,digest_frequency) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET in_app_notifications=excluded.in_app_notifications,email_notifications=excluded.email_notifications,visit_notifications=excluded.visit_notifications,care_update_notifications=excluded.care_update_notifications,document_notifications=excluded.document_notifications,message_notifications=excluded.message_notifications,digest_frequency=excluded.digest_frequency,updated_at=CURRENT_TIMESTAMP`).bind(session.user_id,session.organisation_id,value.inAppNotifications?1:0,value.emailNotifications?1:0,value.visitNotifications?1:0,value.careUpdateNotifications?1:0,value.documentNotifications?1:0,value.messageNotifications?1:0,value.digestFrequency),
+    auditStatement(db,session.organisation_id,session.user_id,'family.preferences_updated','user',session.user_id,{digestFrequency:value.digestFrequency})
+  ]);
+  return json({ok:true,preferences:value});
+}
+async function readFamilyNotification(db,session,id){
+  if(session.access_level!=='family')return forbidden();
+  const result=await db.prepare('UPDATE family_notifications SET read_at=COALESCE(read_at,CURRENT_TIMESTAMP) WHERE id=? AND organisation_id=? AND user_id=?').bind(id,session.organisation_id,session.user_id).run();
+  if(!result.meta.changes)return notFound('Notification');
+  return json({ok:true});
+}
+async function readAllFamilyNotifications(db,session){
+  if(session.access_level!=='family')return forbidden();
+  await db.prepare('UPDATE family_notifications SET read_at=COALESCE(read_at,CURRENT_TIMESTAMP) WHERE organisation_id=? AND user_id=?').bind(session.organisation_id,session.user_id).run();
+  return json({ok:true});
+}
+
+async function listFamilyMessages(db,session){
+  const family=session.access_level==='family',branch=activeBranch(session),restricted=branchRestricted(session);
+  if(!family&&!await requireFamilyManager(db,session))return forbidden();
+  const familyWhere=`t.organisation_id=? AND t.family_user_id=? AND f.status='active'`;
+  const managerWhere=`t.organisation_id=? ${restricted?'AND t.branch_id=?':''}`;
+  const params=family?[session.organisation_id,session.user_id]:[session.organisation_id,...(restricted?[branch]:[])];
+  const where=family?familyWhere:managerWhere;
+  const threads=await db.prepare(`SELECT t.*,c.first_name,c.last_name,c.preferred_name,u.display_name family_name,u.email family_email,(SELECT COUNT(*) FROM family_messages um WHERE um.thread_id=t.id AND um.organisation_id=t.organisation_id AND um.sender_role='family' AND um.read_by_team_at IS NULL) unread_team,(SELECT COUNT(*) FROM family_messages uf WHERE uf.thread_id=t.id AND uf.organisation_id=t.organisation_id AND uf.sender_role='care_team' AND uf.read_by_family_at IS NULL) unread_family FROM family_message_threads t JOIN clients c ON c.id=t.client_id AND c.organisation_id=t.organisation_id JOIN users u ON u.id=t.family_user_id AND u.organisation_id=t.organisation_id ${family?'JOIN family_client_access f ON f.id=t.access_id AND f.organisation_id=t.organisation_id':''} WHERE ${where} ORDER BY datetime(t.last_message_at) DESC LIMIT 100`).bind(...params).all();
+  const messages=await db.prepare(`SELECT m.*,u.display_name sender_name FROM family_messages m JOIN users u ON u.id=m.sender_user_id AND u.organisation_id=m.organisation_id JOIN family_message_threads t ON t.id=m.thread_id AND t.organisation_id=m.organisation_id ${family?'JOIN family_client_access f ON f.id=t.access_id AND f.organisation_id=t.organisation_id':''} WHERE ${where} ORDER BY datetime(m.created_at) LIMIT 500`).bind(...params).all();
+  return json({threads:threads.results||[],messages:messages.results||[]});
+}
+async function saveFamilyMessage(request,db,session){
+  const input=await readJson(request),threadId=clean(input.threadId),validated=validateFamilyMessage(input);
+  if(validated.error)return json({error:{code:'VALIDATION_ERROR',message:validated.error}},400);
+  const value=validated.value,family=session.access_level==='family',manager=!family&&await requireFamilyManager(db,session);
+  if(!family&&!manager)return forbidden();
+  if(threadId){
+    const branch=activeBranch(session),restricted=branchRestricted(session);
+    const thread=await db.prepare(`SELECT t.*,f.status access_status,f.can_message_team FROM family_message_threads t JOIN family_client_access f ON f.id=t.access_id AND f.organisation_id=t.organisation_id WHERE t.id=? AND t.organisation_id=? ${family?"AND t.family_user_id=? AND f.status='active' AND f.can_message_team=1":restricted?'AND t.branch_id=?':''}`).bind(threadId,session.organisation_id,...(family?[session.user_id]:restricted?[branch]:[])).first();
+    if(!thread)return notFound('Conversation');
+    if(thread.status==='closed')return json({error:{code:'THREAD_CLOSED',message:'This conversation is closed. Start a new message if you still need help.'}},409);
+    const id=crypto.randomUUID(),senderRole=family?'family':'care_team',statements=[
+      db.prepare(`INSERT INTO family_messages(id,organisation_id,thread_id,sender_user_id,sender_role,body,read_by_family_at,read_by_team_at) VALUES(?,?,?,?,?,?,${family?'CURRENT_TIMESTAMP':'NULL'},${family?'NULL':'CURRENT_TIMESTAMP'})`).bind(id,session.organisation_id,threadId,session.user_id,senderRole,value.body),
+      db.prepare('UPDATE family_message_threads SET last_message_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?').bind(threadId,session.organisation_id),
+      auditStatement(db,session.organisation_id,session.user_id,'family.message_sent','family_message',id,{threadId,senderRole})
+    ];
+    if(!family)statements.push(familyNotificationStatement(db,session.organisation_id,thread.family_user_id,thread.client_id,'message','New reply from your care team',value.body.slice(0,180),'thread',threadId));
+    await db.batch(statements);return json({ok:true,id},201);
+  }
+  if(!family)return json({error:{code:'VALIDATION_ERROR',message:'Select an existing family conversation to reply.'}},400);
+  const clientId=clean(input.clientId),link=await db.prepare(`SELECT f.id,f.client_id,c.branch_id FROM family_client_access f JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.organisation_id=? AND f.user_id=? AND f.client_id=? AND f.status='active' AND f.can_message_team=1 AND c.archived_at IS NULL`).bind(session.organisation_id,session.user_id,clientId).first();
+  if(!link)return forbidden('Messaging is not enabled for this family link.');
+  const newThreadId=crypto.randomUUID(),messageId=crypto.randomUUID();
+  await db.batch([
+    db.prepare(`INSERT INTO family_message_threads(id,organisation_id,branch_id,client_id,access_id,family_user_id,subject,category,priority,created_by) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(newThreadId,session.organisation_id,link.branch_id||null,clientId,link.id,session.user_id,value.subject,value.category,value.priority,session.user_id),
+    db.prepare(`INSERT INTO family_messages(id,organisation_id,thread_id,sender_user_id,sender_role,body,read_by_family_at) VALUES(?,?,?,?,? ,?,CURRENT_TIMESTAMP)`).bind(messageId,session.organisation_id,newThreadId,session.user_id,'family',value.body),
+    auditStatement(db,session.organisation_id,session.user_id,'family.conversation_started','family_message_thread',newThreadId,{clientId,category:value.category,priority:value.priority})
+  ]);
+  return json({ok:true,id:newThreadId},201);
+}
+async function updateFamilyMessageThread(request,db,session,id){
+  const input=await readJson(request),family=session.access_level==='family',manager=!family&&await requireFamilyManager(db,session),branch=activeBranch(session),restricted=branchRestricted(session);
+  if(!family&&!manager)return forbidden();
+  const thread=await db.prepare(`SELECT t.id FROM family_message_threads t JOIN family_client_access f ON f.id=t.access_id AND f.organisation_id=t.organisation_id WHERE t.id=? AND t.organisation_id=? ${family?"AND t.family_user_id=? AND f.status='active'":restricted?'AND t.branch_id=?':''}`).bind(id,session.organisation_id,...(family?[session.user_id]:restricted?[branch]:[])).first();
+  if(!thread)return notFound('Conversation');
+  const status=clean(input.status);
+  const statements=[];
+  if(family)statements.push(db.prepare(`UPDATE family_messages SET read_by_family_at=COALESCE(read_by_family_at,CURRENT_TIMESTAMP) WHERE organisation_id=? AND thread_id=? AND sender_role='care_team'`).bind(session.organisation_id,id));
+  else {
+    statements.push(db.prepare(`UPDATE family_messages SET read_by_team_at=COALESCE(read_by_team_at,CURRENT_TIMESTAMP) WHERE organisation_id=? AND thread_id=? AND sender_role='family'`).bind(session.organisation_id,id));
+    if(status){if(!['open','closed'].includes(status))return json({error:{code:'VALIDATION_ERROR',message:'Choose open or closed.'}},400);statements.push(db.prepare('UPDATE family_message_threads SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?').bind(status,id,session.organisation_id));}
+  }
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,'family.conversation_updated','family_message_thread',id,{status:status||null,reader:family?'family':'care_team'}));
+  await db.batch(statements);return json({ok:true});
+}
+
+async function familyManagementHub(db,session){
+  const branch=activeBranch(session),restricted=branchRestricted(session),params=[session.organisation_id,...(restricted?[branch]:[])];
+  const [updates,documents,shares,threads]=await Promise.all([
+    db.prepare(`SELECT u.*,c.first_name,c.last_name,c.preferred_name,p.display_name published_by_name FROM family_shared_updates u JOIN clients c ON c.id=u.client_id AND c.organisation_id=u.organisation_id LEFT JOIN users p ON p.id=u.published_by AND p.organisation_id=u.organisation_id WHERE u.organisation_id=? ${restricted?'AND u.branch_id=?':''} ORDER BY datetime(u.published_at) DESC LIMIT 100`).bind(...params).all(),
+    db.prepare(`SELECT d.id,d.client_id,d.name,d.document_type,d.document_date,d.status,c.first_name,c.last_name,c.preferred_name FROM client_documents d JOIN clients c ON c.id=d.client_id AND c.organisation_id=d.organisation_id WHERE d.organisation_id=? AND d.status!='Archived' ${restricted?'AND d.branch_id=?':''} ORDER BY COALESCE(d.document_date,d.created_at) DESC LIMIT 200`).bind(...params).all(),
+    db.prepare(`SELECT s.*,f.user_id,f.client_id,u.display_name family_name,d.name document_name FROM family_document_shares s JOIN family_client_access f ON f.id=s.access_id AND f.organisation_id=s.organisation_id JOIN users u ON u.id=f.user_id AND u.organisation_id=f.organisation_id JOIN client_documents d ON d.id=s.document_id AND d.organisation_id=s.organisation_id JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE s.organisation_id=? ${restricted?'AND c.branch_id=?':''} ORDER BY datetime(s.shared_at) DESC`).bind(...params).all(),
+    db.prepare(`SELECT t.*,c.first_name,c.last_name,c.preferred_name,u.display_name family_name,u.email family_email,(SELECT COUNT(*) FROM family_messages m WHERE m.thread_id=t.id AND m.sender_role='family' AND m.read_by_team_at IS NULL) unread_team FROM family_message_threads t JOIN clients c ON c.id=t.client_id AND c.organisation_id=t.organisation_id JOIN users u ON u.id=t.family_user_id AND u.organisation_id=t.organisation_id WHERE t.organisation_id=? ${restricted?'AND t.branch_id=?':''} ORDER BY datetime(t.last_message_at) DESC LIMIT 100`).bind(...params).all()
+  ]);
+  return json({updates:updates.results||[],documents:documents.results||[],documentShares:shares.results||[],threads:threads.results||[],summary:{publishedUpdates:(updates.results||[]).filter(row=>row.status==='published').length,sharedDocuments:(shares.results||[]).filter(row=>row.status==='active').length,openThreads:(threads.results||[]).filter(row=>row.status==='open').length,unreadMessages:(threads.results||[]).reduce((sum,row)=>sum+Number(row.unread_team||0),0)}});
+}
+async function publishFamilyUpdate(request,db,session){
+  const input=await readJson(request),clientId=clean(input.clientId),visitId=clean(input.visitId)||null,validated=validateFamilyUpdate(input);
+  if(validated.error)return json({error:{code:'VALIDATION_ERROR',message:validated.error}},400);
+  const client=await ensureClient(db,session,clientId);if(!client)return notFound('Client');
+  if(visitId){const visit=await db.prepare('SELECT id FROM care_visits WHERE id=? AND client_id=? AND organisation_id=?').bind(visitId,clientId,session.organisation_id).first();if(!visit)return json({error:{code:'VALIDATION_ERROR',message:'The selected visit does not belong to this client.'}},400);}
+  const value=validated.value,id=crypto.randomUUID(),recipients=await db.prepare(`SELECT user_id FROM family_client_access WHERE organisation_id=? AND client_id=? AND status='active' AND can_view_care_updates=1 LIMIT 75`).bind(session.organisation_id,clientId).all();
+  const statements=[db.prepare(`INSERT INTO family_shared_updates(id,organisation_id,branch_id,client_id,visit_id,title,summary,category,mood,published_by) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,client.branch_id||null,clientId,visitId,value.title,value.summary,value.category,value.mood,session.user_id),auditStatement(db,session.organisation_id,session.user_id,'family.update_published','family_shared_update',id,{clientId,visitId,category:value.category})];
+  for(const recipient of recipients.results||[])statements.push(familyNotificationStatement(db,session.organisation_id,recipient.user_id,clientId,'care_update',value.title,value.summary.slice(0,180),'update',id));
+  await db.batch(statements);return json({ok:true,id,notified:(recipients.results||[]).length},201);
+}
+async function withdrawFamilyUpdate(db,session,id){
+  const branch=activeBranch(session),restricted=branchRestricted(session),row=await db.prepare(`SELECT id,client_id FROM family_shared_updates WHERE id=? AND organisation_id=? ${restricted?'AND branch_id=?':''}`).bind(id,session.organisation_id,...(restricted?[branch]:[])).first();if(!row)return notFound('Family update');
+  await db.batch([db.prepare(`UPDATE family_shared_updates SET status='withdrawn',withdrawn_by=?,withdrawn_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(session.user_id,id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'family.update_withdrawn','family_shared_update',id,{clientId:row.client_id})]);return json({ok:true});
+}
+async function shareFamilyDocument(request,db,session,documentId){
+  const input=await readJson(request),accessId=clean(input.accessId),branch=activeBranch(session),restricted=branchRestricted(session);
+  const row=await db.prepare(`SELECT f.id access_id,f.user_id,f.client_id,d.id document_id,d.name,c.branch_id FROM family_client_access f JOIN client_documents d ON d.client_id=f.client_id AND d.organisation_id=f.organisation_id JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.id=? AND d.id=? AND f.organisation_id=? AND f.status='active' AND f.can_view_documents=1 AND d.status!='Archived' ${restricted?'AND c.branch_id=?':''}`).bind(accessId,documentId,session.organisation_id,...(restricted?[branch]:[])).first();
+  if(!row)return json({error:{code:'VALIDATION_ERROR',message:'Choose an active family link with document access for this client.'}},400);
+  const existing=await db.prepare('SELECT id FROM family_document_shares WHERE organisation_id=? AND access_id=? AND document_id=?').bind(session.organisation_id,accessId,documentId).first(),id=existing?.id||crypto.randomUUID();
+  await db.batch([
+    db.prepare(`INSERT INTO family_document_shares(id,organisation_id,access_id,document_id,status,shared_by) VALUES(?,?,?,?,'active',?) ON CONFLICT(access_id,document_id) DO UPDATE SET status='active',shared_by=excluded.shared_by,shared_at=CURRENT_TIMESTAMP,revoked_by=NULL,revoked_at=NULL,updated_at=CURRENT_TIMESTAMP`).bind(id,session.organisation_id,accessId,documentId,session.user_id),
+    familyNotificationStatement(db,session.organisation_id,row.user_id,row.client_id,'document',`Document shared: ${row.name}`,'A new document is available in your family portal.','document',documentId),
+    auditStatement(db,session.organisation_id,session.user_id,'family.document_shared','family_document_share',id,{accessId,documentId})
+  ]);
+  return json({ok:true,id},existing?200:201);
+}
+async function unshareFamilyDocument(request,db,session,documentId){
+  const input=await readJson(request),accessId=clean(input.accessId),branch=activeBranch(session),restricted=branchRestricted(session);
+  const row=await db.prepare(`SELECT s.id FROM family_document_shares s JOIN family_client_access f ON f.id=s.access_id AND f.organisation_id=s.organisation_id JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE s.organisation_id=? AND s.document_id=? AND s.access_id=? ${restricted?'AND c.branch_id=?':''}`).bind(session.organisation_id,documentId,accessId,...(restricted?[branch]:[])).first();if(!row)return notFound('Document share');
+  await db.batch([db.prepare(`UPDATE family_document_shares SET status='revoked',revoked_by=?,revoked_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(session.user_id,row.id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'family.document_unshared','family_document_share',row.id,{accessId,documentId})]);return json({ok:true});
+}
+
 async function familyPortal(db,session){
   if(session.access_level!=='family')return forbidden();
   const org=session.organisation_id,user=session.user_id;
-  const [links,visits,updates,documents,medications]=await Promise.all([
+  const [links,visits,updates,documents,medications,carePlans,notifications,preferences,messages]=await Promise.all([
     db.prepare(`SELECT f.*,c.first_name,c.last_name,c.preferred_name,c.town,c.care_package,c.next_review,c.status client_status FROM family_client_access f JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.organisation_id=? AND f.user_id=? AND f.status='active' AND c.archived_at IS NULL ORDER BY c.last_name,c.first_name`).bind(org,user).all(),
     db.prepare(`SELECT v.id,v.client_id,v.visit_type,v.scheduled_start,v.scheduled_end,v.status,v.actual_start,v.actual_end,c.first_name,c.last_name,c.preferred_name,s.first_name staff_first_name,s.last_name staff_last_name,s.preferred_name staff_preferred_name FROM family_client_access f JOIN care_visits v ON v.client_id=f.client_id AND v.organisation_id=f.organisation_id JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN staff s ON s.id=v.staff_id AND s.organisation_id=v.organisation_id WHERE f.organisation_id=? AND f.user_id=? AND f.status='active' AND f.can_view_visits=1 AND COALESCE(v.rota_status,'published')='published' AND v.status!='cancelled' AND datetime(v.scheduled_start)>=datetime('now','-14 days') ORDER BY datetime(v.scheduled_start) DESC LIMIT 100`).bind(org,user).all(),
-    db.prepare(`SELECT r.id,r.client_id,r.visit_id,r.mood,r.wellbeing,r.care_notes,r.fluid_intake_ml,r.nutrition,r.toileting,r.completed_at,v.visit_type,c.first_name,c.last_name,c.preferred_name,s.first_name staff_first_name,s.last_name staff_last_name,s.preferred_name staff_preferred_name FROM family_client_access f JOIN visit_care_records r ON r.client_id=f.client_id AND r.organisation_id=f.organisation_id JOIN care_visits v ON v.id=r.visit_id AND v.organisation_id=r.organisation_id JOIN clients c ON c.id=r.client_id AND c.organisation_id=r.organisation_id LEFT JOIN staff s ON s.id=r.staff_id AND s.organisation_id=r.organisation_id WHERE f.organisation_id=? AND f.user_id=? AND f.status='active' AND f.can_view_care_updates=1 ORDER BY datetime(r.completed_at) DESC LIMIT 60`).bind(org,user).all(),
-    db.prepare(`SELECT d.id,d.client_id,d.name,d.document_type,d.document_date,d.review_date,d.reference_url,d.notes,d.status FROM family_client_access f JOIN client_documents d ON d.client_id=f.client_id AND d.organisation_id=f.organisation_id WHERE f.organisation_id=? AND f.user_id=? AND f.status='active' AND f.can_view_documents=1 AND d.status!='Archived' ORDER BY COALESCE(d.document_date,d.created_at) DESC LIMIT 60`).bind(org,user).all(),
-    db.prepare(`SELECT m.id,m.client_id,m.name,m.strength,m.form,m.route,m.dose,m.instructions,m.frequency,m.scheduled_times_json,m.start_date,m.end_date,m.is_prn,m.prn_protocol,m.status FROM family_client_access f JOIN medications m ON m.client_id=f.client_id AND m.organisation_id=f.organisation_id WHERE f.organisation_id=? AND f.user_id=? AND f.status='active' AND f.can_view_medication=1 AND m.status='active' ORDER BY m.name LIMIT 100`).bind(org,user).all()
+    db.prepare(`SELECT u.id,u.client_id,u.visit_id,u.title,u.summary,u.category,u.mood,u.published_at,p.display_name published_by_name FROM family_client_access f JOIN family_shared_updates u ON u.client_id=f.client_id AND u.organisation_id=f.organisation_id LEFT JOIN users p ON p.id=u.published_by AND p.organisation_id=u.organisation_id WHERE f.organisation_id=? AND f.user_id=? AND f.status='active' AND f.can_view_care_updates=1 AND u.status='published' ORDER BY datetime(u.published_at) DESC LIMIT 100`).bind(org,user).all(),
+    db.prepare(`SELECT d.id,d.client_id,d.name,d.document_type,d.document_date,d.review_date,d.reference_url,d.notes,d.status,d.storage_key FROM family_client_access f JOIN family_document_shares s ON s.access_id=f.id AND s.organisation_id=f.organisation_id AND s.status='active' JOIN client_documents d ON d.id=s.document_id AND d.organisation_id=s.organisation_id WHERE f.organisation_id=? AND f.user_id=? AND f.status='active' AND f.can_view_documents=1 AND d.status!='Archived' ORDER BY COALESCE(d.document_date,d.created_at) DESC LIMIT 100`).bind(org,user).all(),
+    db.prepare(`SELECT m.id,m.client_id,m.name,m.strength,m.form,m.route,m.dose,m.instructions,m.frequency,m.scheduled_times_json,m.start_date,m.end_date,m.is_prn,m.prn_protocol,m.status FROM family_client_access f JOIN medications m ON m.client_id=f.client_id AND m.organisation_id=f.organisation_id WHERE f.organisation_id=? AND f.user_id=? AND f.status='active' AND f.can_view_medication=1 AND m.status='active' ORDER BY m.name LIMIT 100`).bind(org,user).all(),
+    db.prepare(`SELECT cp.id,cp.client_id,cp.title,cp.version,cp.plan_type,cp.plan_summary,cp.what_matters,cp.preferences,cp.effective_date,cp.review_date,cp.approved_at FROM family_client_access f JOIN care_plans cp ON cp.client_id=f.client_id AND cp.organisation_id=f.organisation_id WHERE f.organisation_id=? AND f.user_id=? AND f.status='active' AND f.can_view_care_plan=1 AND cp.status='Active' AND cp.approval_status='approved' ORDER BY datetime(cp.approved_at) DESC LIMIT 20`).bind(org,user).all(),
+    db.prepare(`SELECT id,client_id,notification_type,title,body,related_type,related_id,read_at,created_at FROM family_notifications WHERE organisation_id=? AND user_id=? ORDER BY datetime(created_at) DESC LIMIT 50`).bind(org,user).all(),
+    db.prepare('SELECT * FROM family_portal_preferences WHERE organisation_id=? AND user_id=?').bind(org,user).first(),
+    listFamilyMessages(db,session)
   ]);
-  const access=(links.results||[]).map(row=>({id:row.id,clientId:row.client_id,clientName:[row.preferred_name||row.first_name,row.last_name].filter(Boolean).join(' '),profile:row.can_view_profile?{town:row.town||'',carePackage:row.care_package||'',nextReview:row.next_review||'',status:row.client_status}:null,permissions:{profile:Boolean(row.can_view_profile),visits:Boolean(row.can_view_visits),careUpdates:Boolean(row.can_view_care_updates),documents:Boolean(row.can_view_documents),medication:Boolean(row.can_view_medication)}}));
+  const access=(links.results||[]).map(row=>({id:row.id,clientId:row.client_id,clientName:[row.preferred_name||row.first_name,row.last_name].filter(Boolean).join(' '),relationship:row.relationship_label||'',accessReviewDate:row.access_review_date||null,reviewState:familyAccessReviewState(row.access_review_date),profile:row.can_view_profile?{town:row.town||'',carePackage:row.care_package||'',nextReview:row.next_review||'',status:row.client_status}:null,permissions:{profile:Boolean(row.can_view_profile),visits:Boolean(row.can_view_visits),careUpdates:Boolean(row.can_view_care_updates),documents:Boolean(row.can_view_documents),medication:Boolean(row.can_view_medication),carePlan:Boolean(row.can_view_care_plan),messages:Boolean(row.can_message_team)}}));
   await audit(db,org,user,'family.portal_viewed','family_portal',user,{linkedClients:access.length});
   const sharedDocuments=(documents.results||[]).map(({storage_key,...row})=>({...row,reference_url:storage_key?`/api/documents/${encodeURIComponent(row.id)}/file`:row.reference_url,stored_file:Boolean(storage_key)}));
-  return json({clients:access,visits:visits.results||[],careUpdates:updates.results||[],documents:sharedDocuments,medications:medications.results||[],generatedAt:new Date().toISOString()});
+  const messagePayload=await messages.json();
+  return json({clients:access,visits:visits.results||[],careUpdates:updates.results||[],documents:sharedDocuments,medications:medications.results||[],carePlans:carePlans.results||[],notifications:notifications.results||[],preferences:familyPreferenceView(preferences||{}),threads:messagePayload.threads||[],messages:messagePayload.messages||[],generatedAt:new Date().toISOString()});
 }
 
 
@@ -2485,43 +2841,73 @@ async function updateLaunchGovernanceSignoff(request,db,session,domainKey){
   return json({ok:true,status:'approved'});
 }
 
-const STANDARD_PERMISSION_MAP = {
-  organisation_owner: ['*'], organisation_admin: ['dashboard.view','operations.view','operations.manage','rota.view','rota.create','rota.edit','rota.publish','rota.cancel','rota.time_critical.override','visits.view','visits.clock','visits.override','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','finance.view','finance.manage','family_portal.manage','organisation.settings.view','organisation.settings.manage','governance.launch.view','governance.launch.manage','governance.launch.approve','security.roles.view','security.roles.manage','security.users.view','security.users.manage','security.audit.view','security.sessions.manage','clients.view','clients.create','clients.edit','clients.archive','staff.view','staff.create','staff.edit','care_plans.view','care_plans.create','care_plans.edit','care_plans.archive','risks.view','risks.manage','documents.view','documents.manage','reports.view','data.export'],
-  branch_manager: ['dashboard.view','operations.view','operations.manage','rota.view','rota.create','rota.edit','rota.publish','visits.view','visits.clock','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','family_portal.manage','organisation.settings.view','governance.launch.view','security.roles.view','security.users.view','clients.view','clients.create','clients.edit','staff.view','staff.create','staff.edit','care_plans.view','care_plans.create','care_plans.edit','risks.view','risks.manage','documents.view','documents.manage','reports.view'],
-  senior_carer: ['dashboard.view','operations.view','visits.view','visits.clock','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','clients.view','clients.edit','staff.view','care_plans.view','care_plans.create','care_plans.edit','risks.view','risks.manage','documents.view','documents.manage'],
-  carer: ['dashboard.view','visits.view','visits.clock','tasks.view','medication.view','clients.view','staff.view','care_plans.view','risks.view','documents.view'],
-  office_staff: ['dashboard.view','operations.view','rota.view','rota.create','rota.edit','rota.publish','visits.view','tasks.view','tasks.manage','incidents.view','family_portal.manage','organisation.settings.view','clients.view','clients.create','clients.edit','staff.view','staff.create','staff.edit','reports.view'],
-  auditor: ['dashboard.view','operations.view','rota.view','visits.view','medication.view','tasks.view','incidents.view','finance.view','organisation.settings.view','governance.launch.view','security.roles.view','security.users.view','security.audit.view','clients.view','staff.view','care_plans.view','risks.view','documents.view','reports.view'],
-  family: [], platform_owner: ['*'], platform_admin: ['*']
-};
-function canManageSecurity(session){return session.is_platform_user || ['organisation_owner','organisation_admin'].includes(session.access_level) || session.role==='owner';}
+function canManageSecurity(session){return Boolean(session.is_platform_user)||session.access_level==='organisation_owner'||session.role==='owner';}
+async function permissionFacts(db,session){
+  if(!session._permissionFacts){
+    session._permissionFacts=Promise.all([
+      db.prepare(`SELECT permission_key,effect FROM user_permission_overrides WHERE organisation_id=? AND user_id=?`).bind(session.organisation_id,session.user_id).all(),
+      db.prepare(`SELECT crp.permission_key,crp.effect FROM user_custom_roles ucr JOIN custom_roles cr ON cr.id=ucr.role_id AND cr.is_active=1 JOIN custom_role_permissions crp ON crp.role_id=cr.id WHERE ucr.user_id=? AND ucr.organisation_id=? AND (ucr.valid_from IS NULL OR datetime(ucr.valid_from)<=CURRENT_TIMESTAMP) AND (ucr.valid_until IS NULL OR datetime(ucr.valid_until)>CURRENT_TIMESTAMP) AND (ucr.branch_id IS NULL OR ucr.branch_id=?)`).bind(session.user_id,session.organisation_id,session.active_branch_id||session.home_branch_id||'').all()
+    ]).then(([direct,assigned])=>({direct:direct.results||[],assigned:assigned.results||[]}));
+  }
+  return session._permissionFacts;
+}
 async function userHasPermission(db,session,key){
   if(session.is_platform_user || ['platform_owner','organisation_owner'].includes(session.access_level)) return true;
-  const overrides=await db.prepare(`SELECT permission_key,effect FROM user_permission_overrides WHERE organisation_id=? AND user_id=?`).bind(session.organisation_id,session.user_id).all();
-  const direct=overrides.results||[];
+  const {direct,assigned:rows}=await permissionFacts(db,session);
   if(direct.some(r=>r.permission_key===key&&r.effect==='deny')) return false;
   if(direct.some(r=>r.permission_key===key&&r.effect==='allow')) return true;
-  const assignments=await db.prepare(`SELECT crp.permission_key,crp.effect FROM user_custom_roles ucr JOIN custom_roles cr ON cr.id=ucr.role_id AND cr.is_active=1 JOIN custom_role_permissions crp ON crp.role_id=cr.id WHERE ucr.user_id=? AND ucr.organisation_id=? AND (ucr.valid_from IS NULL OR datetime(ucr.valid_from)<=CURRENT_TIMESTAMP) AND (ucr.valid_until IS NULL OR datetime(ucr.valid_until)>CURRENT_TIMESTAMP) AND (ucr.branch_id IS NULL OR ucr.branch_id=?)`).bind(session.user_id,session.organisation_id,session.active_branch_id||session.home_branch_id||'').all();
-  const rows=assignments.results||[];
   if(rows.some(r=>r.permission_key===key&&r.effect==='deny')) return false;
   if(rows.some(r=>r.permission_key===key&&r.effect==='allow')) return true;
-  const standard=STANDARD_PERMISSION_MAP[session.access_level]||STANDARD_PERMISSION_MAP[session.role]||[];
-  return standard.includes('*')||standard.includes(key);
+  const sources=impliedPermissionSources(key);
+  if(sources.some(source=>direct.some(r=>r.permission_key===source&&r.effect==='deny')))return false;
+  if(sources.some(source=>direct.some(r=>r.permission_key===source&&r.effect==='allow')))return true;
+  if(sources.some(source=>rows.some(r=>r.permission_key===source&&r.effect==='deny')))return false;
+  if(sources.some(source=>rows.some(r=>r.permission_key===source&&r.effect==='allow')))return true;
+  const standard=standardPermissionsForRole(session.access_level||session.role);
+  return standard.includes('*')||standard.includes(key)||sources.some(source=>standard.includes(source));
 }
+async function mayGrantPermission(db,session,key){return canManageSecurity(session)?!key.startsWith('platform.'):userHasPermission(db,session,key);}
+function mayManageUser(session,target){return canManageSecurity(session)||canAssignStandardRole(session.access_level||session.role,target.access_level||target.role);}
 async function listPermissionCatalogue(db,session){if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.roles.view'))return forbidden();const r=await db.prepare('SELECT * FROM permission_catalog ORDER BY category,name').all();return json({permissions:r.results||[]});}
 async function listCustomRoles(db,session){if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.roles.view'))return forbidden();const r=await db.prepare(`SELECT cr.*,(SELECT COUNT(*) FROM custom_role_permissions p WHERE p.role_id=cr.id) permission_count,(SELECT COUNT(*) FROM user_custom_roles u WHERE u.role_id=cr.id) user_count FROM custom_roles cr WHERE cr.organisation_id=? AND cr.is_active=1 ORDER BY cr.name`).bind(session.organisation_id).all();for(const role of r.results||[]){const p=await db.prepare('SELECT permission_key,effect FROM custom_role_permissions WHERE role_id=? ORDER BY permission_key').bind(role.id).all();role.permissions=p.results||[];}return json({roles:r.results||[]});}
-async function saveRole(request,db,session,id){if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.roles.manage'))return forbidden();const i=await readJson(request),name=clean(i.name),description=clean(i.description),colour=clean(i.colour)||'#0f766e',permissions=Array.isArray(i.permissions)?[...new Set(i.permissions.map(clean).filter(Boolean))]:[];if(name.length<2)return json({error:{code:'VALIDATION_ERROR',message:'Enter a role name.'}},400);if(!id)id=crypto.randomUUID();const existing=await db.prepare('SELECT id FROM custom_roles WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();const statements=[];if(existing)statements.push(db.prepare('UPDATE custom_roles SET name=?,description=?,colour=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?').bind(name,description,colour,id,session.organisation_id));else statements.push(db.prepare('INSERT INTO custom_roles(id,organisation_id,name,description,colour,created_by) VALUES(?,?,?,?,?,?)').bind(id,session.organisation_id,name,description,colour,session.user_id));statements.push(db.prepare('DELETE FROM custom_role_permissions WHERE role_id=? AND EXISTS (SELECT 1 FROM custom_roles r WHERE r.id=role_id AND r.organisation_id=?)').bind(id,session.organisation_id));for(const key of permissions)statements.push(db.prepare('INSERT OR IGNORE INTO custom_role_permissions(role_id,permission_key,effect) SELECT ?,permission_key,? FROM permission_catalog WHERE permission_key=?').bind(id,'allow',key));statements.push(auditStatement(db,session.organisation_id,session.user_id,existing?'security.role_updated':'security.role_created','custom_role',id,{name,permissions}));await db.batch(statements);return json({ok:true,id},existing?200:201);}
+async function saveRole(request,db,session,id){if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.roles.manage'))return forbidden();const i=await readJson(request),name=clean(i.name),description=clean(i.description),colour=clean(i.colour)||'#0f766e',permissions=Array.isArray(i.permissions)?[...new Set(i.permissions.map(clean).filter(Boolean))]:[];if(name.length<2)return json({error:{code:'VALIDATION_ERROR',message:'Enter a role name.'}},400);for(const key of permissions)if(!await mayGrantPermission(db,session,key))return forbidden(`You cannot grant the ${key} permission.`);if(!id)id=crypto.randomUUID();const existing=await db.prepare('SELECT id FROM custom_roles WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();const statements=[];if(existing)statements.push(db.prepare('UPDATE custom_roles SET name=?,description=?,colour=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?').bind(name,description,colour,id,session.organisation_id));else statements.push(db.prepare('INSERT INTO custom_roles(id,organisation_id,name,description,colour,created_by) VALUES(?,?,?,?,?,?)').bind(id,session.organisation_id,name,description,colour,session.user_id));statements.push(db.prepare('DELETE FROM custom_role_permissions WHERE role_id=? AND EXISTS (SELECT 1 FROM custom_roles r WHERE r.id=role_id AND r.organisation_id=?)').bind(id,session.organisation_id));for(const key of permissions)statements.push(db.prepare('INSERT OR IGNORE INTO custom_role_permissions(role_id,permission_key,effect) SELECT ?,permission_key,? FROM permission_catalog WHERE permission_key=?').bind(id,'allow',key));statements.push(auditStatement(db,session.organisation_id,session.user_id,existing?'security.role_updated':'security.role_created','custom_role',id,{name,permissions}));await db.batch(statements);return json({ok:true,id},existing?200:201);}
 async function createCustomRole(request,db,session){return saveRole(request,db,session,null)}
 async function updateCustomRole(request,db,session,id){return saveRole(request,db,session,id)}
 async function deleteCustomRole(db,session,id){if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.roles.manage'))return forbidden();const role=await db.prepare('SELECT id,name FROM custom_roles WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();if(!role)return json({error:{code:'NOT_FOUND',message:'Role not found.'}},404);await db.batch([db.prepare('DELETE FROM user_custom_roles WHERE role_id=? AND organisation_id=?').bind(id,session.organisation_id),db.prepare('UPDATE custom_roles SET is_active=0,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?').bind(id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'security.role_deleted','custom_role',id,{name:role.name})]);return json({ok:true});}
-async function securityOverview(db,session){if(!canManageSecurity(session))return forbidden();const r=await db.prepare(`SELECT (SELECT COUNT(*) FROM custom_roles WHERE organisation_id=? AND is_active=1) customRoles,(SELECT COUNT(*) FROM users WHERE organisation_id=? AND status='active') activeUsers,(SELECT COUNT(*) FROM sessions WHERE organisation_id=? AND datetime(expires_at)>CURRENT_TIMESTAMP) activeSessions,(SELECT COUNT(*) FROM audit_log WHERE organisation_id=? AND created_at>=datetime('now','-1 day') AND action LIKE 'security.%') securityEvents24h`).bind(session.organisation_id,session.organisation_id,session.organisation_id,session.organisation_id).first();return json(r||{});}
+async function securityOverview(db,session){if(!await userHasPermission(db,session,'security.users.view'))return forbidden();const r=await db.prepare(`SELECT (SELECT COUNT(*) FROM custom_roles WHERE organisation_id=? AND is_active=1) customRoles,(SELECT COUNT(*) FROM users WHERE organisation_id=? AND status='active') activeUsers,(SELECT COUNT(*) FROM sessions WHERE organisation_id=? AND datetime(expires_at)>CURRENT_TIMESTAMP) activeSessions,(SELECT COUNT(*) FROM audit_log WHERE organisation_id=? AND created_at>=datetime('now','-1 day') AND action LIKE 'security.%') securityEvents24h`).bind(session.organisation_id,session.organisation_id,session.organisation_id,session.organisation_id).first();return json(r||{});}
 async function listActiveSessions(db,session){if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.sessions.manage'))return forbidden();const r=await db.prepare(`SELECT s.id,s.user_id,s.created_at,s.last_seen_at,s.expires_at,s.user_agent,s.ip_hint,u.display_name,u.email FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.organisation_id=? AND datetime(s.expires_at)>CURRENT_TIMESTAMP ORDER BY s.last_seen_at DESC`).bind(session.organisation_id).all();return json({sessions:r.results||[],currentSessionId:session.session_id});}
 async function revokeSession(db,session,id){if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.sessions.manage'))return forbidden();if(id===session.session_id)return json({error:{code:'CURRENT_SESSION',message:'Use sign out to end your current session.'}},400);const target=await db.prepare('SELECT id,user_id FROM sessions WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();if(!target)return json({error:{code:'NOT_FOUND',message:'Session not found.'}},404);await db.batch([db.prepare('DELETE FROM sessions WHERE id=? AND organisation_id=?').bind(id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'security.session_revoked','session',id,{targetUserId:target.user_id})]);return json({ok:true});}
-async function getSecurityPolicy(db,session){if(!canManageSecurity(session))return forbidden();await db.prepare('INSERT OR IGNORE INTO organisation_security_policies(organisation_id) VALUES(?)').bind(session.organisation_id).run();const p=await db.prepare('SELECT * FROM organisation_security_policies WHERE organisation_id=?').bind(session.organisation_id).first();return json({policy:p});}
-async function updateSecurityPolicy(request,db,session){if(!canManageSecurity(session))return forbidden();const i=await readJson(request),hours=Math.max(1,Math.min(168,Number(i.sessionHours)||12)),idle=Math.max(5,Math.min(1440,Number(i.idleTimeoutMinutes)||60));if(i.requireMfa||i.requireTrustedDevice||i.allowPasswordLogin===false)return json({error:{code:'SECURITY_METHOD_NOT_CONFIGURED',message:'MFA, trusted-device enforcement and passwordless sign-in cannot be enabled until an alternative sign-in provider is configured.'}},409);await db.batch([db.prepare(`INSERT INTO organisation_security_policies(organisation_id,require_mfa,session_hours,idle_timeout_minutes,allow_password_login,require_trusted_device,updated_at) VALUES(?,0,?,?,1,0,CURRENT_TIMESTAMP) ON CONFLICT(organisation_id) DO UPDATE SET require_mfa=0,session_hours=excluded.session_hours,idle_timeout_minutes=excluded.idle_timeout_minutes,allow_password_login=1,require_trusted_device=0,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,hours,idle),auditStatement(db,session.organisation_id,session.user_id,'security.policy_updated','organisation_security_policy',session.organisation_id,{hours,idle,requireMfa:false,requireTrustedDevice:false,allowPasswordLogin:true})]);return getSecurityPolicy(db,session);}
-async function listLoginHistory(db,session){if(!canManageSecurity(session))return forbidden();const r=await db.prepare(`SELECT lh.*,u.display_name,u.email FROM login_history lh LEFT JOIN users u ON u.id=lh.user_id WHERE lh.organisation_id=? ORDER BY lh.created_at DESC LIMIT 100`).bind(session.organisation_id).all();return json({events:r.results||[]});}
-async function effectiveAccess(db,session,url){if(!canManageSecurity(session))return forbidden();const userId=clean(url.searchParams.get('userId'));const user=await db.prepare('SELECT id,display_name,email,access_level,home_branch_id FROM users WHERE id=? AND organisation_id=?').bind(userId,session.organisation_id).first();if(!user)return json({error:{code:'NOT_FOUND',message:'User not found.'}},404);const catalog=await db.prepare('SELECT permission_key,category,name,risk_level FROM permission_catalog ORDER BY category,name').all();const fake={...session,user_id:user.id,access_level:user.access_level,home_branch_id:user.home_branch_id,is_platform_user:0};const permissions=[];for(const p of catalog.results||[])if(await userHasPermission(db,fake,p.permission_key))permissions.push(p);return json({user,permissions});}
-async function updateEmergencyMode(request,db,session){if(!canManageSecurity(session))return forbidden();const i=await readJson(request),enabled=!!i.enabled,reason=clean(i.reason);if(enabled&&reason.length<8)return json({error:{code:'REASON_REQUIRED',message:'Enter a clear reason for enabling emergency mode.'}},400);await db.batch([db.prepare(`INSERT INTO organisation_security_policies(organisation_id,emergency_mode,emergency_reason,emergency_started_at,emergency_started_by) VALUES(?,?,?,?,?) ON CONFLICT(organisation_id) DO UPDATE SET emergency_mode=excluded.emergency_mode,emergency_reason=excluded.emergency_reason,emergency_started_at=excluded.emergency_started_at,emergency_started_by=excluded.emergency_started_by,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,enabled?1:0,enabled?reason:null,enabled?new Date().toISOString():null,enabled?session.user_id:null),auditStatement(db,session.organisation_id,session.user_id,enabled?'security.emergency_mode_enabled':'security.emergency_mode_disabled','organisation',session.organisation_id,{reason})]);return getSecurityPolicy(db,session);}
+async function getSecurityPolicy(db,session){if(!await userHasPermission(db,session,'organisation.settings.view'))return forbidden();await db.prepare('INSERT OR IGNORE INTO organisation_security_policies(organisation_id) VALUES(?)').bind(session.organisation_id).run();const p=await db.prepare('SELECT * FROM organisation_security_policies WHERE organisation_id=?').bind(session.organisation_id).first();return json({policy:p});}
+async function updateSecurityPolicy(request,db,session){if(!await userHasPermission(db,session,'organisation.settings.manage'))return forbidden();const i=await readJson(request),hours=Math.max(1,Math.min(168,Number(i.sessionHours)||12)),idle=Math.max(5,Math.min(1440,Number(i.idleTimeoutMinutes)||60));if(i.requireMfa||i.requireTrustedDevice||i.allowPasswordLogin===false)return json({error:{code:'SECURITY_METHOD_NOT_CONFIGURED',message:'MFA, trusted-device enforcement and passwordless sign-in cannot be enabled until an alternative sign-in provider is configured.'}},409);await db.batch([db.prepare(`INSERT INTO organisation_security_policies(organisation_id,require_mfa,session_hours,idle_timeout_minutes,allow_password_login,require_trusted_device,updated_at) VALUES(?,0,?,?,1,0,CURRENT_TIMESTAMP) ON CONFLICT(organisation_id) DO UPDATE SET require_mfa=0,session_hours=excluded.session_hours,idle_timeout_minutes=excluded.idle_timeout_minutes,allow_password_login=1,require_trusted_device=0,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,hours,idle),auditStatement(db,session.organisation_id,session.user_id,'security.policy_updated','organisation_security_policy',session.organisation_id,{hours,idle,requireMfa:false,requireTrustedDevice:false,allowPasswordLogin:true})]);return getSecurityPolicy(db,session);}
+async function listLoginHistory(db,session){if(!await userHasPermission(db,session,'security.audit.view'))return forbidden();const r=await db.prepare(`SELECT lh.*,u.display_name,u.email FROM login_history lh LEFT JOIN users u ON u.id=lh.user_id WHERE lh.organisation_id=? ORDER BY lh.created_at DESC LIMIT 100`).bind(session.organisation_id).all();return json({events:r.results||[]});}
+async function effectiveAccess(db,session,url){if(!await userHasPermission(db,session,'security.users.view'))return forbidden();const userId=clean(url.searchParams.get('userId'));const user=await db.prepare('SELECT id,display_name,email,role,access_level,home_branch_id FROM users WHERE id=? AND organisation_id=?').bind(userId,session.organisation_id).first();if(!user)return json({error:{code:'NOT_FOUND',message:'User not found.'}},404);const catalog=await db.prepare('SELECT permission_key,category,name,risk_level FROM permission_catalog ORDER BY category,name').all();const fake={...session,user_id:user.id,role:user.role,access_level:user.access_level,home_branch_id:user.home_branch_id,is_platform_user:0,_permissionFacts:null};const permissions=[];for(const p of catalog.results||[])if(await userHasPermission(db,fake,p.permission_key))permissions.push(p);return json({user,permissions});}
+async function accessGovernance(db,session){
+  if(!await userHasPermission(db,session,'security.users.view'))return forbidden();
+  const scoped=branchRestricted(session);
+  const rows=await db.prepare(`SELECT u.id,u.display_name,u.email,u.access_level,u.status,u.home_branch_id,u.last_login_at,
+    r.outcome review_outcome,r.review_summary,r.reviewed_at,r.next_review_date,reviewer.display_name reviewer_name
+    FROM users u
+    LEFT JOIN user_access_reviews r ON r.id=(SELECT latest.id FROM user_access_reviews latest WHERE latest.organisation_id=u.organisation_id AND latest.user_id=u.id ORDER BY latest.reviewed_at DESC,latest.id DESC LIMIT 1)
+    LEFT JOIN users reviewer ON reviewer.id=r.reviewer_id AND reviewer.organisation_id=r.organisation_id
+    WHERE u.organisation_id=? ${scoped?'AND u.home_branch_id=?':''}
+    ORDER BY u.display_name COLLATE NOCASE`).bind(session.organisation_id,...(scoped?[activeBranch(session)]:[])).all();
+  const users=(rows.results||[]).map(row=>({id:row.id,displayName:row.display_name,email:row.email,accessLevel:row.access_level,status:row.status,branchId:row.home_branch_id||null,lastLoginAt:row.last_login_at||null,review:{outcome:row.review_outcome||null,summary:row.review_summary||'',reviewedAt:row.reviewed_at||null,nextReviewDate:row.next_review_date||null,reviewerName:row.reviewer_name||'',state:accessReviewState(row.next_review_date)}}));
+  return json({profiles:publicStandardRoleProfiles(),users});
+}
+async function recordUserAccessReview(request,db,session){
+  if(!await userHasPermission(db,session,'security.users.manage'))return forbidden();
+  const input=await readJson(request),userId=clean(input.userId),outcome=clean(input.outcome),summary=clean(input.reviewSummary),nextReviewDate=clean(input.nextReviewDate);
+  if(!userId||!['confirmed','changed','disabled'].includes(outcome)||summary.length<8||!/^\d{4}-\d{2}-\d{2}$/.test(nextReviewDate))return json({error:{code:'VALIDATION_ERROR',message:'Choose an outcome, enter a clear review summary and set the next review date.'}},400);
+  const due=new Date(`${nextReviewDate}T23:59:59Z`);if(!Number.isFinite(due.getTime())||due.getTime()<Date.now())return json({error:{code:'VALIDATION_ERROR',message:'The next access review must be in the future.'}},400);
+  if(userId===session.user_id)return json({error:{code:'SELF_REVIEW_BLOCKED',message:'A different authorised manager must review your access.'}},400);
+  const user=await db.prepare('SELECT id,role,access_level,home_branch_id,status FROM users WHERE id=? AND organisation_id=?').bind(userId,session.organisation_id).first();if(!user)return notFound('User');
+  if((branchRestricted(session)&&user.home_branch_id!==activeBranch(session))||!mayManageUser(session,user))return forbidden();
+  if(user.access_level==='organisation_owner'&&outcome==='disabled')return forbidden('Organisation owner access must be transferred through the user account controls.');
+  const id=crypto.randomUUID(),statements=[db.prepare('INSERT INTO user_access_reviews(id,organisation_id,user_id,reviewer_id,outcome,review_summary,next_review_date) VALUES(?,?,?,?,?,?,?)').bind(id,session.organisation_id,userId,session.user_id,outcome,summary,nextReviewDate),auditStatement(db,session.organisation_id,session.user_id,'security.access_reviewed','user',userId,{outcome,nextReviewDate,summary})];
+  if(outcome==='disabled'){statements.push(db.prepare("UPDATE users SET status='disabled',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(userId,session.organisation_id),db.prepare('DELETE FROM sessions WHERE user_id=? AND organisation_id=?').bind(userId,session.organisation_id));}
+  await db.batch(statements);return json({ok:true,id},201);
+}
+async function updateEmergencyMode(request,db,session){if(!await userHasPermission(db,session,'organisation.settings.manage'))return forbidden();const i=await readJson(request),enabled=!!i.enabled,reason=clean(i.reason);if(enabled&&reason.length<8)return json({error:{code:'REASON_REQUIRED',message:'Enter a clear reason for enabling emergency mode.'}},400);await db.batch([db.prepare(`INSERT INTO organisation_security_policies(organisation_id,emergency_mode,emergency_reason,emergency_started_at,emergency_started_by) VALUES(?,?,?,?,?) ON CONFLICT(organisation_id) DO UPDATE SET emergency_mode=excluded.emergency_mode,emergency_reason=excluded.emergency_reason,emergency_started_at=excluded.emergency_started_at,emergency_started_by=excluded.emergency_started_by,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,enabled?1:0,enabled?reason:null,enabled?new Date().toISOString():null,enabled?session.user_id:null),auditStatement(db,session.organisation_id,session.user_id,enabled?'security.emergency_mode_enabled':'security.emergency_mode_disabled','organisation',session.organisation_id,{reason})]);return getSecurityPolicy(db,session);}
 
 async function platformAssistantHistory(db, session) {
   if (!requirePlatform(session)) return forbidden();
@@ -2670,15 +3056,20 @@ async function updateOrganisationModules(request,db,session){
 }
 async function getUserPermissionOverrides(db,session,userId){
   if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.users.manage'))return forbidden();
-  const user=await db.prepare('SELECT id,display_name,email,access_level FROM users WHERE id=? AND organisation_id=?').bind(userId,session.organisation_id).first();
+  const user=await db.prepare('SELECT id,display_name,email,role,access_level,home_branch_id FROM users WHERE id=? AND organisation_id=?').bind(userId,session.organisation_id).first();
   if(!user)return notFound('User');
+  if(branchRestricted(session)&&user.home_branch_id!==activeBranch(session))return forbidden();
+  if(user.id!==session.user_id&&!mayManageUser(session,user))return forbidden();
   const rows=await db.prepare('SELECT permission_key,effect FROM user_permission_overrides WHERE organisation_id=? AND user_id=? ORDER BY permission_key').bind(session.organisation_id,userId).all();
   return json({user,overrides:rows.results||[]});
 }
 async function updateUserPermissionOverrides(request,db,session,userId){
   if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.users.manage'))return forbidden();
-  const user=await db.prepare('SELECT id FROM users WHERE id=? AND organisation_id=?').bind(userId,session.organisation_id).first();if(!user)return notFound('User');
+  if(userId===session.user_id)return json({error:{code:'SELF_EDIT_BLOCKED',message:'You cannot change your own effective permissions.'}},400);
+  const user=await db.prepare('SELECT id,role,access_level,home_branch_id FROM users WHERE id=? AND organisation_id=?').bind(userId,session.organisation_id).first();if(!user)return notFound('User');
+  if((branchRestricted(session)&&user.home_branch_id!==activeBranch(session))||!mayManageUser(session,user))return forbidden();
   const input=await readJson(request),allow=Array.isArray(input.allow)?[...new Set(input.allow.map(clean).filter(Boolean))]:[],deny=Array.isArray(input.deny)?[...new Set(input.deny.map(clean).filter(Boolean))]:[];
+  for(const key of [...allow,...deny])if(!await mayGrantPermission(db,session,key))return forbidden(`You cannot change the ${key} permission.`);
   const statements=[db.prepare('DELETE FROM user_permission_overrides WHERE organisation_id=? AND user_id=?').bind(session.organisation_id,userId)];
   for(const key of allow.filter(x=>!deny.includes(x)))statements.push(db.prepare(`INSERT INTO user_permission_overrides(organisation_id,user_id,permission_key,effect,assigned_by) SELECT ?,?,permission_key,'allow',? FROM permission_catalog WHERE permission_key=?`).bind(session.organisation_id,userId,session.user_id,key));
   for(const key of deny)statements.push(db.prepare(`INSERT INTO user_permission_overrides(organisation_id,user_id,permission_key,effect,assigned_by) SELECT ?,?,permission_key,'deny',? FROM permission_catalog WHERE permission_key=?`).bind(session.organisation_id,userId,session.user_id,key));
@@ -2686,10 +3077,8 @@ async function updateUserPermissionOverrides(request,db,session,userId){
 }
 
 
-function supportRoleAllowed(session){return ['organisation_owner','organisation_admin','registered_manager','branch_manager','office_staff','manager','owner'].includes(session.access_level||session.role)||Boolean(session.is_platform_user&&session.support_mode);}
 async function supportProductId(db){const row=await db.prepare("SELECT id FROM platform_products WHERE code='CARE' LIMIT 1").first();return row?.id||'product-care';}
 async function listOrganisationTickets(db,session,url){
- if(!supportRoleAllowed(session)) return forbidden('Support tickets are available to authorised organisation users.');
  const status=url.searchParams.get('status')||'all',search=(url.searchParams.get('search')||'').trim();
  let sql=`SELECT t.*,p.name product_name,u.display_name assigned_name,(SELECT COUNT(*) FROM platform_ticket_messages m WHERE m.ticket_id=t.id AND m.message_type!='internal_note') message_count FROM platform_support_tickets t LEFT JOIN platform_products p ON p.id=t.product_id LEFT JOIN users u ON u.id=t.assigned_to WHERE t.organisation_id=?`;
  const binds=[session.organisation_id]; if(status!='all'){sql+=' AND t.status=?';binds.push(status)} if(search){sql+=' AND (t.ticket_number LIKE ? OR t.subject LIKE ?)';binds.push('%'+search+'%','%'+search+'%')} sql+=' ORDER BY t.updated_at DESC';
@@ -2697,7 +3086,6 @@ async function listOrganisationTickets(db,session,url){
 }
 async function createOrganisationTicket(request,env,session){
  const db=env.DB;
- if(!supportRoleAllowed(session)) return forbidden('You do not have permission to create support tickets.');
  const b=await readJson(request,32_768),subject=String(b.subject||'').trim(),description=String(b.description||'').trim(); if(!subject||!description)return badRequest('Subject and description are required.');
  const id=crypto.randomUUID(),number='CC-'+new Date().toISOString().slice(0,10).replaceAll('-','')+'-'+id.slice(0,5).toUpperCase(),product=await supportProductId(db);
  await db.prepare(`INSERT INTO platform_support_tickets(id,ticket_number,product_id,organisation_id,subject,description,priority,category,status,created_by,created_at,updated_at,module,page_url,app_version,browser_info,device_info,branch_id,last_customer_reply_at,support_requester_name,support_requester_email) VALUES(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,?)`).bind(id,number,product,session.organisation_id,subject,description,['low','normal','high','critical'].includes(b.priority)?b.priority:'normal',String(b.category||'general'), 'new',session.user_id,String(b.module||''),String(b.pageUrl||''),VERSION,String(b.browserInfo||''),String(b.deviceInfo||''),session.active_branch_id||session.home_branch_id||null,String(session.display_name||''),String(session.email||'').trim().toLowerCase()).run();
@@ -2722,8 +3110,8 @@ async function retryPendingCareSupportTickets(env){
  return {attempted:rows.results?.length||0,delivered};
 }
 async function organisationTicketOrNull(db,session,id){return db.prepare(`SELECT t.*,p.name product_name,u.display_name assigned_name,c.display_name created_name FROM platform_support_tickets t LEFT JOIN platform_products p ON p.id=t.product_id LEFT JOIN users u ON u.id=t.assigned_to LEFT JOIN users c ON c.id=t.created_by WHERE t.id=? AND t.organisation_id=?`).bind(id,session.organisation_id).first()}
-async function getOrganisationTicket(db,session,id){if(!supportRoleAllowed(session))return forbidden();const ticket=await organisationTicketOrNull(db,session,id);if(!ticket)return notFound('Ticket');const [m,a,h]=await Promise.all([db.prepare(`SELECT m.*,u.display_name author_name FROM platform_ticket_messages m LEFT JOIN users u ON u.id=m.author_user_id WHERE m.ticket_id=? AND m.message_type!='internal_note' ORDER BY m.created_at`).bind(id).all(),db.prepare(`SELECT id,file_name,mime_type,size_bytes,created_at AS uploaded_at FROM platform_ticket_attachments WHERE ticket_id=? ORDER BY created_at`).bind(id).all(),db.prepare(`SELECT h.*,u.display_name changed_name FROM platform_ticket_status_history h LEFT JOIN users u ON u.id=h.changed_by WHERE h.ticket_id=? ORDER BY h.changed_at`).bind(id).all()]);return json({ticket,messages:m.results||[],attachments:a.results||[],history:h.results||[]})}
-async function updateOrganisationTicket(request,db,session,id){if(!supportRoleAllowed(session))return forbidden();const current=await organisationTicketOrNull(db,session,id);if(!current)return notFound('Ticket');const b=await readJson(request,16_384),action=b.action;if(action==='close'&&!['resolved','closed'].includes(current.status)){await db.prepare(`UPDATE platform_support_tickets SET status='closed',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(id).run();await db.prepare(`INSERT INTO platform_ticket_status_history(id,ticket_id,from_status,to_status,changed_by,note) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,current.status,'closed',session.user_id,'Closed by organisation').run()}else if(action==='reopen'&&['resolved','closed'].includes(current.status)){await db.prepare(`UPDATE platform_support_tickets SET status='open',updated_at=CURRENT_TIMESTAMP,last_customer_reply_at=CURRENT_TIMESTAMP WHERE id=?`).bind(id).run();await db.prepare(`INSERT INTO platform_ticket_status_history(id,ticket_id,from_status,to_status,changed_by,note) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,current.status,'open',session.user_id,'Reopened by organisation').run()}else return badRequest('Invalid ticket action.');return json({ok:true})}
-async function addOrganisationTicketMessage(request,db,session,id){if(!supportRoleAllowed(session))return forbidden();const t=await organisationTicketOrNull(db,session,id);if(!t)return notFound('Ticket');const b=await readJson(request,32_768),body=String(b.body||'').trim();if(!body)return badRequest('Reply is required.');const mid=crypto.randomUUID();await db.prepare(`INSERT INTO platform_ticket_messages(id,ticket_id,author_user_id,message_type,body) VALUES(?,?,?,?,?)`).bind(mid,id,session.user_id,'customer_reply',body).run();const next=['resolved','closed'].includes(t.status)?'open':(t.status==='waiting_customer'?'open':t.status);await db.prepare(`UPDATE platform_support_tickets SET status=?,updated_at=CURRENT_TIMESTAMP,last_customer_reply_at=CURRENT_TIMESTAMP WHERE id=?`).bind(next,id).run();if(next!==t.status)await db.prepare(`INSERT INTO platform_ticket_status_history(id,ticket_id,from_status,to_status,changed_by,note) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,t.status,next,session.user_id,'Customer replied').run();return json({ok:true,id:mid},201)}
-async function addOrganisationTicketAttachment(request,db,session,id){if(!supportRoleAllowed(session))return forbidden();const t=await organisationTicketOrNull(db,session,id);if(!t)return notFound('Ticket');const b=await readJson(request,2_900_000),data=String(b.dataBase64||''),name=String(b.fileName||'attachment');if(!data||data.length>2800000)return badRequest('Attachment must be smaller than 2 MB.');const aid=crypto.randomUUID();await db.prepare(`INSERT INTO platform_ticket_attachments(id,ticket_id,file_name,mime_type,size_bytes,data_url,uploaded_by) VALUES(?,?,?,?,?,?,?)`).bind(aid,id,name,String(b.mimeType||'application/octet-stream'),Number(b.sizeBytes||0),data,session.user_id).run();await db.prepare(`UPDATE platform_support_tickets SET updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(id).run();return json({ok:true,id:aid},201)}
-async function getOrganisationTicketAttachment(db,session,id){if(!supportRoleAllowed(session))return forbidden();const a=await db.prepare(`SELECT a.* FROM platform_ticket_attachments a JOIN platform_support_tickets t ON t.id=a.ticket_id WHERE a.id=? AND t.organisation_id=?`).bind(id,session.organisation_id).first();if(!a)return notFound('Attachment');const bytes=Uint8Array.from(atob(a.data_url),c=>c.charCodeAt(0));return new Response(bytes,{headers:{'content-type':a.mime_type,'content-disposition':`attachment; filename="${String(a.file_name).replaceAll('"','')}"`,'cache-control':'private, no-store'}})}
+async function getOrganisationTicket(db,session,id){const ticket=await organisationTicketOrNull(db,session,id);if(!ticket)return notFound('Ticket');const [m,a,h]=await Promise.all([db.prepare(`SELECT m.*,u.display_name author_name FROM platform_ticket_messages m LEFT JOIN users u ON u.id=m.author_user_id WHERE m.ticket_id=? AND m.message_type!='internal_note' ORDER BY m.created_at`).bind(id).all(),db.prepare(`SELECT id,file_name,mime_type,size_bytes,created_at AS uploaded_at FROM platform_ticket_attachments WHERE ticket_id=? ORDER BY created_at`).bind(id).all(),db.prepare(`SELECT h.*,u.display_name changed_name FROM platform_ticket_status_history h LEFT JOIN users u ON u.id=h.changed_by WHERE h.ticket_id=? ORDER BY h.changed_at`).bind(id).all()]);return json({ticket,messages:m.results||[],attachments:a.results||[],history:h.results||[]})}
+async function updateOrganisationTicket(request,db,session,id){const current=await organisationTicketOrNull(db,session,id);if(!current)return notFound('Ticket');const b=await readJson(request,16_384),action=b.action;if(action==='close'&&!['resolved','closed'].includes(current.status)){await db.prepare(`UPDATE platform_support_tickets SET status='closed',updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(id).run();await db.prepare(`INSERT INTO platform_ticket_status_history(id,ticket_id,from_status,to_status,changed_by,note) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,current.status,'closed',session.user_id,'Closed by organisation').run()}else if(action==='reopen'&&['resolved','closed'].includes(current.status)){await db.prepare(`UPDATE platform_support_tickets SET status='open',updated_at=CURRENT_TIMESTAMP,last_customer_reply_at=CURRENT_TIMESTAMP WHERE id=?`).bind(id).run();await db.prepare(`INSERT INTO platform_ticket_status_history(id,ticket_id,from_status,to_status,changed_by,note) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,current.status,'open',session.user_id,'Reopened by organisation').run()}else return badRequest('Invalid ticket action.');return json({ok:true})}
+async function addOrganisationTicketMessage(request,db,session,id){const t=await organisationTicketOrNull(db,session,id);if(!t)return notFound('Ticket');const b=await readJson(request,32_768),body=String(b.body||'').trim();if(!body)return badRequest('Reply is required.');const mid=crypto.randomUUID();await db.prepare(`INSERT INTO platform_ticket_messages(id,ticket_id,author_user_id,message_type,body) VALUES(?,?,?,?,?)`).bind(mid,id,session.user_id,'customer_reply',body).run();const next=['resolved','closed'].includes(t.status)?'open':(t.status==='waiting_customer'?'open':t.status);await db.prepare(`UPDATE platform_support_tickets SET status=?,updated_at=CURRENT_TIMESTAMP,last_customer_reply_at=CURRENT_TIMESTAMP WHERE id=?`).bind(next,id).run();if(next!==t.status)await db.prepare(`INSERT INTO platform_ticket_status_history(id,ticket_id,from_status,to_status,changed_by,note) VALUES(?,?,?,?,?,?)`).bind(crypto.randomUUID(),id,t.status,next,session.user_id,'Customer replied').run();return json({ok:true,id:mid},201)}
+async function addOrganisationTicketAttachment(request,db,session,id){const t=await organisationTicketOrNull(db,session,id);if(!t)return notFound('Ticket');const b=await readJson(request,2_900_000),data=String(b.dataBase64||''),name=String(b.fileName||'attachment');if(!data||data.length>2800000)return badRequest('Attachment must be smaller than 2 MB.');const aid=crypto.randomUUID();await db.prepare(`INSERT INTO platform_ticket_attachments(id,ticket_id,file_name,mime_type,size_bytes,data_url,uploaded_by) VALUES(?,?,?,?,?,?,?)`).bind(aid,id,name,String(b.mimeType||'application/octet-stream'),Number(b.sizeBytes||0),data,session.user_id).run();await db.prepare(`UPDATE platform_support_tickets SET updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(id).run();return json({ok:true,id:aid},201)}
+async function getOrganisationTicketAttachment(db,session,id){const a=await db.prepare(`SELECT a.* FROM platform_ticket_attachments a JOIN platform_support_tickets t ON t.id=a.ticket_id WHERE a.id=? AND t.organisation_id=?`).bind(id,session.organisation_id).first();if(!a)return notFound('Attachment');const bytes=Uint8Array.from(atob(a.data_url),c=>c.charCodeAt(0));return new Response(bytes,{headers:{'content-type':a.mime_type,'content-disposition':`attachment; filename="${String(a.file_name).replaceAll('"','')}"`,'cache-control':'private, no-store'}})}

@@ -18,9 +18,9 @@ test('Tasks and Incidents open dedicated workspaces', () => {
 
 test('Operations mutations enforce module management permissions', () => {
   assert.match(worker, /"tasks\.manage", \(\) => createOperationsTask/);
-  assert.match(worker, /"tasks\.manage", \(\) => updateOperationsTask/);
-  assert.match(worker, /"incidents\.manage", \(\) => createOperationsIncident/);
-  assert.match(worker, /"incidents\.manage", \(\) => reviewOperationsIncident/);
+  assert.match(worker, /"tasks\.complete", \(\) => updateOperationsTask/);
+  assert.match(worker, /"incidents\.create", \(\) => createOperationsIncident/);
+  assert.match(worker, /"incidents\.review", \(\) => reviewOperationsIncident/);
   assert.match(worker, /"operations\.manage", \(\) => createShiftHandover/);
   assert.match(worker, /"operations\.manage", \(\) => acknowledgeShiftHandover/);
 });

@@ -1,3 +1,5 @@
+import { workforceSetupStatements } from './workforce-seed.js';
+
 const PRODUCT_CODE = 'CARE';
 const PASSWORD_ITERATIONS = 100000;
 const clean = (value, maxLength = 500) => String(value ?? '').trim().slice(0, maxLength);
@@ -67,6 +69,17 @@ async function careSummary(env, organisation) {
   };
 }
 
+async function updateOrganisationLifecycle(request,env,requestedExternalId){
+  const input=await boundedJson(request),status=clean(input.status,30).toLowerCase();
+  if(!['active','suspended','archived'].includes(status))return json({error:{code:'INVALID_ORGANISATION_STATUS',message:'Choose active, suspended or archived.'}},400);
+  const organisation=await env.DB.prepare('SELECT id,name,status FROM organisations WHERE id=?1 LIMIT 1').bind(requestedExternalId).first();
+  if(!organisation)return json({error:{code:'ORGANISATION_NOT_FOUND',message:'The Care organisation was not found.'}},404);
+  const statements=[env.DB.prepare(`UPDATE organisations SET status=?1,suspended_at=CASE WHEN ?1='suspended' THEN COALESCE(suspended_at,CURRENT_TIMESTAMP) ELSE NULL END,archived_at=CASE WHEN ?1='archived' THEN COALESCE(archived_at,CURRENT_TIMESTAMP) ELSE NULL END,updated_at=CURRENT_TIMESTAMP WHERE id=?2`).bind(status,organisation.id)];
+  if(status!=='active')statements.push(env.DB.prepare('UPDATE support_sessions SET ended_at=COALESCE(ended_at,CURRENT_TIMESTAMP) WHERE organisation_id=?1 AND ended_at IS NULL').bind(organisation.id),env.DB.prepare('DELETE FROM sessions WHERE organisation_id=?1').bind(organisation.id));
+  const results=await env.DB.batch(statements),revokedSessions=status==='active'?0:Number(results[1]?.meta?.changes||0)+Number(results[2]?.meta?.changes||0);
+  return json({ok:true,protocol:'corecare-platform-organisation/1',organisation:{id:clean(input.platformOrganisationId,160)||organisation.id,external_id:organisation.id,name:organisation.name,status},revokedSessions});
+}
+
 export async function handlePlatformOrganisation(request, env, requestedExternalId = '') {
   const auth = await authorised(request, env); if (auth.error) return auth.error;
   if (!env.DB) return json({ error: { code: 'DATABASE_NOT_CONFIGURED', message: 'Care organisation storage is unavailable.' } }, 503);
@@ -87,6 +100,7 @@ export async function handlePlatformOrganisation(request, env, requestedExternal
     const activeBranch = branch?.id || `${organisation.id}-main`;
     const initialUser = await upsertInitialUser(env, organisation, activeBranch, input.initialUser);
     if (initialUser?.error) return initialUser.error;
+    await env.DB.batch(workforceSetupStatements(env.DB, organisation.id, initialUser?.id || null));
     const productSummary = await careSummary(env, organisation);
     return json({ ok: true, protocol: 'corecare-platform-organisation/1', organisation: { id: platformId, external_id: organisation.id, name: organisation.name, status: organisation.status }, initialUser, summary: productSummary.metrics }, 201);
   }
@@ -95,5 +109,6 @@ export async function handlePlatformOrganisation(request, env, requestedExternal
     if (!organisation) return json({ error: { code: 'ORGANISATION_NOT_FOUND', message: 'The Care organisation was not found.' } }, 404);
     return json({ ok: true, ...(await careSummary(env, organisation)) });
   }
-  return json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Use POST to provision or GET to inspect an organisation.' } }, 405);
+  if(request.method==='PATCH'&&requestedExternalId)return updateOrganisationLifecycle(request,env,requestedExternalId);
+  return json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Use POST to provision, GET to inspect or PATCH to change organisation lifecycle.' } }, 405);
 }

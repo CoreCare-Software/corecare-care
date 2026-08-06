@@ -66,6 +66,7 @@ export function calculateLiveDashboard(input = {}, now = new Date()) {
   const visits = Array.isArray(input.visits) ? input.visits : [];
   const tasks = Array.isArray(input.tasks) ? input.tasks : [];
   const incidents = Array.isArray(input.incidents) ? input.incidents : [];
+  const workforce = input.workforce && Array.isArray(input.workforce.staff) ? input.workforce : null;
   const today = dayKey(now);
   const in30 = dayKey(new Date(now.getTime() + (30 * 86400000)));
   const clock = now.getTime();
@@ -81,9 +82,10 @@ export function calculateLiveDashboard(input = {}, now = new Date()) {
 
   const reviewsDue = activeClients.filter(row => row.next_review && row.next_review < today);
   const highRiskClients = activeClients.filter(row => String(row.risk).toLowerCase() === 'high');
-  const complianceStaff = activeStaff.filter(row =>
-    !row.dbs_expiry || row.dbs_expiry < today || !row.training_expiry || row.training_expiry < today
-  );
+  const workforceStaff = workforce ? workforce.staff.filter(row => String(row.status).toLowerCase() === 'active') : [];
+  const complianceStaff = workforce
+    ? workforceStaff.filter(row => row.readiness?.readinessStatus !== 'ready')
+    : activeStaff.filter(row => !row.dbs_expiry || row.dbs_expiry < today || !row.training_expiry || row.training_expiry < today);
   const plansDue = activePlans.filter(row => row.review_date && row.review_date <= in30);
   const overduePlans = activePlans.filter(row => row.review_date && row.review_date < today);
   const highRisks = activeRisks.filter(row => ['high', 'critical'].includes(String(row.severity).toLowerCase()));
@@ -97,8 +99,9 @@ export function calculateLiveDashboard(input = {}, now = new Date()) {
   const draft = liveVisits.filter(row => String(row.rota_status || 'published').toLowerCase() === 'draft').length;
   const remaining = Math.max(0, liveVisits.length - completed);
 
-  const trainingScore = percentage(activeStaff.filter(row => row.training_expiry && row.training_expiry >= today).length, activeStaff.length);
-  const staffChecksScore = percentage(activeStaff.filter(row => row.dbs_expiry && row.dbs_expiry >= today && row.training_expiry && row.training_expiry >= today).length, activeStaff.length);
+  const averageWorkforceScore = key => workforceStaff.length ? Math.round(workforceStaff.reduce((sum,row)=>sum+Number(row.readiness?.scores?.[key]||0),0)/workforceStaff.length) : 100;
+  const trainingScore = workforce ? averageWorkforceScore('training') : percentage(activeStaff.filter(row => row.training_expiry && row.training_expiry >= today).length, activeStaff.length);
+  const staffChecksScore = workforce ? averageWorkforceScore('recruitment') : percentage(activeStaff.filter(row => row.dbs_expiry && row.dbs_expiry >= today && row.training_expiry && row.training_expiry >= today).length, activeStaff.length);
   const carePlanScore = percentage(activePlans.filter(row => row.review_date && row.review_date >= today).length, activePlans.length);
   const overallCompliance = Math.round((trainingScore + staffChecksScore + carePlanScore) / 3);
 
@@ -111,7 +114,7 @@ export function calculateLiveDashboard(input = {}, now = new Date()) {
   if (highIncidents.length) addPriority('high-incidents', `${highIncidents.length} high-priority incident${highIncidents.length === 1 ? '' : 's'}`, 'Manager review is still outstanding.', 'danger', 'incidents');
   if (overduePlans.length) addPriority('care-plans', `${overduePlans.length} care-plan review${overduePlans.length === 1 ? '' : 's'} overdue`, 'Open the clinical review queue.', 'warning', 'care');
   if (reviewsDue.length) addPriority('client-reviews', `${reviewsDue.length} client review${reviewsDue.length === 1 ? '' : 's'} overdue`, 'Check the client review schedule.', 'warning', 'clients');
-  if (complianceStaff.length) addPriority('staff-compliance', `${complianceStaff.length} staff compliance record${complianceStaff.length === 1 ? '' : 's'} need attention`, 'DBS, training or expiry information is missing or overdue.', 'warning', 'staff');
+  if (complianceStaff.length) addPriority('staff-compliance', `${complianceStaff.length} staff compliance record${complianceStaff.length === 1 ? '' : 's'} need attention`, workforce ? 'Open the workforce hub to review recruitment, supervision, training and allocation restrictions.' : 'DBS, training or expiry information is missing or overdue.', 'warning', 'staff');
   if (highRisks.length) addPriority('risks', `${highRisks.length} active high-risk assessment${highRisks.length === 1 ? '' : 's'}`, 'Review controls and planned actions.', 'danger', 'care');
 
   const metrics = {

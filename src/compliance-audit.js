@@ -39,7 +39,9 @@ export function protectResponse(response, request) {
   headers.set('X-Content-Type-Options', 'nosniff');
   headers.set('X-Frame-Options', 'DENY');
   headers.set('Referrer-Policy', 'no-referrer');
-  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+  headers.set('Cross-Origin-Resource-Policy', 'same-origin');
+  headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
   headers.set('Content-Security-Policy', "frame-ancestors 'none'; object-src 'none'; base-uri 'self'");
   if (new URL(request.url).pathname.startsWith('/api/')) headers.set('Cache-Control', 'no-store');
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });

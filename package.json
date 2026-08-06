@@ -1,17 +1,23 @@
 {
   "name": "corecare",
-  "version": "1.38.1",
+  "version": "1.41.0",
   "private": true,
   "description": "CoreCare multi-tenant care management SaaS platform",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "check": "wrangler deploy --dry-run",
+    "deploy": "wrangler deploy --env=\"\"",
+    "deploy:staging": "wrangler deploy --env staging",
+    "check": "wrangler deploy --dry-run --env=\"\"",
+    "check:staging": "wrangler deploy --dry-run --env staging",
     "test": "node --experimental-loader ./test/cloudflare-loader.mjs --test test/*.test.js",
     "verify:source": "node --check src/index.js && node --check public/app.js && node scripts/verify-release-consistency.mjs",
     "db:migrate:local": "wrangler d1 migrations apply corecare --local",
-    "db:migrate:remote": "wrangler d1 migrations apply corecare --remote"
+    "db:control:migrate:local": "wrangler d1 migrations apply corecare-care-control --local",
+    "db:migrate:remote": "wrangler d1 migrations apply corecare --remote --env=\"\"",
+    "db:control:migrate:remote": "wrangler d1 migrations apply corecare-care-control --remote --env=\"\"",
+    "db:migrate:staging": "wrangler d1 migrations apply DB --remote --env staging",
+    "db:control:migrate:staging": "wrangler d1 migrations apply CONTROL_DB --remote --env staging"
   },
   "devDependencies": {
     "wrangler": "^4.119.0"

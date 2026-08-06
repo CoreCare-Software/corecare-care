@@ -5,7 +5,7 @@
   "preview_urls": false,
   "routes": [{ "pattern": "care.corecaresystems.co.uk", "custom_domain": true }],
   "main": "src/index.js",
-  "compatibility_date": "2026-08-04",
+  "compatibility_date": "2026-08-06",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
     "directory": "./public",
@@ -57,5 +57,27 @@
   "vars": {
     "PLATFORM_ORIGIN": "https://owner.corecaresystems.co.uk",
     "ENVIRONMENT": "production"
+  },
+  "env": {
+    "staging": {
+      "name": "corecare-care-staging",
+      "workers_dev": true,
+      "preview_urls": true,
+      "routes": [],
+      "services": [
+        { "binding": "CORECARE_PLATFORM", "service": "corecare-platform-staging" }
+      ],
+      "r2_buckets": [
+        { "binding": "CLIENT_FILES", "bucket_name": "corecare-care-staging-secure-files" }
+      ],
+      "d1_databases": [
+        { "binding": "DB", "database_name": "corecare-care-staging-db", "database_id": "5c295bdf-4ea2-4550-a5d2-bd8c981994f6", "migrations_dir": "migrations" },
+        { "binding": "CONTROL_DB", "database_name": "corecare-care-staging-control-db", "database_id": "9c4e311a-483d-4fed-8d11-cde0c65547c2", "migrations_dir": "control-migrations" }
+      ],
+      "vars": {
+        "PLATFORM_ORIGIN": "https://corecare-platform-staging.workers.dev",
+        "ENVIRONMENT": "staging"
+      }
+    }
   }
 }
