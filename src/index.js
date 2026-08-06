@@ -13,15 +13,20 @@ import { workforceSetupStatements } from './workforce-seed.js';
 import { familyAccessReviewState, normaliseFamilyPortalAccess, normaliseFamilyPreferences, validateFamilyMessage, validateFamilyUpdate } from './family-portal.js';
 import { accessReviewState, canAssignStandardRole, impliedPermissionSources, publicStandardRoleProfiles, roleScope, standardPermissionsForRole } from './access-control.js';
 import { attachManagerAlertAcknowledgements, buildManagerAlerts, managerAlertSummary } from './manager-alerts.js';
+import { beginMfa, claimMfaChallenge, getMfaChallenge, mfaRequiredForUser, portalGrantFromLoginResponse, verifyMfa } from './native-mfa.js';
+import { assessStaffAllocationDb, candidateStaff, enrichVisitsWithTeams, getVisitAllocations, publicationReadiness, refreshVisitExceptions, replaceVisitAssignments, syncAssignmentClockEvents } from './rota-safety.js';
+import { clientAssurance, createAllergy, createFeedback, createGovernanceRecord, createJourneyEvent, createMedicationSupply, createObservation, createQualityAction, createQualityAudit, qualityDashboard, saveCommunicationProfile, updateFeedback, updateQualityAction, updateQualityAudit } from './quality-assurance.js';
+import { assessPrnAdministration, medicationDueSlots, validateMedicationSafetyProfile } from './commercial-readiness.js';
 
-/** CoreCare Care 1.42.0 - area management and persistent operational alerts */
-const VERSION = "1.42.0";
-const RELEASE = "CoreCare Care 1.42.0 - area management and persistent operational alerts";
+/** CoreCare Care 2.0.0 - Commercial Care Assurance */
+const VERSION = "2.0.0";
+const RELEASE = "CoreCare Care 2.0.0 - Commercial Care Assurance";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
-const PASSWORD_ITERATIONS = 100000;
+const PASSWORD_ITERATIONS = 600000;
 const LOGIN_WINDOW_MINUTES = 15;
 const MAX_LOGIN_ATTEMPTS = 5;
+const MFA_PRIVILEGED_ROLES = ['organisation_owner','organisation_admin','area_manager','registered_manager','branch_manager','owner','manager'];
 
 const application = {
   async fetch(request, env, context) {
@@ -39,6 +44,9 @@ const application = {
       if (url.pathname === "/api/auth/portal-claim" && request.method === "POST") return claimPortalGrant(request, env, "CARE");
       if (["/auth/portal-login", "/api/auth/portal-login"].includes(url.pathname) && request.method === "POST") return portalLogin(request, env, "CARE");
       if (url.pathname === "/api/auth/login" && request.method === "POST") return login(request, env);
+      if (url.pathname === "/api/auth/mfa/challenge" && request.method === "GET") return getMfaChallenge(request, env, careMfaOptions(env));
+      if (url.pathname === "/api/auth/mfa/verify" && request.method === "POST") return verifyMfa(request, env, careMfaOptions(env));
+      if (url.pathname === "/api/auth/mfa/claim" && request.method === "POST") return claimMfaChallenge(request, env, {...careMfaOptions(env),portalOriginAllowed,returnPath:portalReturnPath,productOrigin:new URL(request.url).origin,failureLocation:'https://www.corecaresystems.co.uk/login?product=CARE&error=invalid_credentials'});
       if (url.pathname === "/api/auth/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/api/auth/session" && request.method === "GET") return sessionInfo(request, env);
       if (request.headers.get('x-corecare-product-key') && url.pathname === "/api/platform/organisations" && request.method === "POST") return handlePlatformOrganisation(request, env);
@@ -75,6 +83,11 @@ const application = {
         if (url.pathname === "/api/rota/templates/working-pattern" && request.method === "POST") return await permitted(env.DB, session, "rota.templates.manage", () => saveWorkingPattern(request, env.DB, session));
         if (url.pathname === "/api/rota/templates/exception" && request.method === "POST") return await permitted(env.DB, session, "rota.templates.manage", () => saveRotaException(request, env.DB, session));
         if (url.pathname === "/api/rota/templates/generate" && request.method === "POST") return await permitted(env.DB, session, "rota.templates.generate", () => generateRotaFromTemplates(request, env, session));
+        const rotaAllocationMatch=url.pathname.match(/^\/api\/rota\/([^/]+)\/allocations$/);
+        if(rotaAllocationMatch&&request.method==="GET")return await permitted(env.DB,session,"rota.view",()=>getVisitAllocations(env.DB,session,decodeURIComponent(rotaAllocationMatch[1]),careScope(session)));
+        if(rotaAllocationMatch&&request.method==="PUT")return await permitted(env.DB,session,"rota.edit",()=>replaceVisitAssignments(request,env.DB,session,decodeURIComponent(rotaAllocationMatch[1]),careScope(session),careAudit(env.DB)));
+        const rotaCandidateMatch=url.pathname.match(/^\/api\/rota\/([^/]+)\/candidates$/);
+        if(rotaCandidateMatch&&request.method==="GET")return await permitted(env.DB,session,"rota.view",()=>candidateStaff(env.DB,session,decodeURIComponent(rotaCandidateMatch[1]),careScope(session)));
         const templateDeleteMatch=url.pathname.match(/^\/api\/rota\/templates\/(visit|working-pattern|exception)\/([^/]+)$/);
         if(templateDeleteMatch&&request.method === "DELETE") return await permitted(env.DB, session, "rota.templates.manage", () => deleteRotaTemplateItem(env.DB,session,templateDeleteMatch[1],decodeURIComponent(templateDeleteMatch[2])));
         if (url.pathname === "/api/routing/settings") {
@@ -118,6 +131,8 @@ const application = {
         const medicationAdminMatch = url.pathname.match(/^\/api\/medication\/([^/]+)\/administer$/);
         if (medicationAdminMatch && request.method === "POST") return await permitted(env.DB, session, "medication.administer", () => administerMedication(request, env.DB, session, decodeURIComponent(medicationAdminMatch[1])));
         if (url.pathname === "/api/medication/daily-mar" && request.method === "GET") return await permitted(env.DB, session, "medication.view", () => dailyMar(env.DB, session, url));
+        const medicationSupplyMatch=url.pathname.match(/^\/api\/medication\/([^/]+)\/supply$/);
+        if(medicationSupplyMatch&&request.method==="POST")return await permitted(env.DB,session,"medication.stock.manage",()=>createMedicationSupply(request,env.DB,session,decodeURIComponent(medicationSupplyMatch[1]),careScope(session),careAudit(env.DB)));
         const medicationStockMatch = url.pathname.match(/^\/api\/medication\/([^/]+)\/stock$/);
         if (medicationStockMatch && request.method === "POST") return await permitted(env.DB, session, "medication.stock.manage", () => adjustMedicationStock(request, env.DB, session, decodeURIComponent(medicationStockMatch[1])));
         const medicationCorrectionMatch = url.pathname.match(/^\/api\/medication\/administrations\/([^/]+)\/correct$/);
@@ -132,6 +147,28 @@ const application = {
         if (carePlanHistoryMatch && request.method === "GET") return await permitted(env.DB, session, "care_plans.view", () => carePlanHistory(env.DB, session, decodeURIComponent(carePlanHistoryMatch[1])));
         const careAlertMatch = url.pathname.match(/^\/api\/care-delivery\/alerts\/([^/]+)\/acknowledge$/);
         if (careAlertMatch && request.method === "POST") return await permitted(env.DB, session, "operations.manage", () => acknowledgeCareAlert(env.DB, session, decodeURIComponent(careAlertMatch[1])));
+        if(url.pathname==="/api/quality"&&request.method==="GET")return await permitted(env.DB,session,"quality.view",()=>qualityDashboard(env.DB,session,careScope(session)));
+        if(url.pathname==="/api/quality/feedback"&&request.method==="POST")return await permitted(env.DB,session,"quality.manage",()=>createFeedback(request,env.DB,session,careScope(session),careAudit(env.DB)));
+        const feedbackMatch=url.pathname.match(/^\/api\/quality\/feedback\/([^/]+)$/);
+        if(feedbackMatch&&request.method==="PUT")return await permitted(env.DB,session,"quality.manage",()=>updateFeedback(request,env.DB,session,careScope(session),decodeURIComponent(feedbackMatch[1]),careAudit(env.DB)));
+        if(url.pathname==="/api/quality/audits"&&request.method==="POST")return await permitted(env.DB,session,"quality.manage",()=>createQualityAudit(request,env.DB,session,careScope(session),careAudit(env.DB)));
+        const qualityAuditMatch=url.pathname.match(/^\/api\/quality\/audits\/([^/]+)$/);
+        if(qualityAuditMatch&&request.method==="PUT")return await permitted(env.DB,session,"quality.manage",async()=>updateQualityAudit(request,env.DB,session,careScope(session),decodeURIComponent(qualityAuditMatch[1]),await userHasPermission(env.DB,session,'quality.approve'),careAudit(env.DB)));
+        if(url.pathname==="/api/quality/actions"&&request.method==="POST")return await permitted(env.DB,session,"quality.manage",()=>createQualityAction(request,env.DB,session,careScope(session),careAudit(env.DB)));
+        const qualityActionMatch=url.pathname.match(/^\/api\/quality\/actions\/([^/]+)$/);
+        if(qualityActionMatch&&request.method==="PUT")return await permitted(env.DB,session,"quality.manage",async()=>updateQualityAction(request,env.DB,session,careScope(session),decodeURIComponent(qualityActionMatch[1]),await userHasPermission(env.DB,session,'quality.approve'),careAudit(env.DB)));
+        const assuranceMatch=url.pathname.match(/^\/api\/clients\/([^/]+)\/assurance$/);
+        if(assuranceMatch&&request.method==="GET")return await permitted(env.DB,session,"clinical_governance.view",()=>clientAssurance(env.DB,session,decodeURIComponent(assuranceMatch[1]),careScope(session)));
+        const governanceMatch=url.pathname.match(/^\/api\/clients\/([^/]+)\/governance$/);
+        if(governanceMatch&&request.method==="POST")return await permitted(env.DB,session,"clinical_governance.manage",()=>createGovernanceRecord(request,env.DB,session,decodeURIComponent(governanceMatch[1]),careScope(session),careAudit(env.DB)));
+        const communicationMatch=url.pathname.match(/^\/api\/clients\/([^/]+)\/communication-profile$/);
+        if(communicationMatch&&request.method==="PUT")return await permitted(env.DB,session,"clinical_governance.manage",()=>saveCommunicationProfile(request,env.DB,session,decodeURIComponent(communicationMatch[1]),careScope(session),careAudit(env.DB)));
+        const journeyMatch=url.pathname.match(/^\/api\/clients\/([^/]+)\/journey$/);
+        if(journeyMatch&&request.method==="POST")return await permitted(env.DB,session,"clinical_governance.manage",()=>createJourneyEvent(request,env.DB,session,decodeURIComponent(journeyMatch[1]),careScope(session),careAudit(env.DB)));
+        const observationMatch=url.pathname.match(/^\/api\/clients\/([^/]+)\/observations$/);
+        if(observationMatch&&request.method==="POST")return await permitted(env.DB,session,"observations.manage",()=>createObservation(request,env.DB,session,decodeURIComponent(observationMatch[1]),careScope(session),careAudit(env.DB)));
+        const allergyMatch=url.pathname.match(/^\/api\/clients\/([^/]+)\/allergies$/);
+        if(allergyMatch&&request.method==="POST")return await permitted(env.DB,session,"clinical_governance.manage",()=>createAllergy(request,env.DB,session,decodeURIComponent(allergyMatch[1]),careScope(session),careAudit(env.DB)));
         if (url.pathname === "/api/support/tickets" && request.method === "GET") return await permitted(env.DB, session, "support.tickets.view", () => listOrganisationTickets(env.DB, session, url));
         if (url.pathname === "/api/support/tickets" && request.method === "POST") return await permitted(env.DB, session, "support.tickets.manage", () => createOrganisationTicket(request, env, session));
         const orgSupportTicketMatch = url.pathname.match(/^\/api\/support\/tickets\/([^/]+)$/);
@@ -391,7 +428,7 @@ async function requestPasswordReset(request,env){
   const [byUser,byIp]=await Promise.all([env.DB.prepare("SELECT COUNT(*) total FROM password_reset_tokens WHERE user_id=? AND created_at>=datetime('now','-1 hour')").bind(user.id).first(),env.DB.prepare("SELECT COUNT(*) total FROM password_reset_tokens WHERE request_ip_hash=? AND created_at>=datetime('now','-1 hour')").bind(ipHash).first()]);
   if(Number(byUser?.total||0)>=3||Number(byIp?.total||0)>=10)return passwordResetResponse();
   const id=crypto.randomUUID(),token=randomToken(),expiresAt=new Date(Date.now()+PASSWORD_RESET_MINUTES*60_000).toISOString();
-  await env.DB.batch([env.DB.prepare('INSERT INTO password_reset_tokens(id,user_id,token_hash,request_ip_hash,expires_at) VALUES(?,?,?,?,?)').bind(id,user.id,await sha256Base64(token),ipHash,expiresAt),auditStatement(env.DB,user.organisation_id,user.id,'user.password_reset_requested','user',user.id,{expiresAt})]);
+  await env.DB.batch([env.DB.prepare("INSERT INTO password_reset_tokens(id,user_id,token_hash,request_ip_hash,expires_at,purpose) VALUES(?,?,?,?,?,'reset')").bind(id,user.id,await sha256Base64(token),ipHash,expiresAt),auditStatement(env.DB,user.organisation_id,user.id,'user.password_reset_requested','user',user.id,{expiresAt})]);
   const actionUrl=new URL(request.url);actionUrl.pathname='/';actionUrl.search='';actionUrl.hash='';actionUrl.searchParams.set('reset',token);
   await sendCareAccountEmail(env,{organisation_id:user.organisation_id,user_id:user.id},{templateKey:'password_reset_link',sourceEventId:`care-password-reset:${id}`,userId:user.id,recipientEmail:user.email,recipientName:user.display_name,accessLabel:clean(user.access_level).replaceAll('_',' '),actionUrl:actionUrl.toString()});
   return passwordResetResponse();
@@ -401,13 +438,16 @@ async function resetPasswordWithToken(request,env){
   const input=await readJson(request),token=String(input.token||''),password=String(input.newPassword||input.password||'');
   if(token.length<32||token.length>256)return json({error:{code:'RESET_LINK_INVALID',message:'This password reset link is invalid or has expired.'}},400);
   if(!strongTemporaryPassword(password)||password.length>128)return json({error:{code:'WEAK_PASSWORD',message:'Use 12–128 characters with upper-case, lower-case and a number.'}},400);
-  const record=await env.DB.prepare(`SELECT r.id reset_id,r.user_id,u.organisation_id,u.email,u.display_name,u.access_level FROM password_reset_tokens r JOIN users u ON u.id=r.user_id WHERE r.token_hash=? AND r.consumed_at IS NULL AND datetime(r.expires_at)>CURRENT_TIMESTAMP AND u.status='active' LIMIT 1`).bind(await sha256Base64(token)).first();
+  const record=await env.DB.prepare(`SELECT r.id reset_id,r.user_id,r.purpose,u.organisation_id,u.email,u.display_name,u.access_level FROM password_reset_tokens r JOIN users u ON u.id=r.user_id WHERE r.token_hash=? AND r.consumed_at IS NULL AND datetime(r.expires_at)>CURRENT_TIMESTAMP AND u.status='active' LIMIT 1`).bind(await sha256Base64(token)).first();
   if(!record)return json({error:{code:'RESET_LINK_INVALID',message:'This password reset link is invalid or has expired.'}},400);
   const secured=await hashPassword(password),changedAt=new Date().toISOString();
-  await env.DB.batch([env.DB.prepare('UPDATE password_reset_tokens SET consumed_at=CURRENT_TIMESTAMP WHERE id=? AND consumed_at IS NULL').bind(record.reset_id),env.DB.prepare('UPDATE users SET password_hash=?,password_salt=?,password_iterations=?,must_change_password=0,password_changed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?').bind(secured.hash,secured.salt,PASSWORD_ITERATIONS,record.user_id),env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(record.user_id),auditStatement(env.DB,record.organisation_id,record.user_id,'user.password_reset_completed','user',record.user_id,{})]);
+  await env.DB.batch([env.DB.prepare('UPDATE password_reset_tokens SET consumed_at=CURRENT_TIMESTAMP WHERE id=? AND consumed_at IS NULL').bind(record.reset_id),env.DB.prepare('UPDATE users SET password_hash=?,password_salt=?,password_iterations=?,must_change_password=0,password_changed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?').bind(secured.hash,secured.salt,PASSWORD_ITERATIONS,record.user_id),env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(record.user_id),auditStatement(env.DB,record.organisation_id,record.user_id,record.purpose==='activation'?'user.account_activated':'user.password_reset_completed','user',record.user_id,{})]);
   await sendCareAccountEmail(env,{organisation_id:record.organisation_id,user_id:record.user_id},{templateKey:'password_changed',sourceEventId:`care-password-reset:${record.reset_id}:completed`,userId:record.user_id,recipientEmail:record.email,recipientName:record.display_name,accessLabel:clean(record.access_level).replaceAll('_',' '),actionTime:changedAt});
-  return json({ok:true,message:'Your password has been changed. Sign in with your new password.'});
+  return json({ok:true,message:record.purpose==='activation'?'Your CoreCare account is active. Sign in with the password you just created.':'Your password has been changed. Sign in with your new password.'});
 }
+
+async function prepareAccountActivation(db,request,userId){const id=crypto.randomUUID(),token=randomToken(),expiresAt=new Date(Date.now()+48*3600000).toISOString(),actionUrl=new URL(request.url);actionUrl.pathname='/';actionUrl.search='';actionUrl.hash='';actionUrl.searchParams.set('reset',token);actionUrl.searchParams.set('activation','1');return {statement:db.prepare("INSERT INTO password_reset_tokens(id,user_id,token_hash,request_ip_hash,expires_at,purpose) VALUES(?,?,?,?,?,'activation')").bind(id,userId,await sha256Base64(token),await sha256Base64(clean(request.headers.get('cf-connecting-ip'))||'administrator-issued'),expiresAt),actionUrl:actionUrl.toString(),sourceEventId:`care-activation:${userId}:${id}`,expiresAt};}
+async function bootstrapPassword(){return `${randomToken()}Aa1`;}
 
 export default {
   async fetch(request, env, context) {
@@ -440,7 +480,7 @@ async function runScheduledMaintenance(env, scheduledTime) {
   const work = [];
   if (env.DB) {
     work.push(env.DB.batch([
-      env.DB.prepare("DELETE FROM sessions WHERE expires_at<=CURRENT_TIMESTAMP"),
+      env.DB.prepare("DELETE FROM sessions WHERE datetime(expires_at)<=CURRENT_TIMESTAMP"),
       env.DB.prepare("DELETE FROM login_attempts WHERE updated_at<datetime('now','-1 day')"),
       env.DB.prepare("DELETE FROM password_reset_tokens WHERE datetime(expires_at)<datetime('now','-7 days')"),
       env.DB.prepare(`INSERT INTO operations_tasks(id,organisation_id,branch_id,client_id,title,description,category,priority,status,due_at,created_by)
@@ -452,6 +492,7 @@ async function runScheduledMaintenance(env, scheduledTime) {
           AND COALESCE(a.prn_effectiveness,'')='' AND datetime(a.administered_at)<=datetime('now','-2 hours')
           AND NOT EXISTS (SELECT 1 FROM operations_tasks t WHERE t.organisation_id=a.organisation_id AND t.category='Medication' AND t.status IN ('open','escalated') AND t.description LIKE '%'||a.id||'%')`)
     ]));
+    work.push((async()=>{const organisations=(await env.DB.prepare("SELECT id FROM organisations WHERE status='active'").all()).results||[];let changed=0;for(const organisation of organisations)changed+=(await refreshVisitExceptions(env.DB,organisation.id,new Date(startedAt))).changed;return {visitExceptions:changed};})());
   }
   if (env.CORECARE_PLATFORM) work.push(syncPlatformEntitlements(env));
   if (env.CORECARE_PLATFORM && env.DB) work.push(retryPendingCareSupportTickets(env));
@@ -513,6 +554,11 @@ async function portalLogin(request, env, productCode) {
   headers.set("content-type", "application/json");
   headers.set("accept", "application/json");
   const result = await login(new Request(request.url, { method: "POST", headers, body: JSON.stringify({ email, password }) }), env);
+  if(result.status===202){
+    const cookie=result.headers.get('set-cookie');
+    const destination=new URL(portalReturnPath(form.get('returnTo')),new URL(request.url).origin);destination.searchParams.set('continue','mfa');
+    return new Response(null,{status:303,headers:{location:destination.toString(),...(cookie?{'set-cookie':cookie.replace(/SameSite=Strict/i,'SameSite=Lax')}:{}),'cache-control':'no-store','referrer-policy':'no-referrer'}});
+  }
   if (!result.ok) return failure();
   const cookie = result.headers.get("set-cookie");
   if (!cookie) return json({ error: { code: "SESSION_NOT_CREATED", message: "CoreCare could not create a sign-in session." } }, 502);
@@ -536,6 +582,8 @@ async function createPortalLoginGrant(env, input = {}) {
     "user-agent": clean(input.userAgent).slice(0, 250) || "CoreCare-Portal-Broker/1.0",
   });
   const result = await login(new Request("https://care.internal/api/auth/login", { method: "POST", headers, body: JSON.stringify({ email, password }) }), env);
+  const mfaGrant=await portalGrantFromLoginResponse(result);
+  if(mfaGrant)return mfaGrant;
   const token = sessionTokenFromResponse(result);
   if (!result.ok || !token) return { ok: false, status: result.status };
   const tokenHash = await sha256Base64(token);
@@ -564,7 +612,7 @@ async function login(request, env) {
   const input = await readJson(request);
   const email = clean(input.email).toLowerCase();
   const password = String(input.password || "");
-  if (!email || !password) return json({ error: { code: "VALIDATION_ERROR", message: "Enter an email address and password." } }, 400);
+  if (!email || !password || password.length>1024) return json({ error: { code: "VALIDATION_ERROR", message: "Enter an email address and password." } }, 400);
 
   const ip = clean(request.headers.get("cf-connecting-ip")).slice(0, 64) || "unknown";
   const attemptKey = await sha256Base64(`${email}|${ip}`);
@@ -573,10 +621,11 @@ async function login(request, env) {
     return json({ error: { code: "ACCOUNT_TEMPORARILY_LOCKED", message: "Too many unsuccessful attempts. Try again in 15 minutes." } }, 429);
   }
 
-  const user = await env.DB.prepare(`SELECT u.id,u.organisation_id,u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.status,u.password_hash,u.password_salt,u.password_iterations,u.must_change_password,o.name AS organisation_name,o.status AS organisation_status,COALESCE(p.session_hours,12) AS session_hours FROM users u JOIN organisations o ON o.id=u.organisation_id LEFT JOIN organisation_security_policies p ON p.organisation_id=u.organisation_id WHERE lower(u.email)=lower(?) LIMIT 1`).bind(email).first();
+  const user = await env.DB.prepare(`SELECT u.id,u.organisation_id,u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.status,u.password_hash,u.password_salt,u.password_iterations,u.must_change_password,o.name AS organisation_name,o.status AS organisation_status,COALESCE(p.session_hours,12) AS session_hours,COALESCE(p.require_mfa,0) AS policy_require_mfa,CASE WHEN me.status='active' THEN 1 ELSE 0 END AS mfa_enabled FROM users u JOIN organisations o ON o.id=u.organisation_id LEFT JOIN organisation_security_policies p ON p.organisation_id=u.organisation_id LEFT JOIN mfa_enrolments me ON me.user_id=u.id WHERE lower(u.email)=lower(?) LIMIT 1`).bind(email).first();
   const valid = user && user.status === "active" && user.organisation_status === "active" && user.password_hash && user.password_salt
     ? await verifyPassword(password, user.password_salt, user.password_hash, user.password_iterations || PASSWORD_ITERATIONS)
     : false;
+  if(!user)await derivePassword(password,new Uint8Array(16),PASSWORD_ITERATIONS);
   if (!valid) {
     await recordFailedLogin(env.DB, attemptKey, email, ip, attempt);
     return json({ error: { code: "INVALID_CREDENTIALS", message: "The email address or password is incorrect." } }, 401);
@@ -586,19 +635,47 @@ async function login(request, env) {
   if(user.subscription_access.mode==='locked')return json({error:{code:'SUBSCRIPTION_REQUIRED',message:'This subscription needs attention. Contact your CoreCare owner or support to restore access.'}},402);
 
   await env.DB.prepare("DELETE FROM login_attempts WHERE attempt_key=?").bind(attemptKey).run();
+  if(Number(user.password_iterations||0)<PASSWORD_ITERATIONS){const secured=await hashPassword(password);await env.DB.batch([env.DB.prepare('UPDATE users SET password_hash=?,password_salt=?,password_iterations=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?').bind(secured.hash,secured.salt,PASSWORD_ITERATIONS,user.id,user.organisation_id),auditStatement(env.DB,user.organisation_id,user.id,'security.password_hash_upgraded','user',user.id,{fromIterations:Number(user.password_iterations||0),toIterations:PASSWORD_ITERATIONS})]);user.password_hash=secured.hash;user.password_salt=secured.salt;user.password_iterations=PASSWORD_ITERATIONS;}
+  if(careMfaRequired(user))return beginMfa(request,env,user,careMfaOptions(env));
+  return completeCareLogin(request,env,user);
+}
+
+function careMfaRequired(user){return mfaRequiredForUser(user,MFA_PRIVILEGED_ROLES)}
+
+function careMfaOptions(env){
+  return {
+    issuer:'CoreCare Care',
+    respond:json,
+    isMfaRequired:careMfaRequired,
+    isUserValid:user=>Boolean(user&&user.status==='active'&&user.organisation_status==='active'),
+    loadUser:loadCareMfaUser,
+    completeLogin:completeCareLogin,
+    auditStatement:(user,action,detail)=>auditStatement(env.DB,user.organisation_id,user.id||user.user_id,action,'user',user.id||user.user_id,detail),
+  };
+}
+
+async function loadCareMfaUser(db,userId){
+  return db.prepare(`SELECT u.id,u.organisation_id,u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.status,u.must_change_password,o.name AS organisation_name,o.status AS organisation_status,COALESCE(p.session_hours,12) AS session_hours,COALESCE(p.require_mfa,0) AS policy_require_mfa,CASE WHEN me.status='active' THEN 1 ELSE 0 END AS mfa_enabled FROM users u JOIN organisations o ON o.id=u.organisation_id LEFT JOIN organisation_security_policies p ON p.organisation_id=u.organisation_id LEFT JOIN mfa_enrolments me ON me.user_id=u.id WHERE u.id=? LIMIT 1`).bind(userId).first();
+}
+
+async function completeCareLogin(request,env,user,options={}){
+  user.subscription_access=await currentSubscriptionAccess(env,user.organisation_id);
+  if(user.subscription_access.mode==='locked')return json({error:{code:'SUBSCRIPTION_REQUIRED',message:'This subscription needs attention. Contact your CoreCare owner or support to restore access.'}},402);
   const token = randomToken();
   const tokenHash = await sha256Base64(token);
+  const ip=clean(request.headers.get('cf-connecting-ip')).slice(0,64)||'unknown';
   const sessionHours = Math.max(1, Math.min(168, Number(user.session_hours) || SESSION_HOURS));
   const expires = new Date(Date.now() + sessionHours * 3600000);
   await env.DB.batch([
-    env.DB.prepare("DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP"),
-    env.DB.prepare("INSERT INTO sessions (id,user_id,organisation_id,active_branch_id,token_hash,expires_at,user_agent,ip_hint) VALUES (?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(), user.id, user.organisation_id, user.home_branch_id, tokenHash, expires.toISOString(), clean(request.headers.get("user-agent")).slice(0, 250), ip),
+    ...(options.statements||[]),
+    env.DB.prepare("DELETE FROM sessions WHERE datetime(expires_at) <= CURRENT_TIMESTAMP"),
+    env.DB.prepare("INSERT INTO sessions (id,user_id,organisation_id,active_branch_id,token_hash,expires_at,user_agent,ip_hint,mfa_verified_at,authentication_method) VALUES (?,?,?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(), user.id, user.organisation_id, user.home_branch_id, tokenHash, expires.toISOString(), clean(request.headers.get("user-agent")).slice(0, 250), ip,options.mfaVerified?new Date().toISOString():null,options.authenticationMethod||'password'),
     env.DB.prepare("UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?").bind(user.id),
-    env.DB.prepare("INSERT INTO login_history(id,organisation_id,user_id,outcome,reason,ip_hint,user_agent) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(),user.organisation_id,user.id,"success","Password sign-in",ip,clean(request.headers.get("user-agent")).slice(0,250)),
-    auditStatement(env.DB, user.organisation_id, user.id, "user.login", "user", user.id, { email: user.email })
+    env.DB.prepare("INSERT INTO login_history(id,organisation_id,user_id,outcome,reason,ip_hint,user_agent) VALUES(?,?,?,?,?,?,?)").bind(crypto.randomUUID(),user.organisation_id,user.id,"success",options.mfaVerified?"Password and Authenticator sign-in":"Password sign-in",ip,clean(request.headers.get("user-agent")).slice(0,250)),
+    auditStatement(env.DB, user.organisation_id, user.id, "user.login", "user", user.id, { email: user.email,authenticationMethod:options.authenticationMethod||'password' })
   ]);
   const access=await buildAccessProfile(env.DB,{...user,user_id:user.id,active_branch_id:user.home_branch_id});
-  return json({ user: {...publicUser(user),permissions:access.permissions,modules:access.modules}, expiresAt: expires.toISOString() }, 200, { "set-cookie": sessionCookie(token, expires) });
+  return json({ user: {...publicUser(user),mfaEnabled:Boolean(options.mfaVerified||user.mfa_enabled),authenticationMethod:options.authenticationMethod||'password',permissions:access.permissions,modules:access.modules}, expiresAt: expires.toISOString(),...(options.recoveryCodes?{recoveryCodes:options.recoveryCodes}:{}) }, 200, { "set-cookie": sessionCookie(token, expires) });
 }
 
 async function recordFailedLogin(db, key, email, ip, attempt) {
@@ -651,13 +728,15 @@ async function requireSession(request, env) {
   const db=env.DB;
   const token = cookieValue(request, SESSION_COOKIE);
   if (!token) return unauthorised();
-  const row = await db.prepare(`SELECT s.id AS session_id,s.expires_at,s.last_seen_at,s.user_id,s.organisation_id,s.active_branch_id,s.support_mode,s.support_origin_organisation_id,s.support_started_at,COALESCE(p.idle_timeout_minutes,60) AS idle_timeout_minutes,
+  const row = await db.prepare(`SELECT s.id AS session_id,s.expires_at,s.last_seen_at,s.user_id,s.organisation_id,s.active_branch_id,s.support_mode,s.support_origin_organisation_id,s.support_started_at,s.mfa_verified_at,s.authentication_method,COALESCE(p.idle_timeout_minutes,60) AS idle_timeout_minutes,COALESCE(p.require_mfa,0) AS policy_require_mfa,
     (SELECT ss.reason FROM support_sessions ss WHERE ss.session_id=s.id AND ss.ended_at IS NULL ORDER BY ss.started_at DESC LIMIT 1) AS support_reason,
     (SELECT ss.access_mode FROM support_sessions ss WHERE ss.session_id=s.id AND ss.ended_at IS NULL ORDER BY ss.started_at DESC LIMIT 1) AS support_access_mode,
-    u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.staff_id,u.status,u.must_change_password,o.name AS organisation_name,o.status AS organisation_status,b.name AS branch_name
+    u.email,u.display_name,u.role,u.access_level,u.is_platform_user,u.home_branch_id,u.staff_id,u.status,u.must_change_password,o.name AS organisation_name,o.status AS organisation_status,b.name AS branch_name,CASE WHEN me.status='active' THEN 1 ELSE 0 END AS mfa_enabled
     FROM sessions s JOIN users u ON u.id=s.user_id JOIN organisations o ON o.id=s.organisation_id LEFT JOIN branches b ON b.id=s.active_branch_id LEFT JOIN organisation_security_policies p ON p.organisation_id=s.organisation_id
-    WHERE s.token_hash=? AND s.expires_at>CURRENT_TIMESTAMP LIMIT 1`).bind(await sha256Base64(token)).first();
+    LEFT JOIN mfa_enrolments me ON me.user_id=s.user_id
+    WHERE s.token_hash=? AND datetime(s.expires_at)>CURRENT_TIMESTAMP LIMIT 1`).bind(await sha256Base64(token)).first();
   if (!row || row.status !== "active" || row.organisation_status !== "active") return unauthorised();
+  if(careMfaRequired(row)&&!row.mfa_verified_at){await db.prepare('DELETE FROM sessions WHERE id=?').bind(row.session_id).run();return unauthorised('Sign in again and verify Microsoft Authenticator.');}
   if(!row.support_mode)row.subscription_access=await currentSubscriptionAccess(env,row.organisation_id);
   const idleMinutes = Math.max(5, Math.min(1440, Number(row.idle_timeout_minutes) || 60));
   if (row.last_seen_at && Date.now() - databaseTimestampMs(row.last_seen_at) > idleMinutes * 60000) {
@@ -696,9 +775,13 @@ async function changePassword(request, env, session) {
 
 function branchRestricted(session){ return !session.is_platform_user && ['assigned_branch','assigned_work'].includes(roleScope(session.access_level)) && Boolean(session.active_branch_id || session.home_branch_id); }
 function activeBranch(session){ return session.active_branch_id || session.home_branch_id || null; }
+function careScope(session){return {restricted:branchRestricted(session),branchId:activeBranch(session)};}
+function careAudit(db){return (organisationId,userId,action,entityType,entityId,detail)=>auditStatement(db,organisationId,userId,action,entityType,entityId,detail);}
 
 function mutationOriginAllowed(request) {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return true;
+  const fetchSite=clean(request.headers.get('sec-fetch-site')).toLowerCase();
+  if(fetchSite&&!["same-origin","none"].includes(fetchSite))return false;
   const origin = clean(request.headers.get("origin"));
   if (!origin) return true;
   try { return new URL(origin).origin === new URL(request.url).origin; } catch { return false; }
@@ -966,11 +1049,12 @@ async function rotaBoard(db, session, url) {
     db.prepare(`SELECT r.* FROM client_visit_requirements r JOIN clients c ON c.id=r.client_id AND c.organisation_id=r.organisation_id WHERE r.organisation_id=? ${scoped?'AND c.branch_id=?':''} AND r.status='active'`).bind(org,...(scoped?[branch]:[])).all(),
     db.prepare(`SELECT a.client_id,a.staff_id FROM client_staff_assignments a JOIN clients c ON c.id=a.client_id AND c.organisation_id=a.organisation_id WHERE a.organisation_id=? ${scoped?'AND c.branch_id=?':''}`).bind(org,...(scoped?[branch]:[])).all()
   ]);
-  const rows=visits.results||[], now=Date.now();
+  const rows=await enrichVisitsWithTeams(db,session,visits.results||[],careScope(session),false), now=Date.now();
   rows.forEach(v=>{const start=new Date(v.scheduled_start).getTime(),end=v.scheduled_end?new Date(v.scheduled_end).getTime():start+3600000;v.live_status=v.status==='scheduled'&&start<now?'late':v.status==='in_progress'&&end<now?'overrunning':v.status;});
   const serviceDay=value=>new Date(new Date(value).getTime()-6*60*60*1000).toISOString().slice(0,10),periodRows=rows.filter(row=>{const day=serviceDay(row.scheduled_start);return day>=from&&day<=to;});
   const publication=assessRotaPublication(periodRows);
-  const stats={total:periodRows.length,unallocated:periodRows.filter(x=>!x.staff_id).length,late:periodRows.filter(x=>x.live_status==='late').length,inProgress:periodRows.filter(x=>x.status==='in_progress').length,completed:periodRows.filter(x=>x.status==='completed').length,draft:publication.draft,published:periodRows.filter(x=>String(x.rota_status||'published').toLowerCase()==='published').length,readyToPublish:publication.ready?publication.draft:0,unallocatedDraft:publication.unallocated,publicationBlockers:publication.blockers};
+  const teamBlockers=periodRows.flatMap(x=>(x.allocation_blockers||[]).map(blocker=>({visitId:x.id,clientName:x.client_name,...blocker})));
+  const stats={total:periodRows.length,unallocated:periodRows.filter(x=>x.allocation_state!=='ready').length,late:periodRows.filter(x=>x.live_status==='late').length,inProgress:periodRows.filter(x=>x.status==='in_progress').length,completed:periodRows.filter(x=>x.status==='completed').length,draft:publication.draft,published:periodRows.filter(x=>String(x.rota_status||'published').toLowerCase()==='published').length,readyToPublish:publication.ready&&!teamBlockers.length?publication.draft:0,unallocatedDraft:periodRows.filter(x=>x.rota_status==='draft'&&x.allocation_state!=='ready').length,publicationBlockers:[...publication.blockers,...teamBlockers.map(x=>x.message)]};
   return json({from,to,visits:rows,clients:clients.results||[],staff:staff.results||[],workingPatterns:patterns.results||[],requirements:requirements.results||[],preferredAssignments:assignments.results||[],stats});
 }
 
@@ -1018,7 +1102,8 @@ async function generateRotaFromTemplates(request,env,session){
     async function available(candidate){if(!candidate)return false;const clash=await db.prepare(`SELECT id FROM care_visits WHERE organisation_id=? AND staff_id=? AND status!='cancelled' AND datetime(scheduled_start)<datetime(?) AND datetime(COALESCE(scheduled_end,scheduled_start))>datetime(?) LIMIT 1`).bind(session.organisation_id,candidate,end.toISOString(),start.toISOString()).first();if(clash)return false;const pattern=await db.prepare(`SELECT id FROM staff_working_patterns WHERE organisation_id=? AND staff_id=? AND status='active' AND day_of_week=? AND time(start_time)<=time(?) AND time(end_time)>=time(?) LIMIT 1`).bind(session.organisation_id,candidate,t.day_of_week,t.preferred_time,end.toISOString().slice(11,16)).first();return Boolean(pattern)}
     if(staffId&&!await available(staffId))staffId=t.backup_staff_id&&await available(t.backup_staff_id)?t.backup_staff_id:null;
     if(!staffId){unallocated++;warnings.push(`${t.name}: left in allocation queue`)}
-    const id=crypto.randomUUID();statements.push(db.prepare(`INSERT INTO care_visits(id,organisation_id,branch_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,template_id,published_at,created_by) VALUES(?, ?, (SELECT branch_id FROM clients WHERE id=? AND organisation_id=?), ?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)`).bind(id,session.organisation_id,t.client_id,session.organisation_id,t.client_id,staffId,t.visit_type,start.toISOString(),end.toISOString(),'scheduled','template','draft',t.id,'weekly_template',t.id,session.user_id));created++;
+    const id=crypto.randomUUID(),required=Math.max(1,Math.min(4,Number(t.carers_required)||1)),allocationState=staffId?(required===1?'ready':'partial'):'unallocated';statements.push(db.prepare(`INSERT INTO care_visits(id,organisation_id,branch_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,template_id,published_at,created_by,carers_required,allocation_state) VALUES(?, ?, (SELECT branch_id FROM clients WHERE id=? AND organisation_id=?), ?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,?,?)`).bind(id,session.organisation_id,t.client_id,session.organisation_id,t.client_id,staffId,t.visit_type,start.toISOString(),end.toISOString(),'scheduled','template','draft',t.id,'weekly_template',t.id,session.user_id,required,allocationState));
+    if(staffId)statements.push(db.prepare(`INSERT INTO visit_staff_assignments(id,organisation_id,branch_id,visit_id,staff_id,assignment_role,allocation_status,allocated_by) VALUES(?,?,(SELECT branch_id FROM clients WHERE id=? AND organisation_id=?),?,?,'lead','allocated',?)`).bind(crypto.randomUUID(),session.organisation_id,t.client_id,session.organisation_id,id,staffId,session.user_id));created++;
   }
   const runId=crypto.randomUUID();statements.push(db.prepare(`INSERT INTO rota_generation_runs(id,organisation_id,branch_id,week_commencing,templates_considered,visits_created,visits_skipped,visits_unallocated,warnings_json,generated_by) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(runId,session.organisation_id,scoped?branch:null,week.toISOString().slice(0,10),templates.length,created,skipped,unallocated,JSON.stringify(warnings),session.user_id));statements.push(auditStatement(db,session.organisation_id,session.user_id,'rota.week_generated','rota_generation',runId,{week:weekValue,created,skipped,unallocated,mode,branchId:scoped?branch:null}));if(statements.length)await db.batch(statements);
   const staffDays=(await db.prepare(`SELECT DISTINCT staff_id,date(scheduled_start) day FROM care_visits WHERE organisation_id=? ${scoped?'AND branch_id=?':''} AND staff_id IS NOT NULL AND datetime(scheduled_start)>=datetime(?) AND datetime(scheduled_start)<datetime(?)`).bind(session.organisation_id,...(scoped?[branch]:[]),week.toISOString(),weekEnd.toISOString()).all()).results||[];for(const x of staffDays)await recalculateStaffTravel(env,session,x.staff_id,x.day);
@@ -1029,17 +1114,22 @@ async function createRotaVisit(request,env,session){
   const db=env.DB;
   const i=await readJson(request),clientId=clean(i.clientId),start=clean(i.scheduledStart);
   if(!clientId||!start)return json({error:{code:'VALIDATION_ERROR',message:'Select a client and start time.'}},400);
-  const staffId=clean(i.staffId)||null,end=clean(i.scheduledEnd)||null;
+  const staffId=clean(i.staffId)||null,end=clean(i.scheduledEnd)||null,visitType=clean(i.visitType)||'Care visit';
   const startTime=new Date(start).getTime(),endTime=new Date(end||'').getTime();
   if(!Number.isFinite(startTime)||!Number.isFinite(endTime)||endTime<=startTime)return json({error:{code:'VALIDATION_ERROR',message:'Enter a valid start and end time. The visit must end after it starts.'}},400);
   const client=await db.prepare(`SELECT id,branch_id FROM clients WHERE id=? AND organisation_id=? ${branchRestricted(session)?'AND branch_id=?':''} AND archived_at IS NULL`).bind(clientId,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first();
   if(!client)return json({error:{code:'CLIENT_NOT_FOUND',message:'Choose an active client from your current organisation or branch.'}},404);
-  if(staffId){const member=await db.prepare(`SELECT id FROM staff WHERE id=? AND organisation_id=? ${branchRestricted(session)?'AND branch_id=?':''} AND status='Active'`).bind(staffId,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first();if(!member)return json({error:{code:'STAFF_NOT_FOUND',message:'Choose an active care worker from your current organisation or branch.'}},404);}
-  if(staffId){const clash=await db.prepare(`SELECT id FROM care_visits WHERE organisation_id=? AND staff_id=? AND rota_status!='cancelled' AND status!='cancelled' AND datetime(scheduled_start)<datetime(COALESCE(?,?,'9999-12-31')) AND datetime(COALESCE(scheduled_end,scheduled_start,'9999-12-31'))>datetime(?) LIMIT 1`).bind(session.organisation_id,staffId,end,start,start).first();if(clash)return json({error:{code:'ROTA_CLASH',message:'This staff member already has an overlapping visit.'}},409);}
+  const requirement=await db.prepare(`SELECT carers_required,skills_json FROM client_visit_requirements WHERE organisation_id=? AND client_id=? AND status='active' AND lower(visit_type)=lower(?) ORDER BY updated_at DESC LIMIT 1`).bind(session.organisation_id,clientId,visitType).first();
+  const carersRequired=Math.max(1,Math.min(4,Number(i.carersRequired??requirement?.carers_required)||1));
   const id=crypto.randomUUID(),recurrence=clean(i.recurrence)||'none',group=recurrence==='none'?null:crypto.randomUUID();
   const occurrences=[];let cursor=new Date(start),finish=new Date(end),count=recurrence==='weekly'?Math.min(Number(i.occurrences)||4,52):1;
-  for(let n=0;n<count;n++){const vid=n===0?id:crypto.randomUUID();occurrences.push(db.prepare(`INSERT INTO care_visits(id,organisation_id,branch_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(vid,session.organisation_id,client.branch_id||activeBranch(session),clientId,staffId,clean(i.visitType)||'Care visit',cursor.toISOString(),finish.toISOString(),'scheduled','rota','draft',group,recurrence,session.user_id));cursor=new Date(cursor.getTime()+7*86400000);finish=new Date(finish.getTime()+7*86400000);}
-  occurrences.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_created','visit',id,{clientId,staffId,recurrence,count,publicationStatus:'draft'}));
+  for(let n=0;n<count;n++){const vid=n===0?id:crypto.randomUUID(),visit={id:vid,branch_id:client.branch_id||activeBranch(session),scheduled_start:cursor.toISOString(),scheduled_end:finish.toISOString(),skills_json:requirement?.skills_json};
+    if(staffId){const readiness=await assessStaffAllocationDb(db,session,staffId,visit,{requiredSkills:requirement?.skills_json});if(!readiness.allowed)return json({error:{code:'UNSAFE_ALLOCATION',message:`${readiness.staff?.display_name||'This care worker'} cannot be allocated safely.`,details:readiness}},409);}
+    const allocationState=staffId?(carersRequired===1?'ready':'partial'):'unallocated';
+    occurrences.push(db.prepare(`INSERT INTO care_visits(id,organisation_id,branch_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,created_by,carers_required,allocation_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(vid,session.organisation_id,client.branch_id||activeBranch(session),clientId,staffId,visitType,cursor.toISOString(),finish.toISOString(),'scheduled','rota','draft',group,recurrence,session.user_id,carersRequired,allocationState));
+    if(staffId)occurrences.push(db.prepare(`INSERT INTO visit_staff_assignments(id,organisation_id,branch_id,visit_id,staff_id,assignment_role,allocation_status,allocated_by) VALUES(?,?,?,?,?,'lead','allocated',?)`).bind(crypto.randomUUID(),session.organisation_id,client.branch_id||activeBranch(session),vid,staffId,session.user_id));
+    cursor=new Date(cursor.getTime()+7*86400000);finish=new Date(finish.getTime()+7*86400000);}
+  occurrences.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_created','visit',id,{clientId,staffId,carersRequired,recurrence,count,publicationStatus:'draft'}));
   await db.batch(occurrences);return json({ok:true,id,created:count});
 }
 
@@ -1049,10 +1139,11 @@ async function publishRota(request,db,session){
   const start=new Date(`${from}T06:00:00.000Z`),end=new Date(`${to}T06:00:00.000Z`);end.setUTCDate(end.getUTCDate()+1);
   if(!Number.isFinite(start.getTime())||!Number.isFinite(end.getTime())||end<=start||end-start>32*86400000)return json({error:{code:'VALIDATION_ERROR',message:'The publication period must be between one and 31 service days.'}},400);
   const scoped=branchRestricted(session),branch=activeBranch(session);
-  const rows=(await db.prepare(`SELECT id,staff_id,scheduled_start,scheduled_end,status,rota_status,travel_conflict,travel_override FROM care_visits WHERE organisation_id=? ${scoped?'AND branch_id=?':''} AND rota_status='draft' AND status!='cancelled' AND datetime(scheduled_start)>=datetime(?) AND datetime(scheduled_start)<datetime(?) ORDER BY scheduled_start`).bind(session.organisation_id,...(scoped?[branch]:[]),start.toISOString(),end.toISOString()).all()).results||[];
+  const rows=(await db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,r.skills_json requirement_skills_json FROM care_visits v JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN client_visit_requirements r ON r.id=v.requirement_id AND r.organisation_id=v.organisation_id WHERE v.organisation_id=? ${scoped?'AND v.branch_id=?':''} AND v.rota_status='draft' AND v.status!='cancelled' AND datetime(v.scheduled_start)>=datetime(?) AND datetime(v.scheduled_start)<datetime(?) ORDER BY v.scheduled_start`).bind(session.organisation_id,...(scoped?[branch]:[]),start.toISOString(),end.toISOString()).all()).results||[];
   const readiness=assessRotaPublication(rows);
+  const teamReadiness=await publicationReadiness(db,session,rows,careScope(session));
   if(!readiness.draft)return json({error:{code:'NO_DRAFT_VISITS',message:'There are no draft visits to publish in this period.'}},409);
-  if(!readiness.ready)return json({error:{code:'ROTA_NOT_READY',message:`The rota cannot be published: ${readiness.blockers.join('; ')}.`,details:readiness}},409);
+  if(!readiness.ready||!teamReadiness.ready){const blockers=[...readiness.blockers,...teamReadiness.blockers.map(x=>`${x.clientName||'Visit'}: ${x.message}`)];return json({error:{code:'ROTA_NOT_READY',message:`The rota cannot be published: ${[...new Set(blockers)].join('; ')}.`,details:{...readiness,team:teamReadiness.blockers}}},409);}
   const result=await db.batch([
     db.prepare(`UPDATE care_visits SET rota_status='published',published_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? ${scoped?'AND branch_id=?':''} AND rota_status='draft' AND status!='cancelled' AND datetime(scheduled_start)>=datetime(?) AND datetime(scheduled_start)<datetime(?)`).bind(session.organisation_id,...(scoped?[branch]:[]),start.toISOString(),end.toISOString()),
     auditStatement(db,session.organisation_id,session.user_id,'rota.period_published','rota',`${from}:${to}`,{from,to,count:readiness.draft,branchId:scoped?branch:null})
@@ -1081,7 +1172,7 @@ async function manageVisitRecurrence(request,db,session,id){
   const statements=[];
   if(action==='update'&&seriesId)statements.push(db.prepare(`DELETE FROM rota_visit_templates WHERE organisation_id=? AND series_id=?`).bind(session.organisation_id,seriesId));
   let firstTemplateId=null;
-  for(const day of days){const tid=crypto.randomUUID();if(!firstTemplateId)firstTemplateId=tid;statements.push(db.prepare(`INSERT INTO rota_visit_templates(id,organisation_id,client_id,name,visit_type,day_of_week,preferred_time,duration_minutes,carers_required,preferred_staff_id,backup_staff_id,window_minutes,effective_from,effective_to,status,notes,created_by,series_id,interval_weeks,end_after_occurrences,paused_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(tid,session.organisation_id,visit.client_id,name,visit.visit_type||'Care visit',day,start.toISOString().slice(11,16),duration,1,staffId,null,15,effectiveFrom,effectiveTo,'active',clean(i.notes)||visit.planner_notes||'',session.user_id,seriesId,interval,endAfter,null));}
+  for(const day of days){const tid=crypto.randomUUID();if(!firstTemplateId)firstTemplateId=tid;statements.push(db.prepare(`INSERT INTO rota_visit_templates(id,organisation_id,client_id,name,visit_type,day_of_week,preferred_time,duration_minutes,carers_required,preferred_staff_id,backup_staff_id,window_minutes,effective_from,effective_to,status,notes,created_by,series_id,interval_weeks,end_after_occurrences,paused_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(tid,session.organisation_id,visit.client_id,name,visit.visit_type||'Care visit',day,start.toISOString().slice(11,16),duration,Math.max(1,Number(visit.carers_required)||1),staffId,null,15,effectiveFrom,effectiveTo,'active',clean(i.notes)||visit.planner_notes||'',session.user_id,seriesId,interval,endAfter,null));}
   statements.push(db.prepare(`UPDATE care_visits SET template_id=?,recurrence_group_id=?,recurrence_pattern=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(firstTemplateId,seriesId,interval===1?'weekly':`every_${interval}_weeks`,id,session.organisation_id));
   statements.push(auditStatement(db,session.organisation_id,session.user_id,action==='update'?'rota.recurrence_updated':'rota.recurrence_created','rota_recurrence',seriesId,{visitId:id,days,interval,effectiveFrom,effectiveTo,endAfter,staffId}));
   await db.batch(statements);return json({ok:true,action,seriesId,templateId:firstTemplateId,templatesCreated:days.length});
@@ -1112,7 +1203,9 @@ async function updateRotaVisit(request,env,session,id){
     if(protectedRule==='window'){const delta=Math.abs(new Date(start)-new Date(row.scheduled_start))/60000;if(delta<=Number(row.protected_window_minutes||0)){/* permitted within window */}else{protectedAuth=await authoriseProtectedVisitChange(db,session,row,i,start);if(protectedAuth.error)return protectedAuth.error;}}
     else {protectedAuth=await authoriseProtectedVisitChange(db,session,row,i,start);if(protectedAuth.error)return protectedAuth.error;}
   }
-  if(staffId){const clash=await db.prepare(`SELECT id FROM care_visits WHERE organisation_id=? AND staff_id=? AND id!=? AND rota_status!='cancelled' AND datetime(scheduled_start)<datetime(COALESCE(?,?,'9999-12-31')) AND datetime(COALESCE(scheduled_end,scheduled_start,'9999-12-31'))>datetime(?) LIMIT 1`).bind(session.organisation_id,staffId,id,end,start,start).first();if(clash)return json({error:{code:'ROTA_CLASH',message:'This staff member already has an overlapping visit.'}},409);}
+  const activeTeam=(await db.prepare("SELECT staff_id,assignment_role FROM visit_staff_assignments WHERE organisation_id=? AND visit_id=? AND allocation_status NOT IN ('removed','declined') ORDER BY CASE assignment_role WHEN 'lead' THEN 0 ELSE 1 END").bind(session.organisation_id,id).all()).results||[];
+  const proposedTeam=staffId?[staffId,...activeTeam.filter(member=>member.assignment_role!=='lead'&&member.staff_id!==staffId).map(member=>member.staff_id)]:[];
+  for(const proposedStaffId of proposedTeam){const readiness=await assessStaffAllocationDb(db,session,proposedStaffId,{...row,id,scheduled_start:start,scheduled_end:end,staff_id:staffId});if(!readiness.allowed)return json({error:{code:'UNSAFE_ALLOCATION',message:`${readiness.staff?.display_name||'This care worker'} cannot be safely allocated: ${readiness.blockers.map(item=>item.message).join(' ')}`,details:{staffId:proposedStaffId,blockers:readiness.blockers}}},409);}
   let travelAssessment=null;
   const overrideReason=clean(i.travelOverrideReason);
   if(staffId){
@@ -1133,6 +1226,16 @@ async function updateRotaVisit(request,env,session,id){
     const condition=scope==='future'?'AND date(scheduled_start)>=date(?)':'';
     const bind=[staffId,clean(i.visitType)||row.visit_type,reason,requestedLocked?1:0,plannerNotes,row.requirement_id,session.organisation_id];if(scope==='future')bind.push(row.scheduled_start);
     statements.push(db.prepare(`UPDATE care_visits SET staff_id=?,visit_type=?,rota_source='planner',rota_status='draft',change_reason=?,manually_overridden=1,planner_locked=?,planner_notes=?,updated_at=CURRENT_TIMESTAMP WHERE requirement_id=? AND organisation_id=? AND status='scheduled' ${condition}`).bind(...bind));
+  }
+  let teamVisitRows=[{id,branch_id:row.branch_id}];
+  if(scope!=='single'&&row.requirement_id){const condition=scope==='future'?'AND date(scheduled_start)>=date(?)':'';teamVisitRows=(await db.prepare(`SELECT id,branch_id FROM care_visits WHERE requirement_id=? AND organisation_id=? AND status='scheduled' ${condition}`).bind(row.requirement_id,session.organisation_id,...(scope==='future'?[row.scheduled_start]:[])).all()).results||teamVisitRows;}
+  for(const teamVisit of teamVisitRows){
+    if(!staffId)statements.push(db.prepare("UPDATE visit_staff_assignments SET allocation_status='removed',updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND visit_id=? AND allocation_status NOT IN ('removed','declined')").bind(session.organisation_id,teamVisit.id));
+    else{
+      statements.push(db.prepare("UPDATE visit_staff_assignments SET allocation_status='removed',updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND visit_id=? AND assignment_role='lead' AND staff_id!=? AND allocation_status NOT IN ('removed','declined')").bind(session.organisation_id,teamVisit.id,staffId));
+      statements.push(db.prepare(`INSERT INTO visit_staff_assignments(id,organisation_id,branch_id,visit_id,staff_id,assignment_role,allocation_status,allocation_version,allocated_by,allocated_at,updated_at) VALUES(?,?,?,?,?,'lead','allocated',1,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(organisation_id,visit_id,staff_id) DO UPDATE SET assignment_role='lead',allocation_status='allocated',allocation_version=visit_staff_assignments.allocation_version+1,allocated_by=excluded.allocated_by,allocated_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP`).bind(crypto.randomUUID(),session.organisation_id,teamVisit.branch_id||row.branch_id||null,teamVisit.id,staffId,session.user_id));
+    }
+    statements.push(db.prepare(`UPDATE care_visits SET allocation_state=CASE WHEN (SELECT COUNT(*) FROM visit_staff_assignments a WHERE a.organisation_id=care_visits.organisation_id AND a.visit_id=care_visits.id AND a.allocation_status NOT IN ('removed','declined'))=0 THEN 'unallocated' WHEN (SELECT COUNT(*) FROM visit_staff_assignments a WHERE a.organisation_id=care_visits.organisation_id AND a.visit_id=care_visits.id AND a.allocation_status NOT IN ('removed','declined'))<carers_required THEN 'partial' ELSE 'ready' END WHERE id=? AND organisation_id=?`).bind(teamVisit.id,session.organisation_id));
   }
   statements.push(db.prepare(`INSERT INTO visit_change_history(id,organisation_id,visit_id,requirement_id,change_scope,reason,before_json,after_json,changed_by) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,id,row.requirement_id,scope,reason,before,after,session.user_id));
   statements.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_updated','visit',id,{staffId,start,end,scope,reason,protectedOverride:Boolean(protectedAuth),authorisedBy:protectedAuth?.manager?.id||null}));
@@ -1265,7 +1368,7 @@ async function ensureClientVisitCode(request,db,session){
   return json({ok:true,code:row.code,createdAt:row.created_at,expiresAt:row.expires_at,clientName:`${client.first_name} ${client.last_name}`});
 }
 
-async function syncVisitEvents(request,db,session){const i=await readJson(request),events=Array.isArray(i.events)?i.events:[];const results=[];for(const event of events){const eventId=clean(event.eventId),code=clean(event.code),type=clean(event.type),deviceTime=clean(event.deviceTime),source=clean(event.source)||'online',deviceTimestamp=new Date(deviceTime).getTime();if(!eventId||!code||!['clock_in','clock_out'].includes(type)||!deviceTime||!Number.isFinite(deviceTimestamp)){results.push({eventId,ok:false,error:'Invalid event'});continue;}const allowedDrift=source==='offline'?72*3600000:15*60000;if(Math.abs(Date.now()-deviceTimestamp)>allowedDrift){results.push({eventId,ok:false,error:source==='offline'?'Offline events must be synchronised within 72 hours.':'The device time differs from CoreCare by more than 15 minutes.'});continue;}const existing=await db.prepare('SELECT id FROM visit_events WHERE device_event_id=? AND organisation_id=?').bind(eventId,session.organisation_id).first();if(existing){results.push({eventId,ok:true,duplicate:true});continue;}const clientCode=await db.prepare(`SELECT vc.id,vc.client_id FROM client_visit_codes vc JOIN clients c ON c.id=vc.client_id AND c.organisation_id=vc.organisation_id WHERE vc.organisation_id=? AND vc.code=? AND vc.active=1 AND datetime(COALESCE(vc.expires_at,'1970-01-01'))>CURRENT_TIMESTAMP ${branchRestricted(session)?'AND c.branch_id=?':''}`).bind(session.organisation_id,code,...(branchRestricted(session)?[activeBranch(session)]:[])).first();if(!clientCode){results.push({eventId,ok:false,error:'Invalid, expired or inaccessible client code'});continue;}const isCarer=['carer','senior_carer'].includes(session.access_level);if(isCarer&&!session.staff_id){results.push({eventId,ok:false,error:'Your login is not linked to a staff record. Ask a manager to update your staff profile.'});continue;}const staffFilter=session.staff_id?`AND staff_id=?`:'';
+async function syncVisitEvents(request,db,session){const i=await readJson(request.clone()),events=Array.isArray(i.events)?i.events:[];if(events.some(event=>clean(event.visitId)&&clean(event.assignmentId)))return syncAssignmentClockEvents(request,db,session,careAudit(db));const results=[];for(const event of events){const eventId=clean(event.eventId),code=clean(event.code),type=clean(event.type),deviceTime=clean(event.deviceTime),source=clean(event.source)||'online',deviceTimestamp=new Date(deviceTime).getTime();if(!eventId||!code||!['clock_in','clock_out'].includes(type)||!deviceTime||!Number.isFinite(deviceTimestamp)){results.push({eventId,ok:false,error:'Invalid event'});continue;}const allowedDrift=source==='offline'?72*3600000:15*60000;if(Math.abs(Date.now()-deviceTimestamp)>allowedDrift){results.push({eventId,ok:false,error:source==='offline'?'Offline events must be synchronised within 72 hours.':'The device time differs from CoreCare by more than 15 minutes.'});continue;}const existing=await db.prepare('SELECT id FROM visit_events WHERE device_event_id=? AND organisation_id=?').bind(eventId,session.organisation_id).first();if(existing){results.push({eventId,ok:true,duplicate:true});continue;}const clientCode=await db.prepare(`SELECT vc.id,vc.client_id FROM client_visit_codes vc JOIN clients c ON c.id=vc.client_id AND c.organisation_id=vc.organisation_id WHERE vc.organisation_id=? AND vc.code=? AND vc.active=1 AND datetime(COALESCE(vc.expires_at,'1970-01-01'))>CURRENT_TIMESTAMP ${branchRestricted(session)?'AND c.branch_id=?':''}`).bind(session.organisation_id,code,...(branchRestricted(session)?[activeBranch(session)]:[])).first();if(!clientCode){results.push({eventId,ok:false,error:'Invalid, expired or inaccessible client code'});continue;}const isCarer=['carer','senior_carer'].includes(session.access_level);if(isCarer&&!session.staff_id){results.push({eventId,ok:false,error:'Your login is not linked to a staff record. Ask a manager to update your staff profile.'});continue;}const staffFilter=session.staff_id?`AND staff_id=?`:'';
 const visitSql=`SELECT id,status,staff_id,scheduled_start FROM care_visits WHERE organisation_id=? AND client_id=? ${staffFilter} AND date(scheduled_start)=date(?) AND status IN ('scheduled','in_progress') ORDER BY CASE WHEN status='in_progress' THEN 0 ELSE 1 END, CASE WHEN staff_id IS NOT NULL THEN 0 ELSE 1 END, ABS(strftime('%s',scheduled_start)-strftime('%s',?)) LIMIT 1`;
 let visit=session.staff_id
   ?await db.prepare(visitSql).bind(session.organisation_id,clientCode.client_id,session.staff_id,deviceTime,deviceTime).first()
@@ -1483,9 +1586,9 @@ async function carerDashboard(db,session){
   if(now<serviceStart)serviceStart.setDate(serviceStart.getDate()-1);
   const serviceEnd=new Date(serviceStart);serviceEnd.setDate(serviceEnd.getDate()+1);
 
-  const base=`SELECT v.*,c.first_name||' '||c.last_name client_name,c.preferred_name client_preferred_name,c.address_line_1,c.address_line_2,c.town,c.postcode
-    FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id
-    WHERE v.organisation_id=? AND v.staff_id=? AND COALESCE(v.rota_status,'published')='published'`;
+  const base=`SELECT v.*,a.id assignment_id,a.assignment_role,a.actual_start assignment_actual_start,a.actual_end assignment_actual_end,c.first_name||' '||c.last_name client_name,c.preferred_name client_preferred_name,c.address_line_1,c.address_line_2,c.town,c.postcode
+    FROM care_visits v JOIN visit_staff_assignments a ON a.visit_id=v.id AND a.organisation_id=v.organisation_id AND a.allocation_status NOT IN ('removed','declined') LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id
+    WHERE v.organisation_id=? AND a.staff_id=? AND COALESCE(v.rota_status,'published')='published'`;
   const [todayRows,historyRows]=await Promise.all([
     db.prepare(`${base} AND datetime(v.scheduled_start)>=datetime(?) AND datetime(v.scheduled_start)<datetime(?) AND COALESCE(v.rota_status,'')!='cancelled' AND v.status!='cancelled' ORDER BY datetime(v.scheduled_start)`).bind(session.organisation_id,session.staff_id,serviceStart.toISOString(),serviceEnd.toISOString()).all(),
     db.prepare(`${base} AND v.status='completed' AND datetime(v.scheduled_start)<datetime(?) ORDER BY datetime(COALESCE(v.actual_end,v.scheduled_end,v.scheduled_start)) DESC LIMIT 20`).bind(session.organisation_id,session.staff_id,serviceStart.toISOString()).all()
@@ -1511,12 +1614,13 @@ async function carerDashboard(db,session){
   }
   for(const v of visits){
     const start=new Date(v.scheduled_start).getTime(),end=v.scheduled_end?new Date(v.scheduled_end).getTime():start+3600000;
-    if(v.status==='scheduled'&&start+15*60000<clock)v.live_status='late';
-    else if(v.status==='in_progress'&&end<clock)v.live_status='overrunning';
-    else if(v.status==='scheduled'&&Math.abs(start-clock)<=15*60000)v.live_status='due';
-    else v.live_status=v.status;
+    v.assignment_status=v.assignment_actual_end?'completed':v.assignment_actual_start?'in_progress':'scheduled';
+    if(v.assignment_status==='scheduled'&&start+15*60000<clock)v.live_status='late';
+    else if(v.assignment_status==='in_progress'&&end<clock)v.live_status='overrunning';
+    else if(v.assignment_status==='scheduled'&&Math.abs(start-clock)<=15*60000)v.live_status='due';
+    else v.live_status=v.assignment_status;
   }
-  const active=visits.find(v=>v.status==='in_progress')||null,next=visits.find(v=>v.status==='scheduled')||null;
+  const active=visits.find(v=>v.assignment_status==='in_progress')||null,next=visits.find(v=>v.assignment_status==='scheduled')||null;
   return json({linked:true,staffId:session.staff_id,serviceDay:{start:serviceStart.toISOString(),end:serviceEnd.toISOString()},visits,history,activeVisitId:active?.id||null,nextVisitId:next?.id||null,metrics:{today:visits.length,completed:visits.filter(v=>v.status==='completed').length,inProgress:visits.filter(v=>v.status==='in_progress').length,late:visits.filter(v=>v.live_status==='late'||v.live_status==='overrunning').length}});
 }
 
@@ -1543,7 +1647,7 @@ async function managerAlertData(db,session){
   const org=session.organisation_id,scoped=branchRestricted(session),branch=activeBranch(session),now=new Date();
   const serviceStart=new Date(now);serviceStart.setHours(6,0,0,0);if(now<serviceStart)serviceStart.setDate(serviceStart.getDate()-1);
   const serviceEnd=new Date(serviceStart);serviceEnd.setDate(serviceEnd.getDate()+1);
-  const [visits,incidents,tasks,careAlerts,medications,medicationExceptions,accessReviews,receipts]=await Promise.all([
+  const [visits,incidents,tasks,careAlerts,medications,medicationExceptions,accessReviews,visitExceptions,qualityActions,feedbackCases,receipts]=await Promise.all([
     db.prepare(`SELECT v.id,v.branch_id,v.client_id,v.staff_id,v.visit_type,v.scheduled_start,v.scheduled_end,v.status,v.rota_status,c.first_name||' '||c.last_name client_name,c.preferred_name,s.first_name||' '||s.last_name staff_name FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN staff s ON s.id=v.staff_id AND s.organisation_id=v.organisation_id WHERE v.organisation_id=? ${scoped?'AND v.branch_id=?':''} AND COALESCE(v.rota_status,'published')='published' AND datetime(v.scheduled_start)>=datetime(?) AND datetime(v.scheduled_start)<datetime(?) AND v.status!='cancelled' ORDER BY datetime(v.scheduled_start) LIMIT 500`).bind(org,...(scoped?[branch]:[]),serviceStart.toISOString(),serviceEnd.toISOString()).all(),
     db.prepare(`SELECT i.id,i.reference_number,i.branch_id,i.client_id,i.category,i.severity,i.title,i.status,i.occurred_at,i.created_at,i.investigation_due_at,i.safeguarding_required,c.first_name||' '||c.last_name client_name,c.preferred_name FROM operations_incidents i LEFT JOIN clients c ON c.id=i.client_id AND c.organisation_id=i.organisation_id WHERE i.organisation_id=? ${scoped?'AND i.branch_id=?':''} AND i.status NOT IN ('closed','cancelled') ORDER BY CASE lower(i.severity) WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,datetime(COALESCE(i.occurred_at,i.created_at)) DESC LIMIT 250`).bind(org,...(scoped?[branch]:[])).all(),
     db.prepare(`SELECT t.id,t.branch_id,t.client_id,t.title,t.priority,t.status,t.due_at,t.created_at,c.first_name||' '||c.last_name client_name,c.preferred_name FROM operations_tasks t LEFT JOIN clients c ON c.id=t.client_id AND c.organisation_id=t.organisation_id WHERE t.organisation_id=? ${scoped?'AND t.branch_id=?':''} AND t.status NOT IN ('completed','closed','cancelled') AND t.due_at IS NOT NULL AND datetime(t.due_at)<CURRENT_TIMESTAMP ORDER BY datetime(t.due_at) LIMIT 250`).bind(org,...(scoped?[branch]:[])).all(),
@@ -1551,9 +1655,12 @@ async function managerAlertData(db,session){
     db.prepare(`SELECT m.id,m.name,m.stock_quantity,m.stock_unit,m.low_stock_threshold,m.status,m.updated_at,c.branch_id,c.first_name||' '||c.last_name client_name,c.preferred_name FROM medications m JOIN clients c ON c.id=m.client_id AND c.organisation_id=m.organisation_id WHERE m.organisation_id=? ${scoped?'AND c.branch_id=?':''} AND m.status='active' AND m.stock_quantity IS NOT NULL AND m.stock_quantity<=m.low_stock_threshold ORDER BY m.stock_quantity LIMIT 250`).bind(org,...(scoped?[branch]:[])).all(),
     db.prepare(`SELECT a.id,a.outcome,a.reason,a.administered_at,a.is_void,m.name medication_name,c.branch_id,c.first_name||' '||c.last_name client_name,c.preferred_name FROM medication_administrations a JOIN medications m ON m.id=a.medication_id AND m.organisation_id=a.organisation_id JOIN clients c ON c.id=a.client_id AND c.organisation_id=a.organisation_id WHERE a.organisation_id=? ${scoped?'AND c.branch_id=?':''} AND a.is_void=0 AND a.outcome IN ('refused','omitted','unavailable','missed') AND datetime(a.administered_at)>=datetime('now','-1 day') ORDER BY datetime(a.administered_at) DESC LIMIT 250`).bind(org,...(scoped?[branch]:[])).all(),
     db.prepare(`SELECT u.id user_id,u.display_name,u.access_level,u.home_branch_id,u.status,r.next_review_date FROM users u JOIN user_access_reviews r ON r.id=(SELECT latest.id FROM user_access_reviews latest WHERE latest.organisation_id=u.organisation_id AND latest.user_id=u.id ORDER BY latest.reviewed_at DESC,latest.id DESC LIMIT 1) WHERE u.organisation_id=? ${scoped?'AND u.home_branch_id=?':''} AND u.status='active' AND r.next_review_date IS NOT NULL AND date(r.next_review_date)<date('now') ORDER BY date(r.next_review_date) LIMIT 250`).bind(org,...(scoped?[branch]:[])).all(),
+    db.prepare(`SELECT e.*,v.scheduled_start,c.first_name||' '||c.last_name client_name,c.preferred_name FROM visit_exceptions e JOIN care_visits v ON v.id=e.visit_id AND v.organisation_id=e.organisation_id JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id WHERE e.organisation_id=? ${scoped?'AND e.branch_id=?':''} AND e.status NOT IN ('resolved','closed') ORDER BY CASE e.severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,datetime(e.created_at) DESC LIMIT 250`).bind(org,...(scoped?[branch]:[])).all(),
+    db.prepare(`SELECT * FROM quality_actions WHERE organisation_id=? ${scoped?'AND branch_id=?':''} AND status NOT IN ('completed','verified','cancelled') AND (datetime(due_at)<CURRENT_TIMESTAMP OR priority IN ('high','critical')) ORDER BY CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,datetime(due_at) LIMIT 250`).bind(org,...(scoped?[branch]:[])).all(),
+    db.prepare(`SELECT * FROM service_feedback_cases WHERE organisation_id=? ${scoped?'AND branch_id=?':''} AND status NOT IN ('resolved','closed','withdrawn') AND (risk_level IN ('high','critical') OR (acknowledged_at IS NULL AND datetime(acknowledgement_due_at)<CURRENT_TIMESTAMP) OR (response_sent_at IS NULL AND datetime(response_due_at)<CURRENT_TIMESTAMP)) ORDER BY CASE risk_level WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END,datetime(created_at) LIMIT 250`).bind(org,...(scoped?[branch]:[])).all(),
     db.prepare(`SELECT alert_key,acknowledged_at FROM manager_alert_acknowledgements WHERE organisation_id=? AND user_id=? ORDER BY datetime(acknowledged_at) DESC LIMIT 2000`).bind(org,session.user_id).all()
   ]);
-  const calculated=buildManagerAlerts({visits:visits.results||[],incidents:incidents.results||[],tasks:tasks.results||[],careAlerts:careAlerts.results||[],medications:medications.results||[],medicationExceptions:medicationExceptions.results||[],accessReviews:accessReviews.results||[]},now).slice(0,250);
+  const calculated=buildManagerAlerts({visits:visits.results||[],incidents:incidents.results||[],tasks:tasks.results||[],careAlerts:careAlerts.results||[],medications:medications.results||[],medicationExceptions:medicationExceptions.results||[],accessReviews:accessReviews.results||[],visitExceptions:visitExceptions.results||[],qualityActions:qualityActions.results||[],feedbackCases:feedbackCases.results||[]},now).slice(0,250);
   const alerts=attachManagerAlertAcknowledgements(calculated,receipts.results||[]);
   return {alerts,summary:managerAlertSummary(alerts),generatedAt:now.toISOString(),pollAfterSeconds:60,serviceDay:{start:serviceStart.toISOString(),end:serviceEnd.toISOString()}};
 }
@@ -1592,21 +1699,21 @@ async function createStaff(request, env, session) {
   const createLogin = input.createLogin === true || clean(input.createLogin)==='on' || clean(input.createLogin)==='true';
   const loginEmail = clean(input.loginEmail || input.email).toLowerCase();
   const accessLevel = clean(input.loginAccessLevel)||'carer';
-  const temporaryPassword = String(input.temporaryPassword||'');
-  if(createLogin && (!loginEmail || !allowedAccessLevels().includes(accessLevel) || !strongTemporaryPassword(temporaryPassword))) return json({error:{code:'VALIDATION_ERROR',message:'Enter a login email, valid access level and temporary password of at least 12 characters with upper-case, lower-case and a number.'}},400);
+  if(createLogin && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(loginEmail) || !allowedAccessLevels().includes(accessLevel))) return json({error:{code:'VALIDATION_ERROR',message:'Enter a valid login email and access level.'}},400);
   if(createLogin&&(!await userHasPermission(db,session,'security.users.manage')||!canAssignStandardRole(session.access_level||session.role,accessLevel)))return forbidden('You cannot assign that access level.');
   if(createLogin){const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;}
   const id=crypto.randomUUID(), statements=[];let invitation=null;
   statements.push(db.prepare(`INSERT INTO staff (id,organisation_id,branch_id,first_name,last_name,preferred_name,job_title,employment_type,phone,email,start_date,status,dbs_expiry,training_expiry,notes,employee_number,line_manager_staff_id,contracted_hours,work_location,probation_end_date,end_date,emergency_contact_name,emergency_contact_relationship,emergency_contact_phone,supervision_frequency_days,next_supervision_date,next_appraisal_date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,activeBranch(session),...v.values));
   if(createLogin){
-    const secured=await hashPassword(temporaryPassword), userId=crypto.randomUUID(), displayName=`${v.values[0]} ${v.values[1]}`.trim();
+    const secured=await hashPassword(await bootstrapPassword()), userId=crypto.randomUUID(), displayName=`${v.values[0]} ${v.values[1]}`.trim();
     statements.push(db.prepare(`INSERT INTO users (id,organisation_id,staff_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',1)`).bind(userId,session.organisation_id,id,loginEmail,displayName,legacyRole(accessLevel),accessLevel,activeBranch(session),secured.hash,secured.salt,PASSWORD_ITERATIONS));
+    const activation=await prepareAccountActivation(db,request,userId);statements.push(activation.statement);
     statements.push(auditStatement(db,session.organisation_id,session.user_id,'staff.login_created','user',userId,{staffId:id,email:loginEmail,accessLevel}));
-    invitation={userId,recipientEmail:loginEmail,recipientName:displayName,accessLabel:accessLevel.replaceAll('_',' '),temporaryPassword};
+    invitation={userId,recipientEmail:loginEmail,recipientName:displayName,accessLabel:accessLevel.replaceAll('_',' '),actionUrl:activation.actionUrl,sourceEventId:activation.sourceEventId};
   }
   statements.push(auditStatement(db,session.organisation_id,session.user_id,"staff.created","staff",id,{name:`${v.values[0]} ${v.values[1]}`,loginCreated:createLogin}));
   try{await db.batch(statements);}catch(error){if(String(error).includes('UNIQUE'))return json({error:{code:'LOGIN_EXISTS',message:'That login email is already in use, or this staff member already has a login.'}},409);throw error;}
-  const emailDelivery=invitation?await sendCareAccountEmail(env,session,{templateKey:'account_invitation',sourceEventId:`care-staff:${id}:login-created`,...invitation}):null;
+  const emailDelivery=invitation?await sendCareAccountEmail(env,session,{templateKey:'password_reset_link',...invitation}):null;
   const row=await db.prepare(`SELECT ${STAFF_COLUMNS} FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.id=? AND s.organisation_id=?`).bind(id,session.organisation_id).first(); return json({staff:toStaff(row),emailDelivery},201);
 }
 async function updateStaff(request, env, session, id) {
@@ -1618,14 +1725,15 @@ async function updateStaff(request, env, session, id) {
   const statements=[db.prepare(`UPDATE staff SET first_name=?,last_name=?,preferred_name=?,job_title=?,employment_type=?,phone=?,email=?,start_date=?,status=?,dbs_expiry=?,training_expiry=?,notes=?,employee_number=?,line_manager_staff_id=?,contracted_hours=?,work_location=?,probation_end_date=?,end_date=?,emergency_contact_name=?,emergency_contact_relationship=?,emergency_contact_phone=?,supervision_frequency_days=?,next_supervision_date=?,next_appraisal_date=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(...v.values,id,session.organisation_id)];let invitation=null;
   const createLogin=input.createLogin===true||clean(input.createLogin)==='on'||clean(input.createLogin)==='true';
   if(createLogin&&!existing.login_user_id){
-    const loginEmail=clean(input.loginEmail||input.email).toLowerCase(),accessLevel=clean(input.loginAccessLevel)||'carer',temporaryPassword=String(input.temporaryPassword||'');
-    if(!loginEmail||!allowedAccessLevels().includes(accessLevel)||!strongTemporaryPassword(temporaryPassword))return json({error:{code:'VALIDATION_ERROR',message:'Enter a login email, valid access level and temporary password of at least 12 characters with upper-case, lower-case and a number.'}},400);
+    const loginEmail=clean(input.loginEmail||input.email).toLowerCase(),accessLevel=clean(input.loginAccessLevel)||'carer';
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(loginEmail)||!allowedAccessLevels().includes(accessLevel))return json({error:{code:'VALIDATION_ERROR',message:'Enter a valid login email and access level.'}},400);
     if(!await userHasPermission(db,session,'security.users.manage')||!canAssignStandardRole(session.access_level||session.role,accessLevel))return forbidden('You cannot assign that access level.');
     const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;
-    const secured=await hashPassword(temporaryPassword),userId=crypto.randomUUID(),displayName=`${v.values[0]} ${v.values[1]}`.trim();
+    const secured=await hashPassword(await bootstrapPassword()),userId=crypto.randomUUID(),displayName=`${v.values[0]} ${v.values[1]}`.trim();
     statements.push(db.prepare(`INSERT INTO users (id,organisation_id,staff_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',1)`).bind(userId,session.organisation_id,id,loginEmail,displayName,legacyRole(accessLevel),accessLevel,activeBranch(session),secured.hash,secured.salt,PASSWORD_ITERATIONS));
+    const activation=await prepareAccountActivation(db,request,userId);statements.push(activation.statement);
     statements.push(auditStatement(db,session.organisation_id,session.user_id,'staff.login_created','user',userId,{staffId:id,email:loginEmail,accessLevel}));
-    invitation={userId,recipientEmail:loginEmail,recipientName:displayName,accessLabel:accessLevel.replaceAll('_',' '),temporaryPassword};
+    invitation={userId,recipientEmail:loginEmail,recipientName:displayName,accessLabel:accessLevel.replaceAll('_',' '),actionUrl:activation.actionUrl,sourceEventId:activation.sourceEventId};
   } else if(existing.login_user_id){
     const loginStatus=v.values[8]==='Inactive'?'disabled':(clean(input.loginStatus)||'active');
     if(loginStatus==='active'&&existing.login_status!=='active'){const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;}
@@ -1637,7 +1745,7 @@ async function updateStaff(request, env, session, id) {
   }
   statements.push(auditStatement(db,session.organisation_id,session.user_id,"staff.updated","staff",id,{status:v.values[8]}));
   try{await db.batch(statements);}catch(error){if(String(error).includes('UNIQUE'))return json({error:{code:'LOGIN_EXISTS',message:'That login email is already in use, or this staff member already has a login.'}},409);throw error;}
-  const emailDelivery=invitation?await sendCareAccountEmail(env,session,{templateKey:'account_invitation',sourceEventId:`care-staff:${id}:login-created`,...invitation}):null;
+  const emailDelivery=invitation?await sendCareAccountEmail(env,session,{templateKey:'password_reset_link',...invitation}):null;
   const row=await db.prepare(`SELECT ${STAFF_COLUMNS} FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.id=? AND s.organisation_id=?`).bind(id,session.organisation_id).first(); return json({staff:toStaff(row),emailDelivery});
 }
 function validateStaff(input){
@@ -1941,16 +2049,17 @@ async function createUser(request, env, session) {
   const role = legacyRole(accessLevel);
   const branchId = branchRestricted(session)?activeBranch(session):(clean(input.branchId)||null);
   const customRoleId = clean(input.customRoleId) || null;
-  const password = String(input.temporaryPassword || "");
-  if (!email || !name || !allowedAccessLevels().includes(accessLevel) || !strongTemporaryPassword(password)) return json({ error: { code: "VALIDATION_ERROR", message: "Enter a name, valid email, role and temporary password of at least 12 characters with upper-case, lower-case and a number." } }, 400);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !name || !allowedAccessLevels().includes(accessLevel)) return json({ error: { code: "VALIDATION_ERROR", message: "Enter a name, valid email and access level." } }, 400);
   if(!canAssignStandardRole(session.access_level||session.role,accessLevel))return forbidden('You cannot assign that access level.');
   if(!await customRoleAssignmentAllowed(db,session,customRoleId))return forbidden('You cannot assign that custom role.');
   const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;
-  const secured = await hashPassword(password);
+  const secured = await hashPassword(await bootstrapPassword());
   const id = crypto.randomUUID();
+  const activation=await prepareAccountActivation(db,request,id);
   try {
     await db.batch([
       db.prepare("INSERT INTO users (id,organisation_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password) VALUES (?,?,?,?,?,?,?,?,?,?, 'active',1)").bind(id, session.organisation_id, email, name, role, accessLevel, branchId, secured.hash, secured.salt, PASSWORD_ITERATIONS),
+      activation.statement,
       ...(customRoleId ? [db.prepare("INSERT INTO user_custom_roles(user_id,role_id,organisation_id,branch_id,assigned_by) SELECT ?,id,?,?,? FROM custom_roles WHERE id=? AND organisation_id=? AND is_active=1").bind(id,session.organisation_id,branchId,session.user_id,customRoleId,session.organisation_id)] : []),
       auditStatement(db, session.organisation_id, session.user_id, "user.created", "user", id, { email, role, accessLevel, branchId, customRoleId })
     ]);
@@ -1958,7 +2067,7 @@ async function createUser(request, env, session) {
     if (String(error).includes("UNIQUE")) return json({ error: { code: "EMAIL_EXISTS", message: "A user with that email already exists." } }, 409);
     throw error;
   }
-  const emailDelivery=await sendCareAccountEmail(env,session,{templateKey:'account_invitation',sourceEventId:`care-user:${id}:created`,userId:id,recipientEmail:email,recipientName:name,accessLabel:accessLevel.replaceAll('_',' '),temporaryPassword:password});
+  const emailDelivery=await sendCareAccountEmail(env,session,{templateKey:'password_reset_link',sourceEventId:activation.sourceEventId,userId:id,recipientEmail:email,recipientName:name,accessLabel:accessLevel.replaceAll('_',' '),actionUrl:activation.actionUrl});
   return json({ user: { id, email, displayName: name, role, accessLevel, branchId, status: "active", mustChangePassword: true },emailDelivery }, 201);
 }
 
@@ -2022,7 +2131,7 @@ async function permitted(db, session, permission, action) {
 function unauthorised(message = "Sign in to continue.") { return json({ error: { code: "UNAUTHORISED", message } }, 401, { "set-cookie": expiredSessionCookie() }); }
 function databaseRequired(message = "The D1 database binding named DB is not configured.") { return json({ error: { code: "DATABASE_NOT_CONFIGURED", message } }, 503); }
 function methodNotAllowed(allow) { return json({ error: { code: "METHOD_NOT_ALLOWED", message: "This method is not allowed." } }, 405, { allow: allow.join(", ") }); }
-function publicUser(row) { return { id: row.user_id || row.id, staffId: row.staff_id || null, organisationId: row.organisation_id, organisationName: row.organisation_name, branchId: row.active_branch_id || row.home_branch_id || null, branchName: row.branch_name || null, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, isPlatformUser: Boolean(row.is_platform_user), supportMode: Boolean(row.support_mode), supportOriginOrganisationId: row.support_origin_organisation_id || null, supportStartedAt: row.support_started_at || null, supportReason: row.support_reason || null, supportAccessMode: row.support_access_mode || null, subscriptionAccess: row.subscription_access || undefined, mustChangePassword: Boolean(row.must_change_password) }; }
+function publicUser(row) { return { id: row.user_id || row.id, staffId: row.staff_id || null, organisationId: row.organisation_id, organisationName: row.organisation_name, branchId: row.active_branch_id || row.home_branch_id || null, branchName: row.branch_name || null, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, isPlatformUser: Boolean(row.is_platform_user), supportMode: Boolean(row.support_mode), supportOriginOrganisationId: row.support_origin_organisation_id || null, supportStartedAt: row.support_started_at || null, supportReason: row.support_reason || null, supportAccessMode: row.support_access_mode || null, subscriptionAccess: row.subscription_access || undefined, mustChangePassword: Boolean(row.must_change_password),mfaEnabled:Boolean(row.mfa_enabled),authenticationMethod:row.authentication_method||null }; }
 function toUser(row) { return { id: row.id, email: row.email, displayName: row.display_name, role: row.role, accessLevel: row.access_level || row.role, branchId: row.home_branch_id || null, customRoleId: row.custom_role_id || null, customRoleName: row.custom_role_name || null, status: row.status, mustChangePassword: Boolean(row.must_change_password), lastLoginAt: row.last_login_at, createdAt: row.created_at }; }
 function clean(value) { return String(value ?? "").trim(); }
 function databaseTimestampMs(value) { const text=clean(value);return new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(text)?`${text.replace(' ','T')}Z`:text).getTime(); }
@@ -2069,7 +2178,7 @@ function cookieValue(request, name) { const match = request.headers.get("cookie"
 function sessionCookie(token, expires) { return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Strict; Expires=${expires.toUTCString()}`; }
 function expiredSessionCookie() { return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`; }
 async function hashPassword(password) { const salt = crypto.getRandomValues(new Uint8Array(16)); const hash = await derivePassword(password, salt, PASSWORD_ITERATIONS); return { salt: base64(salt), hash: base64(hash) }; }
-async function verifyPassword(password, saltBase64, expectedBase64, iterations) { const actual = await derivePassword(password, fromBase64(saltBase64), Math.min(Number(iterations) || PASSWORD_ITERATIONS, PASSWORD_ITERATIONS)); return timingSafeEqual(actual, fromBase64(expectedBase64)); }
+async function verifyPassword(password, saltBase64, expectedBase64, iterations) { const rounds=Number(iterations)||100000;if(rounds<100000||rounds>2000000)return false;const actual = await derivePassword(password, fromBase64(saltBase64), rounds); return timingSafeEqual(actual, fromBase64(expectedBase64)); }
 async function derivePassword(password, salt, iterations) { const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]); const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, key, 256); return new Uint8Array(bits); }
 async function sha256Base64(value) { const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)); return base64(new Uint8Array(digest)); }
 function timingSafeEqual(a, b) { if (a.length !== b.length) return false; let diff = 0; for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i]; return diff === 0; }
@@ -2084,15 +2193,16 @@ async function ensureOrganisationClient(db,session,clientId){return db.prepare(`
 async function listMedication(db,session,url){
   const clientId=clean(url.searchParams.get('clientId')); if(!clientId)return json({error:{code:'VALIDATION_ERROR',message:'Choose a client.'}},400);
   if(!await ensureOrganisationClient(db,session,clientId))return json({error:{code:'NOT_FOUND',message:'Client not found.'}},404);
-  const [meds,mar,stock]=await Promise.all([
+  const [meds,mar,stock,allergies]=await Promise.all([
     db.prepare(`SELECT m.*,u.display_name AS created_by_name FROM medications m LEFT JOIN users u ON u.id=m.created_by AND u.organisation_id=m.organisation_id WHERE m.organisation_id=? AND m.client_id=? ORDER BY CASE m.status WHEN 'active' THEN 0 ELSE 1 END,m.name`).bind(session.organisation_id,clientId).all(),
     db.prepare(`SELECT a.*,m.name AS medication_name,m.strength,m.dose,m.is_prn,u.display_name AS recorded_by_name FROM medication_administrations a JOIN medications m ON m.id=a.medication_id AND m.organisation_id=a.organisation_id LEFT JOIN users u ON u.id=a.recorded_by AND u.organisation_id=a.organisation_id WHERE a.organisation_id=? AND a.client_id=? ORDER BY a.administered_at DESC LIMIT 250`).bind(session.organisation_id,clientId).all(),
-    db.prepare(`SELECT t.*,m.name AS medication_name,u.display_name AS recorded_by_name FROM medication_stock_transactions t JOIN medications m ON m.id=t.medication_id AND m.organisation_id=t.organisation_id LEFT JOIN users u ON u.id=t.recorded_by AND u.organisation_id=t.organisation_id WHERE t.organisation_id=? AND t.client_id=? ORDER BY t.created_at DESC LIMIT 250`).bind(session.organisation_id,clientId).all()
+    db.prepare(`SELECT t.*,m.name AS medication_name,u.display_name AS recorded_by_name FROM medication_stock_transactions t JOIN medications m ON m.id=t.medication_id AND m.organisation_id=t.organisation_id LEFT JOIN users u ON u.id=t.recorded_by AND u.organisation_id=t.organisation_id WHERE t.organisation_id=? AND t.client_id=? ORDER BY t.created_at DESC LIMIT 250`).bind(session.organisation_id,clientId).all(),
+    db.prepare("SELECT substance,reaction,severity,verification_status FROM client_allergy_records WHERE organisation_id=? AND client_id=? AND verification_status NOT IN ('entered_in_error','inactive') ORDER BY CASE severity WHEN 'life_threatening' THEN 0 WHEN 'severe' THEN 1 ELSE 2 END,substance").bind(session.organisation_id,clientId).all()
   ]);
-  return json({medications:(meds.results||[]).map(x=>({...x,scheduledTimes:safeJson(x.scheduled_times_json,[])})),administrations:mar.results||[],stockTransactions:stock.results||[]});
+  return json({medications:(meds.results||[]).map(x=>({...x,scheduledTimes:safeJson(x.scheduled_times_json,[])})),administrations:mar.results||[],stockTransactions:stock.results||[],allergies:allergies.results||[]});
 }
 async function saveMedication(request,db,session){
-  const i=await readJson(request),clientId=clean(i.clientId),name=clean(i.name),dose=clean(i.dose),validation=validateMedicationProfile(i); if(!clientId||validation)return json({error:{code:'VALIDATION_ERROR',message:!clientId?'Choose a client.':validation}},400);
+  const i=await readJson(request),clientId=clean(i.clientId),name=clean(i.name),dose=clean(i.dose),validation=validateMedicationProfile(i),safety=validateMedicationSafetyProfile(i); if(!clientId||validation||!safety.valid)return json({error:{code:'VALIDATION_ERROR',message:!clientId?'Choose a client.':validation||`Complete the medication safety profile: ${safety.missing.join(', ')}.`}},400);
   if(i.controlledDrug&&(!clean(i.prescriberName)||!clean(i.authorisationReference)))return json({error:{code:'VALIDATION_ERROR',message:'Controlled medicines require the prescriber and prescription or authorisation reference.'}},400);
   if(!await ensureOrganisationClient(db,session,clientId))return json({error:{code:'NOT_FOUND',message:'Client not found.'}},404);
   const id=clean(i.id)||crypto.randomUUID(),times=Array.isArray(i.scheduledTimes)?i.scheduledTimes.map(clean).filter(Boolean):clean(i.scheduledTimes).split(',').map(x=>x.trim()).filter(Boolean);
@@ -2106,10 +2216,11 @@ async function saveMedication(request,db,session){
   }else{
     await db.prepare(`INSERT INTO medications(id,organisation_id,client_id,name,strength,form,route,dose,instructions,frequency,scheduled_times_json,start_date,end_date,is_prn,prn_protocol,min_interval_minutes,max_dose_24h,stock_quantity,stock_unit,low_stock_threshold,status,discontinued_reason,discontinued_at,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,clientId,...fields,session.user_id).run();
   }
-  await db.prepare(`UPDATE medications SET prescriber_name=?,pharmacy_name=?,authorisation_reference=?,controlled_drug=?,requires_witness=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.prescriberName),clean(i.pharmacyName),clean(i.authorisationReference),i.controlledDrug?1:0,(i.controlledDrug||i.requiresWitness)?1:0,id,session.organisation_id).run();
+  await db.prepare(`UPDATE medications SET prescriber_name=?,pharmacy_name=?,authorisation_reference=?,controlled_drug=?,requires_witness=?,indication=?,gp_name=?,review_date=?,dose_units_per_administration=?,max_dose_units_24h=?,dose_unit=?,time_critical=?,self_administration_status=?,covert_medication=?,covert_authorisation_id=?,reconciliation_status=?,reconciled_at=CASE WHEN ?='verified' THEN CURRENT_TIMESTAMP ELSE reconciled_at END,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.prescriberName),clean(i.pharmacyName),clean(i.authorisationReference),i.controlledDrug?1:0,(i.controlledDrug||i.requiresWitness)?1:0,clean(i.indication),clean(i.gpName),clean(i.reviewDate),safety.doseUnitsPerAdministration,safety.maxDoseUnits24h,clean(i.doseUnit)||clean(i.stockUnit)||'unit',i.timeCritical?1:0,clean(i.selfAdministrationStatus)||'staff_administered',safety.covert?1:0,clean(i.covertAuthorisationId)||null,clean(i.reconciliationStatus)||'not_recorded',clean(i.reconciliationStatus)||'not_recorded',id,session.organisation_id).run();
   await audit(db,session.organisation_id,session.user_id,'medication.saved','medication',id,{clientId,name,status}); return json({ok:true,id},201);
 }
 function localDateString(value){const d=value?new Date(value):new Date();return Number.isNaN(d.getTime())?'':`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+function organisationWallClock(timeZone='Europe/London',now=new Date()){let formatter;try{formatter=new Intl.DateTimeFormat('en-GB',{timeZone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});}catch{formatter=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/London',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});}const parts=Object.fromEntries(formatter.formatToParts(now).filter(part=>part.type!=='literal').map(part=>[part.type,part.value])),date=`${parts.year}-${parts.month}-${parts.day}`,time=`${parts.hour}:${parts.minute}:${parts.second}`;return {date,time,comparisonDate:new Date(`${date}T${time}Z`) };}
 async function medicationWitness(db,session,med,input){
   const outcome=clean(input.outcome);if(!Number(med.requires_witness)&&!Number(med.controlled_drug))return {userId:null,name:''};
   if(!['administered','prompted'].includes(outcome))return {userId:null,name:''};
@@ -2123,7 +2234,7 @@ async function medicationWitness(db,session,med,input){
   return {userId:witness.id,name:witness.display_name||witness.email};
 }
 async function administerMedication(request,db,session,id){
-  const med=await db.prepare('SELECT * FROM medications WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first(); if(!med)return json({error:{code:'NOT_FOUND',message:'Medication not found.'}},404);
+  const med=await db.prepare(`SELECT m.* FROM medications m JOIN clients c ON c.id=m.client_id AND c.organisation_id=m.organisation_id WHERE m.id=? AND m.organisation_id=? ${branchRestricted(session)?'AND c.branch_id=?':''}`).bind(id,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first(); if(!med)return json({error:{code:'NOT_FOUND',message:'Medication not found.'}},404);
   const i=await readJson(request),outcome=clean(i.outcome),validation=validateAdministration(i,med);if(validation)return json({error:{code:'VALIDATION_ERROR',message:validation}},400);
   const witness=await medicationWitness(db,session,med,i);if(witness.error)return json({error:{code:'WITNESS_REQUIRED',message:witness.error}},409);
   const administeredAt=new Date(clean(i.administeredAt)||Date.now()).toISOString(),scheduledAt=clean(i.scheduledAt)||null;
@@ -2132,10 +2243,15 @@ async function administerMedication(request,db,session,id){
     const previous=await db.prepare(`SELECT administered_at FROM medication_administrations WHERE organisation_id=? AND medication_id=? AND outcome IN ('administered','prompted') AND is_void=0 ORDER BY datetime(administered_at) DESC LIMIT 1`).bind(session.organisation_id,id).first();
     if(previous&&new Date(administeredAt).getTime()-new Date(previous.administered_at).getTime()<Number(med.min_interval_minutes)*60000)return json({error:{code:'PRN_INTERVAL',message:`The PRN minimum interval is ${med.min_interval_minutes} minutes. Check the previous administration before continuing.`}},409);
   }
-  const stockUsed=Math.max(0,Number(i.stockUsed)||0),stockChange=['administered','prompted'].includes(outcome)?-stockUsed:0,adminId=crypto.randomUUID();
+  const stockUsed=Math.max(0,Number(i.stockUsed)||0),doseUnits=Math.max(0,Number(i.doseUnits??med.dose_units_per_administration??stockUsed)||0),stockChange=['administered','prompted'].includes(outcome)?-stockUsed:0,adminId=crypto.randomUUID();
+  if(med.is_prn&&['administered','prompted'].includes(outcome)){const prior=(await db.prepare("SELECT administered_at,outcome,is_void,dose_units,stock_change FROM medication_administrations WHERE organisation_id=? AND medication_id=? AND datetime(administered_at)>datetime(?,'-24 hours') ORDER BY datetime(administered_at)").bind(session.organisation_id,id,administeredAt).all()).results||[],prn=assessPrnAdministration(med,prior,doseUnits,new Date(administeredAt));if(!prn.allowed)return json({error:{code:'PRN_MAXIMUM',message:`This dose would total ${prn.total} ${med.dose_unit||'units'} in 24 hours; the authorised maximum is ${prn.maximum}.`,details:prn}},409);}
   const balance=med.stock_quantity===null?null:Number(med.stock_quantity)+stockChange;
+  if(balance!==null&&balance<0)return json({error:{code:'INSUFFICIENT_STOCK',message:`Only ${med.stock_quantity} ${med.stock_unit||'units'} are recorded in stock.`}},409);
+  const [allergyRows,clientSafety]=await Promise.all([db.prepare("SELECT substance,reaction,severity,verification_status FROM client_allergy_records WHERE organisation_id=? AND client_id=? AND verification_status NOT IN ('entered_in_error','inactive') ORDER BY substance").bind(session.organisation_id,med.client_id).all(),db.prepare('SELECT allergies FROM clients WHERE id=? AND organisation_id=?').bind(med.client_id,session.organisation_id).first()]);
+  const allergySnapshot={structured:allergyRows.results||[],legacy:clean(clientSafety?.allergies)||null},administrationMode=clean(i.administrationMode)||({prompted:'prompted'}[outcome]||'staff'),idempotencyKey=clean(i.idempotencyKey)||null;
+  if(med.covert_medication&&administrationMode!=='covert')return json({error:{code:'COVERT_MODE_REQUIRED',message:'This medicine has an active covert pathway. Record the authorised covert administration mode.'}},409);
   const statements=[
-    db.prepare(`INSERT INTO medication_administrations(id,organisation_id,medication_id,client_id,visit_id,scheduled_at,scheduled_date,administered_at,outcome,dose_given,reason,notes,stock_change,prn_reason,prn_effectiveness,effectiveness_reviewed_at,recorded_by,witness_user_id,witness_name) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(adminId,session.organisation_id,id,med.client_id,clean(i.visitId)||null,scheduledAt,scheduledAt?localDateString(scheduledAt):localDateString(administeredAt),administeredAt,outcome,clean(i.doseGiven)||med.dose,clean(i.reason),clean(i.notes),stockChange,clean(i.prnReason),clean(i.prnEffectiveness),clean(i.prnEffectiveness)?new Date().toISOString():null,session.user_id,witness.userId,witness.name),
+    db.prepare(`INSERT INTO medication_administrations(id,organisation_id,medication_id,client_id,visit_id,scheduled_at,scheduled_date,administered_at,outcome,dose_given,reason,notes,stock_change,prn_reason,prn_effectiveness,effectiveness_reviewed_at,recorded_by,witness_user_id,witness_name,allergy_snapshot_json,allergy_checked_at,administration_mode,dose_units,idempotency_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(adminId,session.organisation_id,id,med.client_id,clean(i.visitId)||null,scheduledAt,scheduledAt?localDateString(scheduledAt):localDateString(administeredAt),administeredAt,outcome,clean(i.doseGiven)||med.dose,clean(i.reason),clean(i.notes),stockChange,clean(i.prnReason),clean(i.prnEffectiveness),clean(i.prnEffectiveness)?new Date().toISOString():null,session.user_id,witness.userId,witness.name,JSON.stringify(allergySnapshot),new Date().toISOString(),administrationMode,doseUnits||null,idempotencyKey),
     db.prepare(`UPDATE medications SET stock_quantity=CASE WHEN stock_quantity IS NULL THEN NULL ELSE stock_quantity+? END,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(stockChange,id,session.organisation_id),
     auditStatement(db,session.organisation_id,session.user_id,'medication.administered','medication_administration',adminId,{medicationId:id,outcome,clientId:med.client_id,scheduledAt})
   ];
@@ -2143,10 +2259,10 @@ async function administerMedication(request,db,session,id){
   if(['refused','omitted','unavailable','missed'].includes(outcome))statements.push(db.prepare(`INSERT INTO operations_tasks(id,organisation_id,branch_id,client_id,title,description,category,priority,status,due_at,created_by) VALUES(?,?,(SELECT branch_id FROM clients WHERE id=? AND organisation_id=?),?,?,?,'Medication','high','open',?,?)`).bind(crypto.randomUUID(),session.organisation_id,med.client_id,session.organisation_id,med.client_id,`${med.name}: ${outcome}`,clean(i.reason)||`Follow up the ${outcome} eMAR outcome.`,new Date().toISOString(),session.user_id));
   if(balance!==null&&balance<=Number(med.low_stock_threshold??5))statements.push(db.prepare(`INSERT INTO operations_tasks(id,organisation_id,branch_id,client_id,title,description,category,priority,status,due_at,created_by) SELECT ?,(?),c.branch_id,c.id,?,?,'Medication','high','open',?,? FROM clients c WHERE c.id=? AND c.organisation_id=? AND NOT EXISTS (SELECT 1 FROM operations_tasks WHERE organisation_id=? AND client_id=? AND category='Medication' AND status IN ('open','escalated') AND title=?)`).bind(crypto.randomUUID(),session.organisation_id,`Low stock: ${med.name}`,`${balance} ${med.stock_unit||'units'} remaining; threshold ${med.low_stock_threshold??5}.`,new Date().toISOString(),session.user_id,med.client_id,session.organisation_id,session.organisation_id,med.client_id,`Low stock: ${med.name}`));
   try{await db.batch(statements);}catch(e){if(String(e?.message||e).includes('UNIQUE'))return json({error:{code:'DUPLICATE_ENTRY',message:'This scheduled dose already has an eMAR outcome.'}},409);throw e;}
-  return json({ok:true,id:adminId},201);
+  return json({ok:true,id:adminId,allergiesChecked:allergySnapshot},201);
 }
 async function dailyMar(db,session,url){
-  const clientId=clean(url.searchParams.get('clientId')),date=clean(url.searchParams.get('date'))||localDateString();
+  const clientId=clean(url.searchParams.get('clientId')),organisation=await db.prepare('SELECT timezone FROM organisations WHERE id=?').bind(session.organisation_id).first(),wallClock=organisationWallClock(organisation?.timezone),date=clean(url.searchParams.get('date'))||wallClock.date;
   if(!clientId)return json({error:{code:'VALIDATION_ERROR',message:'Choose a client.'}},400);
   if(!await ensureOrganisationClient(db,session,clientId))return json({error:{code:'NOT_FOUND',message:'Client not found.'}},404);
   const [meds,entries]=await Promise.all([
@@ -2157,20 +2273,21 @@ async function dailyMar(db,session,url){
   for(const m of meds.results||[]){
     const times=safeJson(m.scheduled_times_json,[]);
     if(m.is_prn){rows.push({kind:'prn',medication:m,scheduledAt:null,entry:null});continue;}
-    for(const time of times){const scheduledAt=`${date}T${time.length===5?time+':00':time}`;const entry=(entries.results||[]).find(e=>e.medication_id===m.id&&e.scheduled_at===scheduledAt&&!e.is_void);rows.push({kind:'scheduled',medication:m,scheduledAt,entry:entry||null});}
+    const slots=medicationDueSlots({...m,administrations:entries.results||[]},date,wallClock.comparisonDate,Number(m.time_critical)?15:30);
+    for(const slot of slots)rows.push({kind:slot.overdue?'overdue':'scheduled',medication:m,scheduledAt:slot.scheduledAt,entry:slot.entry||null,overdue:slot.overdue});
     if(!times.length)rows.push({kind:'unscheduled',medication:m,scheduledAt:null,entry:null});
   }
   return json({date,rows,entries:entries.results||[]});
 }
 async function adjustMedicationStock(request,db,session,id){
-  const med=await db.prepare('SELECT * FROM medications WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();if(!med)return json({error:{code:'NOT_FOUND',message:'Medication not found.'}},404);
+  const med=await db.prepare(`SELECT m.* FROM medications m JOIN clients c ON c.id=m.client_id AND c.organisation_id=m.organisation_id WHERE m.id=? AND m.organisation_id=? ${branchRestricted(session)?'AND c.branch_id=?':''}`).bind(id,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first();if(!med)return json({error:{code:'NOT_FOUND',message:'Medication not found.'}},404);
   const i=await readJson(request),quantity=Number(i.quantity),type=clean(i.transactionType)||'adjustment',reason=clean(i.reason);if(!Number.isFinite(quantity)||quantity===0)return json({error:{code:'VALIDATION_ERROR',message:'Enter a non-zero stock quantity.'}},400);if(!reason)return json({error:{code:'VALIDATION_ERROR',message:'Enter a reason for the stock change.'}},400);
   if(!['receipt','return','waste','adjustment'].includes(type))return json({error:{code:'VALIDATION_ERROR',message:'Choose a valid stock transaction type.'}},400);
   const current=Number(med.stock_quantity)||0,balance=current+quantity,tid=crypto.randomUUID();if(balance<0)return json({error:{code:'VALIDATION_ERROR',message:`This change would make stock negative. Current stock is ${current}.`}},400);
   await db.batch([db.prepare('UPDATE medications SET stock_quantity=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?').bind(balance,id,session.organisation_id),db.prepare(`INSERT INTO medication_stock_transactions(id,organisation_id,medication_id,client_id,transaction_type,quantity,balance_after,reason,recorded_by) VALUES(?,?,?,?,?,?,?,?,?)`).bind(tid,session.organisation_id,id,med.client_id,type,quantity,balance,reason,session.user_id),auditStatement(db,session.organisation_id,session.user_id,'medication.stock_adjusted','medication',id,{quantity,balance,reason,type})]);return json({ok:true,balance},201);
 }
 async function correctMedicationAdministration(request,db,session,id){
-  const original=await db.prepare(`SELECT a.*,m.stock_quantity,m.client_id AS med_client_id,m.requires_witness,m.controlled_drug FROM medication_administrations a JOIN medications m ON m.id=a.medication_id AND m.organisation_id=a.organisation_id WHERE a.id=? AND a.organisation_id=?`).bind(id,session.organisation_id).first();if(!original)return json({error:{code:'NOT_FOUND',message:'MAR entry not found.'}},404);if(original.is_void)return json({error:{code:'VALIDATION_ERROR',message:'This MAR entry has already been corrected.'}},400);
+  const original=await db.prepare(`SELECT a.*,m.stock_quantity,m.client_id AS med_client_id,m.requires_witness,m.controlled_drug FROM medication_administrations a JOIN medications m ON m.id=a.medication_id AND m.organisation_id=a.organisation_id JOIN clients c ON c.id=a.client_id AND c.organisation_id=a.organisation_id WHERE a.id=? AND a.organisation_id=? ${branchRestricted(session)?'AND c.branch_id=?':''}`).bind(id,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first();if(!original)return json({error:{code:'NOT_FOUND',message:'MAR entry not found.'}},404);if(original.is_void)return json({error:{code:'VALIDATION_ERROR',message:'This MAR entry has already been corrected.'}},400);
   const i=await readJson(request),reason=clean(i.correctionReason);if(!reason)return json({error:{code:'VALIDATION_ERROR',message:'Enter the reason for correction.'}},400);
   const witness=await medicationWitness(db,session,original,i);if(witness.error)return json({error:{code:'WITNESS_REQUIRED',message:witness.error}},409);
   const outcome=clean(i.outcome)||original.outcome,allowed=['administered','prompted','refused','omitted','unavailable','hospitalised','asleep','missed'];if(!allowed.includes(outcome))return json({error:{code:'VALIDATION_ERROR',message:'Choose a valid corrected outcome.'}},400);
@@ -2200,7 +2317,7 @@ async function createBodyMapRecord(request,db,session){
 }
 async function updateBodyMapRecord(request,env,session,id){
   const db=env.DB;
-  const row=await db.prepare('SELECT * FROM body_map_records WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first(); if(!row)return json({error:{code:'NOT_FOUND',message:'Body map concern not found.'}},404); const i=await readJson(request),validation=validateBodyMap({...i,view:row.view,severity:clean(i.severity)||row.severity},{update:true});if(validation)return json({error:{code:'VALIDATION_ERROR',message:validation}},400); const note=clean(i.note),status=clean(i.status)||row.status,severity=clean(i.severity)||row.severity,uid=crypto.randomUUID(),shouldCreateIncident=Boolean(i.createIncident||(['high','critical'].includes(severity)&&(!['high','critical'].includes(row.severity)||row.status==='resolved'))),incidentId=shouldCreateIncident?crypto.randomUUID():null;
+  const row=await db.prepare(`SELECT b.* FROM body_map_records b JOIN clients c ON c.id=b.client_id AND c.organisation_id=b.organisation_id WHERE b.id=? AND b.organisation_id=? ${branchRestricted(session)?'AND c.branch_id=?':''}`).bind(id,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first(); if(!row)return json({error:{code:'NOT_FOUND',message:'Body map concern not found.'}},404); const i=await readJson(request),validation=validateBodyMap({...i,view:row.view,severity:clean(i.severity)||row.severity},{update:true});if(validation)return json({error:{code:'VALIDATION_ERROR',message:validation}},400); const note=clean(i.note),status=clean(i.status)||row.status,severity=clean(i.severity)||row.severity,uid=crypto.randomUUID(),shouldCreateIncident=Boolean(i.createIncident||(['high','critical'].includes(severity)&&(!['high','critical'].includes(row.severity)||row.status==='resolved'))),incidentId=shouldCreateIncident?crypto.randomUUID():null;
   const statements=[db.prepare(`INSERT INTO body_map_updates(id,organisation_id,body_map_record_id,note,appearance,action_taken,status,recorded_by) VALUES(?,?,?,?,?,?,?,?)`).bind(uid,session.organisation_id,id,note,clean(i.appearance),clean(i.actionTaken),status,session.user_id),db.prepare(`UPDATE body_map_records SET size=COALESCE(NULLIF(?,''),size),appearance=COALESCE(NULLIF(?,''),appearance),severity=?,action_taken=COALESCE(NULLIF(?,''),action_taken),status=?,linked_incident_id=COALESCE(?,linked_incident_id),resolved_at=CASE WHEN ?='resolved' THEN CURRENT_TIMESTAMP ELSE NULL END,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.size),clean(i.appearance),severity,clean(i.actionTaken),status,incidentId,status,id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'body_map.updated','body_map_record',id,{status,severity,incidentId})];
   if(incidentId)statements.push(db.prepare(`INSERT INTO operations_incidents(id,organisation_id,reference_number,branch_id,client_id,reported_by,category,severity,title,description,status,occurred_at,immediate_action,duty_of_candour_required) VALUES(?,?,?,(SELECT branch_id FROM clients WHERE id=? AND organisation_id=?),?,?,?,?,?,?,'open',?,?,?)`).bind(incidentId,session.organisation_id,incidentReference(incidentId),row.client_id,session.organisation_id,row.client_id,session.user_id,'Body map',severity,`${row.concern_type}: ${row.body_location||'body-map concern'}`,`Body map record ${id}${row.status==='resolved'?' reopened':' escalated'}. ${note}`,new Date().toISOString(),clean(i.actionTaken),['high','critical'].includes(severity)?1:0));
   await db.batch(statements);
@@ -2244,8 +2361,8 @@ async function platformNotifications(db,session){
 async function platformSystemHealth(db,session){
   if(!requirePlatform(session)) return forbidden();
   const [sessions,recentUsers,errors,auditCount,supportActive,support24h,errorRows,supportRows,jobs,incidents,hourlyAudit,hourlyErrors]=await Promise.all([
-    db.prepare("SELECT COUNT(*) total FROM sessions WHERE expires_at>CURRENT_TIMESTAMP").first(),
-    db.prepare("SELECT COUNT(DISTINCT user_id) total FROM sessions WHERE last_seen_at>=datetime('now','-30 minutes') AND expires_at>CURRENT_TIMESTAMP").first(),
+    db.prepare("SELECT COUNT(*) total FROM sessions WHERE datetime(expires_at)>CURRENT_TIMESTAMP").first(),
+    db.prepare("SELECT COUNT(DISTINCT user_id) total FROM sessions WHERE last_seen_at>=datetime('now','-30 minutes') AND datetime(expires_at)>CURRENT_TIMESTAMP").first(),
     db.prepare("SELECT COUNT(*) total FROM api_error_log WHERE created_at>=datetime('now','-24 hours')").first(),
     db.prepare("SELECT COUNT(*) total FROM audit_log WHERE created_at>=datetime('now','-24 hours')").first(),
     db.prepare("SELECT COUNT(*) total FROM support_sessions WHERE ended_at IS NULL").first(),
@@ -2356,7 +2473,7 @@ async function platformDashboard(db, session) {
     db.prepare("SELECT COUNT(*) AS total FROM clients WHERE status<>'Archived'").first(), db.prepare("SELECT COUNT(*) AS total FROM staff WHERE status='Active'").first(),
     db.prepare("SELECT organisation_id,review_date,status FROM care_plans WHERE status='Active'").all(), db.prepare("SELECT organisation_id,severity,status FROM risk_assessments WHERE status='Active'").all(),
     db.prepare(`SELECT a.action,a.entity_type,a.created_at,o.name AS organisation_name,u.display_name AS user_name FROM audit_log a JOIN organisations o ON o.id=a.organisation_id LEFT JOIN users u ON u.id=a.user_id ORDER BY a.created_at DESC LIMIT 18`).all(),
-    db.prepare("SELECT COUNT(*) AS total FROM api_error_log WHERE created_at>=datetime('now','-1 day')").first(), db.prepare("SELECT COUNT(*) AS total FROM sessions WHERE expires_at>CURRENT_TIMESTAMP").first()
+    db.prepare("SELECT COUNT(*) AS total FROM api_error_log WHERE created_at>=datetime('now','-1 day')").first(), db.prepare("SELECT COUNT(*) AS total FROM sessions WHERE datetime(expires_at)>CURRENT_TIMESTAMP").first()
   ]);
   const orgRows=orgs.results||[], planRows=plans.results||[], riskRows=risks.results||[];
   const perOrgPlans={},perOrgRisks={}; for(const p of planRows)(perOrgPlans[p.organisation_id]??=[]).push(p); for(const r of riskRows)(perOrgRisks[r.organisation_id]??=[]).push(r);
@@ -2577,38 +2694,38 @@ async function listFamilyAccounts(db,session){
 function strongTemporaryPassword(password){return password.length>=12&&/[A-Z]/.test(password)&&/[a-z]/.test(password)&&/[0-9]/.test(password);}
 async function createFamilyAccount(request,env,session){
   const db=env.DB;
-  const input=await readJson(request),email=clean(input.email).toLowerCase(),name=clean(input.displayName),password=String(input.temporaryPassword||''),clientId=clean(input.clientId),flags=normaliseFamilyPortalAccess(input),consentBasis=clean(input.consentBasis).slice(0,1000);
-  if(!name||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!strongTemporaryPassword(password)||consentBasis.length<8||flags.relationship.length<2||!/^\d{4}-\d{2}-\d{2}$/.test(flags.accessReviewDate))return json({error:{code:'VALIDATION_ERROR',message:'Enter a name, valid email, relationship, access review date, strong temporary password and a clear authority or consent basis.'}},400);
+  const input=await readJson(request),email=clean(input.email).toLowerCase(),name=clean(input.displayName),clientId=clean(input.clientId),flags=normaliseFamilyPortalAccess(input),consentBasis=clean(input.consentBasis).slice(0,1000);
+  if(!name||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||consentBasis.length<8||flags.relationship.length<2||!/^\d{4}-\d{2}-\d{2}$/.test(flags.accessReviewDate))return json({error:{code:'VALIDATION_ERROR',message:'Enter a name, valid email, relationship, access review date and a clear authority or consent basis.'}},400);
   const restricted=branchRestricted(session),branch=activeBranch(session);
   const client=await db.prepare(`SELECT id,branch_id FROM clients WHERE id=? AND organisation_id=? ${restricted?'AND branch_id=?':''} AND archived_at IS NULL`).bind(clientId,session.organisation_id,...(restricted?[branch]:[])).first();
   if(!client)return json({error:{code:'VALIDATION_ERROR',message:'Choose an active client from this organisation or branch.'}},400);
   const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;
-  const secured=await hashPassword(password),userId=crypto.randomUUID(),accessId=crypto.randomUUID(),role=legacyRole('family');
+  const secured=await hashPassword(await bootstrapPassword()),userId=crypto.randomUUID(),accessId=crypto.randomUUID(),role=legacyRole('family'),activation=await prepareAccountActivation(db,request,userId);
   try{
     await db.batch([
       db.prepare("INSERT INTO users (id,organisation_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password) VALUES (?,?,?,?,?,'family',?,?,?,?, 'active',1)").bind(userId,session.organisation_id,email,name,role,client.branch_id||null,secured.hash,secured.salt,PASSWORD_ITERATIONS),
+      activation.statement,
       db.prepare("INSERT INTO family_client_access(id,organisation_id,user_id,client_id,can_view_profile,can_view_visits,can_view_care_updates,can_view_documents,can_view_medication,can_view_care_plan,can_message_team,relationship_label,access_review_date,status,consent_basis,consent_recorded_at,consent_recorded_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'active',?,CURRENT_TIMESTAMP,?,CURRENT_TIMESTAMP)").bind(accessId,session.organisation_id,userId,client.id,flags.canViewProfile?1:0,flags.canViewVisits?1:0,flags.canViewCareUpdates?1:0,flags.canViewDocuments?1:0,flags.canViewMedication?1:0,flags.canViewCarePlan?1:0,flags.canMessageTeam?1:0,flags.relationship,flags.accessReviewDate,consentBasis,session.user_id),
       auditStatement(db,session.organisation_id,session.user_id,'family.account_created','user',userId,{email,clientId:client.id}),
       auditStatement(db,session.organisation_id,session.user_id,'family.access_granted','family_client_access',accessId,{userId,clientId:client.id,...flags,consentBasisRecorded:true})
     ]);
   }catch(error){if(String(error).includes('UNIQUE'))return json({error:{code:'EMAIL_EXISTS',message:'A user with that email already exists.'}},409);throw error;}
-  const emailDelivery=await sendCareAccountEmail(env,session,{templateKey:'account_invitation',sourceEventId:`care-family:${userId}:created`,userId,recipientEmail:email,recipientName:name,accessLabel:'Family portal',temporaryPassword:password});
+  const emailDelivery=await sendCareAccountEmail(env,session,{templateKey:'password_reset_link',sourceEventId:activation.sourceEventId,userId,recipientEmail:email,recipientName:name,accessLabel:'Family portal',actionUrl:activation.actionUrl});
   return json({account:{id:userId,email,displayName:name,role,accessLevel:'family',branchId:client.branch_id||null,status:'active',mustChangePassword:true},access:{id:accessId,userId,clientId:client.id,consentBasis,...flags},emailDelivery},201);
 }
 async function updateFamilyAccount(request,env,session,id){
   const db=env.DB;
-  const input=await readJson(request),name=clean(input.displayName),status=clean(input.status),password=String(input.temporaryPassword||''),restricted=branchRestricted(session),branch=activeBranch(session);
-  if(!name||!['active','disabled'].includes(status)||(password&&!strongTemporaryPassword(password)))return json({error:{code:'VALIDATION_ERROR',message:'Enter a name and valid status. A new temporary password must have at least 12 characters with upper-case, lower-case and a number.'}},400);
+  const input=await readJson(request),name=clean(input.displayName),status=clean(input.status),sendResetLink=input.sendResetLink===true||input.sendResetLink==='true'||input.sendResetLink==='on',restricted=branchRestricted(session),branch=activeBranch(session);
+  if(!name||!['active','disabled'].includes(status))return json({error:{code:'VALIDATION_ERROR',message:'Enter a name and valid status.'}},400);
   const account=await db.prepare(`SELECT u.id,u.email,u.status FROM users u WHERE u.id=? AND u.organisation_id=? AND u.access_level='family' ${restricted?'AND (u.home_branch_id=? OR EXISTS (SELECT 1 FROM family_client_access f JOIN clients c ON c.id=f.client_id AND c.organisation_id=f.organisation_id WHERE f.user_id=u.id AND f.organisation_id=u.organisation_id AND c.branch_id=?))':''}`).bind(id,session.organisation_id,...(restricted?[branch,branch]:[])).first();
   if(!account)return notFound('Family account');
   if(status==='active'&&account.status!=='active'){const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;}
-  const statements=[];
-  if(password){const secured=await hashPassword(password);statements.push(db.prepare("UPDATE users SET display_name=?,status=?,password_hash=?,password_salt=?,password_iterations=?,must_change_password=1,password_changed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND access_level='family'").bind(name,status,secured.hash,secured.salt,PASSWORD_ITERATIONS,id,session.organisation_id));}
-  else statements.push(db.prepare("UPDATE users SET display_name=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND access_level='family'").bind(name,status,id,session.organisation_id));
-  if(status==='disabled'||password)statements.push(db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id));
-  statements.push(auditStatement(db,session.organisation_id,session.user_id,'family.account_updated','user',id,{email:account.email,status,passwordReset:Boolean(password)}));
+  const statements=[db.prepare("UPDATE users SET display_name=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND access_level='family'").bind(name,status,id,session.organisation_id)];
+  let activation=null;if(sendResetLink&&status==='active'){activation=await prepareAccountActivation(db,request,id);statements.push(db.prepare("UPDATE password_reset_tokens SET consumed_at=CURRENT_TIMESTAMP WHERE user_id=? AND consumed_at IS NULL").bind(id),activation.statement);}
+  if(status==='disabled'||sendResetLink)statements.push(db.prepare('DELETE FROM sessions WHERE user_id=?').bind(id));
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,'family.account_updated','user',id,{email:account.email,status,passwordResetLinkSent:sendResetLink}));
   await db.batch(statements);
-  const emailDelivery=password?await sendCareAccountEmail(env,session,{templateKey:'password_reset',sourceEventId:`care-family:${id}:password-reset:${crypto.randomUUID()}`,userId:id,recipientEmail:account.email,recipientName:name,accessLabel:'Family portal',temporaryPassword:password}):null;
+  const emailDelivery=activation?await sendCareAccountEmail(env,session,{templateKey:'password_reset_link',sourceEventId:activation.sourceEventId,userId:id,recipientEmail:account.email,recipientName:name,accessLabel:'Family portal',actionUrl:activation.actionUrl}):null;
   return json({ok:true,emailDelivery});
 }
 async function saveFamilyAccess(request,db,session){
@@ -2914,7 +3031,7 @@ async function securityOverview(db,session){if(!await userHasPermission(db,sessi
 async function listActiveSessions(db,session){if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.sessions.manage'))return forbidden();const r=await db.prepare(`SELECT s.id,s.user_id,s.created_at,s.last_seen_at,s.expires_at,s.user_agent,s.ip_hint,u.display_name,u.email FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.organisation_id=? AND datetime(s.expires_at)>CURRENT_TIMESTAMP ORDER BY s.last_seen_at DESC`).bind(session.organisation_id).all();return json({sessions:r.results||[],currentSessionId:session.session_id});}
 async function revokeSession(db,session,id){if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.sessions.manage'))return forbidden();if(id===session.session_id)return json({error:{code:'CURRENT_SESSION',message:'Use sign out to end your current session.'}},400);const target=await db.prepare('SELECT id,user_id FROM sessions WHERE id=? AND organisation_id=?').bind(id,session.organisation_id).first();if(!target)return json({error:{code:'NOT_FOUND',message:'Session not found.'}},404);await db.batch([db.prepare('DELETE FROM sessions WHERE id=? AND organisation_id=?').bind(id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'security.session_revoked','session',id,{targetUserId:target.user_id})]);return json({ok:true});}
 async function getSecurityPolicy(db,session){if(!await userHasPermission(db,session,'organisation.settings.view'))return forbidden();await db.prepare('INSERT OR IGNORE INTO organisation_security_policies(organisation_id) VALUES(?)').bind(session.organisation_id).run();const p=await db.prepare('SELECT * FROM organisation_security_policies WHERE organisation_id=?').bind(session.organisation_id).first();return json({policy:p});}
-async function updateSecurityPolicy(request,db,session){if(!await userHasPermission(db,session,'organisation.settings.manage'))return forbidden();const i=await readJson(request),hours=Math.max(1,Math.min(168,Number(i.sessionHours)||12)),idle=Math.max(5,Math.min(1440,Number(i.idleTimeoutMinutes)||60));if(i.requireMfa||i.requireTrustedDevice||i.allowPasswordLogin===false)return json({error:{code:'SECURITY_METHOD_NOT_CONFIGURED',message:'MFA, trusted-device enforcement and passwordless sign-in cannot be enabled until an alternative sign-in provider is configured.'}},409);await db.batch([db.prepare(`INSERT INTO organisation_security_policies(organisation_id,require_mfa,session_hours,idle_timeout_minutes,allow_password_login,require_trusted_device,updated_at) VALUES(?,0,?,?,1,0,CURRENT_TIMESTAMP) ON CONFLICT(organisation_id) DO UPDATE SET require_mfa=0,session_hours=excluded.session_hours,idle_timeout_minutes=excluded.idle_timeout_minutes,allow_password_login=1,require_trusted_device=0,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,hours,idle),auditStatement(db,session.organisation_id,session.user_id,'security.policy_updated','organisation_security_policy',session.organisation_id,{hours,idle,requireMfa:false,requireTrustedDevice:false,allowPasswordLogin:true})]);return getSecurityPolicy(db,session);}
+async function updateSecurityPolicy(request,db,session){if(!await userHasPermission(db,session,'organisation.settings.manage'))return forbidden();const i=await readJson(request),hours=Math.max(1,Math.min(168,Number(i.sessionHours)||12)),idle=Math.max(5,Math.min(1440,Number(i.idleTimeoutMinutes)||60)),requireMfa=Boolean(i.requireMfa);if(i.requireTrustedDevice||i.allowPasswordLogin===false)return json({error:{code:'SECURITY_METHOD_NOT_CONFIGURED',message:'Trusted-device enforcement and passwordless sign-in are not configured.'}},409);const statements=[db.prepare(`INSERT INTO organisation_security_policies(organisation_id,require_mfa,session_hours,idle_timeout_minutes,allow_password_login,require_trusted_device,updated_at) VALUES(?,?,?,?,1,0,CURRENT_TIMESTAMP) ON CONFLICT(organisation_id) DO UPDATE SET require_mfa=excluded.require_mfa,session_hours=excluded.session_hours,idle_timeout_minutes=excluded.idle_timeout_minutes,allow_password_login=1,require_trusted_device=0,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,requireMfa?1:0,hours,idle),auditStatement(db,session.organisation_id,session.user_id,'security.policy_updated','organisation_security_policy',session.organisation_id,{hours,idle,requireMfa,requireTrustedDevice:false,allowPasswordLogin:true})];if(requireMfa)statements.push(db.prepare('DELETE FROM sessions WHERE organisation_id=? AND mfa_verified_at IS NULL').bind(session.organisation_id));await db.batch(statements);return getSecurityPolicy(db,session);}
 async function listLoginHistory(db,session){if(!await userHasPermission(db,session,'security.audit.view'))return forbidden();const r=await db.prepare(`SELECT lh.*,u.display_name,u.email FROM login_history lh LEFT JOIN users u ON u.id=lh.user_id WHERE lh.organisation_id=? ORDER BY lh.created_at DESC LIMIT 100`).bind(session.organisation_id).all();return json({events:r.results||[]});}
 async function effectiveAccess(db,session,url){if(!await userHasPermission(db,session,'security.users.view'))return forbidden();const userId=clean(url.searchParams.get('userId'));const user=await db.prepare('SELECT id,display_name,email,role,access_level,home_branch_id FROM users WHERE id=? AND organisation_id=?').bind(userId,session.organisation_id).first();if(!user)return json({error:{code:'NOT_FOUND',message:'User not found.'}},404);const catalog=await db.prepare('SELECT permission_key,category,name,risk_level FROM permission_catalog ORDER BY category,name').all();const fake={...session,user_id:user.id,role:user.role,access_level:user.access_level,home_branch_id:user.home_branch_id,is_platform_user:0,_permissionFacts:null};const permissions=[];for(const p of catalog.results||[])if(await userHasPermission(db,fake,p.permission_key))permissions.push(p);return json({user,permissions});}
 async function accessGovernance(db,session){
@@ -2982,7 +3099,7 @@ async function platformAssistant(request, db, session) {
     db.prepare("SELECT organisation_id,COUNT(*) total,COUNT(CASE WHEN review_date<date('now') AND status='Active' THEN 1 END) overdue FROM care_plans GROUP BY organisation_id").all(),
     db.prepare("SELECT organisation_id,COUNT(*) total,COUNT(CASE WHEN severity='High' AND status='Active' THEN 1 END) high FROM risk_assessments GROUP BY organisation_id").all(),
     db.prepare("SELECT COUNT(*) total FROM api_error_log WHERE created_at>=datetime('now','-1 day')").first(),
-    db.prepare("SELECT COUNT(*) total FROM sessions WHERE expires_at>CURRENT_TIMESTAMP").first(),
+    db.prepare("SELECT COUNT(*) total FROM sessions WHERE datetime(expires_at)>CURRENT_TIMESTAMP").first(),
     db.prepare("SELECT COUNT(*) total FROM support_sessions WHERE ended_at IS NULL").first(),
     db.prepare("SELECT COALESCE(SUM(amount_pence),0) total FROM revenue_events WHERE occurred_at>=date('now','start of month')").first()
   ]);
@@ -3064,7 +3181,7 @@ const MODULE_PERMISSION_MAP = {
   dashboard:'dashboard.view', operations:'operations.view', clients:'clients.view', staff:'staff.view',
   family:'family_portal.manage', care:'care_plans.view', medication:'medication.view', visits:'visits.view',
   rota:'rota.view', tasks:'tasks.view', incidents:'incidents.view', finance:'finance.view', reports:'reports.view',
-  settings:'organisation.settings.view'
+  quality:'quality.view', settings:'organisation.settings.view'
 };
 async function buildAccessProfile(db,session){
   const catalog=await db.prepare('SELECT permission_key FROM permission_catalog ORDER BY permission_key').all();

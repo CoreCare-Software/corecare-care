@@ -1,8 +1,8 @@
 # CoreCare Care
 
-CoreCare Care is a multi-tenant care-management web application deployed as a Cloudflare Worker with static browser assets and a Cloudflare D1 database. The current package version is `1.42.0`.
+CoreCare Care is a multi-tenant care-management web application deployed as a Cloudflare Worker with static browser assets and a Cloudflare D1 database. The current package version is `2.0.0`.
 
-Release 1.42.0 introduces the organisation-wide Area Manager tier and a persistent manager alert centre for incidents, missed or late visits, overrunning or unallocated visits, overdue actions, medication exceptions, care-governance alerts and overdue access reviews. Release 1.41.0 introduced permission-led workforce access and scheduled access-review governance.
+Release 2.0.0 is the Commercial Care Assurance release. It adds safe multi-carer rota allocation, assignment-level call monitoring, expanded eMAR safeguards, structured allergies and clinical observations, decision-specific governance, complaints and quality management, secure self-service account activation, native Authenticator MFA, and broader persistent management alerts. It also retains the Area Manager, workforce, family, finance, reports and launch-governance workspaces delivered in the 1.x series.
 
 > Release boundary: version 1.35.0 provides a controlled workflow for data-protection, clinical-safety, recovery, continuity, training and production-acceptance evidence. CoreCare cannot provide those organisational approvals; authorised people must review and sign each domain in Settings → Launch governance before real personal, medical or care data is entered.
 
@@ -12,14 +12,18 @@ Release 1.42.0 introduces the organisation-wide Area Manager tier and a persiste
 - Role, permission, module, branch, and support-mode access controls.
 - Organisation-wide Area Managers above Registered Managers, with rank-protected account delegation and multi-branch visibility.
 - Persistent, manager-only operational alerts with acknowledgement history, repeating unacknowledged prompts, a live alert dock and 60-second refresh.
+- Native Microsoft Authenticator-compatible MFA for privileged accounts, encrypted TOTP secrets and one-use recovery codes.
 - Client and staff records, care plans, risk assessments, and client documents.
 - Live operations, incident investigation and learning, dedicated task management, electronic call monitoring, rota planning, recurring visits, travel checks, and care delivery records.
 - Basic client invoicing and cashbook records, with a secure shortcut to an organisation's external accountancy package.
 - Live operational, quality, incident and permitted finance reports with controlled CSV export.
 - Structured, versioned care plans with review and manager approval workflows.
-- Medication profiles, eMAR administration, stock history, and body-map records.
+- Medication profiles with prescriber and review evidence, time-critical schedules, numerical PRN limits, allergy snapshots, covert-medication controls, witnessed administrations, stock history, and body-map records.
+- Structured clinical observations, accessible-information profiles, Mental Capacity Act and legal-authority records, client journey events, allergy records and medication-supply evidence.
+- Complaints, compliments, concerns, whistleblowing, quality audits, corrective and preventive actions, effectiveness review and independent closure controls.
+- Double-handed and multi-carer visits with safe-candidate checks for absence, overlap, working patterns, training, competency, capability and branch access.
 - A self-contained Family Portal for family login management, relationship and authority reviews, deliberately published care updates, explicit per-document sharing, approved care-plan summaries, secure messages, notifications and personal preferences.
-- Automatic account invitations and password-security emails for Care staff, organisation users and family users through the central CoreCare Platform delivery service.
+- Automatic, time-limited account activation and password-security emails for Care staff, organisation users and family users through the central CoreCare Platform delivery service; passwords are never sent by email.
 - Organisation settings, branding, security administration, and CoreCare Connect support tickets; family logins are managed in the Family Portal rather than general user settings.
 - Platform administration APIs retained for the separate CoreCare Platform application.
 
@@ -49,7 +53,7 @@ npm.cmd run db:migrate:local
 npm.cmd run db:migrate:remote
 ```
 
-The `0042_corecare_connect_support.sql` migration extends support tables shared with CoreCare Platform. Follow `INSTALL-CORECARE-CONNECT-1.27.0.md` when applying it to the shared remote database. Migration `0043_incidents_finance_reports.sql` adds the incident investigation trail and organisation finance records used by release 1.32.0. Migration `0044_launch_readiness.sql` adds branch-boundary enforcement, expiring visit verification codes, controlled-medicine witness evidence and stronger incident closure records. Migration `0045_platform_coordinated_maintenance.sql` lets the existing Platform health poll claim Care's hourly maintenance safely without consuming another account-level cron trigger. Migration `0046_launch_governance.sql` adds permission-backed evidence records, criterion completion and authenticated organisational sign-off. Migration `0050_staff_workforce_hub.sql` adds the Care-only workforce governance records used by release 1.39.0. Migration `0051_family_portal_hub.sql` adds consent reviews, deliberate publications, per-document shares, conversations, notifications and preferences used by release 1.40.0. Migration `0052_role_access_governance.sql` adds the fine-grained permissions and access-review records used by release 1.41.0. Migration `0053_area_manager_alerts.sql` adds manager-alert permissions and tenant-guarded acknowledgement history used by release 1.42.0.
+The `0042_corecare_connect_support.sql` migration extends support tables shared with CoreCare Platform. Follow `INSTALL-CORECARE-CONNECT-1.27.0.md` when applying it to the shared remote database. Migration `0043_incidents_finance_reports.sql` adds the incident investigation trail and organisation finance records used by release 1.32.0. Migration `0044_launch_readiness.sql` adds branch-boundary enforcement, expiring visit verification codes, controlled-medicine witness evidence and stronger incident closure records. Migration `0045_platform_coordinated_maintenance.sql` lets the existing Platform health poll claim Care's hourly maintenance safely without consuming another account-level cron trigger. Migration `0046_launch_governance.sql` adds permission-backed evidence records, criterion completion and authenticated organisational sign-off. Migration `0050_staff_workforce_hub.sql` adds the Care-only workforce governance records used by release 1.39.0. Migration `0051_family_portal_hub.sql` adds consent reviews, deliberate publications, per-document shares, conversations, notifications and preferences used by release 1.40.0. Migration `0052_role_access_governance.sql` adds the fine-grained permissions and access-review records used by release 1.41.0. Migration `0053_area_manager_alerts.sql` adds manager-alert permissions and tenant-guarded acknowledgement history used by release 1.42.0. Migration `0054_native_mfa.sql` adds encrypted TOTP enrolment, recovery codes, bounded challenges and activation-token purpose. Migration `0055_commercial_care_safety.sql` adds multi-carer allocation, visit exceptions, enhanced medication safety, clinical governance, quality management and offline-receipt records used by release 2.0.0.
 
 ## Verification
 

@@ -39,6 +39,11 @@ export const CARE_PERMISSION_GROUPS = Object.freeze({
   family: ['family_portal.manage'],
   finance: ['finance.view', 'finance.manage', 'finance.settings.manage'],
   reporting: ['reports.view', 'reports.export', 'data.export'],
+  quality: ['quality.view', 'quality.manage', 'quality.approve'],
+  clinicalGovernance: [
+    'clinical_governance.view', 'clinical_governance.manage',
+    'observations.view', 'observations.manage'
+  ],
   branches: ['branches.view', 'branches.manage'],
   organisation: [
     'organisation.settings.view', 'organisation.settings.manage',
@@ -57,7 +62,7 @@ const without = (values, removed) => values.filter(value => !removed.includes(va
 const registeredManager = group(
   'dashboard', 'operations', 'managerAlerts', 'rota', 'visits', 'medication', 'tasks', 'incidents',
   'people', 'workforce', 'care', 'family', 'finance', 'reporting', 'branches',
-  'organisation', 'security', 'support'
+  'quality', 'clinicalGovernance', 'organisation', 'security', 'support'
 );
 const branchManager = without(registeredManager, [
   'organisation.settings.manage', 'governance.launch.approve',
@@ -72,6 +77,8 @@ const coordinator = unique([
   'care_plans.generate_visits', 'risks.view', 'risks.manage',
   'body_map.view', 'body_map.manage', 'documents.view', 'documents.manage',
   'medication.view', 'reports.view', 'branches.view',
+  'quality.view', 'quality.manage', 'clinical_governance.view',
+  'clinical_governance.manage', 'observations.view', 'observations.manage',
   'rota.view', 'rota.create', 'rota.edit', 'rota.publish', 'rota.cancel',
   'rota.templates.view', 'rota.templates.manage', 'rota.templates.generate',
   'rota.travel.override', 'rota.visit.lock',
@@ -88,14 +95,16 @@ const seniorCarer = unique([
   'care_plans.view', 'care_plans.create', 'care_plans.edit',
   'risks.view', 'risks.manage', 'body_map.view', 'body_map.manage',
   'documents.view', 'documents.manage', 'reports.view', 'support.tickets.view',
-  'support.tickets.manage'
+  'support.tickets.manage', 'quality.view', 'quality.manage',
+  'clinical_governance.view', 'clinical_governance.manage',
+  'observations.view', 'observations.manage'
 ]);
 const careWorker = [
   'dashboard.view', 'visits.view', 'visits.clock', 'visits.records.view',
   'visits.records.manage', 'medication.view', 'medication.administer',
   'tasks.view', 'tasks.complete', 'incidents.create', 'staff.view',
   'care_plans.view', 'risks.view', 'body_map.view', 'body_map.manage',
-  'documents.view'
+  'documents.view', 'clinical_governance.view', 'observations.view', 'observations.manage'
 ];
 const auditor = unique([
   'dashboard.view', 'operations.view', 'rota.view', 'rota.templates.view',
@@ -105,7 +114,8 @@ const auditor = unique([
   'security.audit.view', 'clients.view', 'staff.view', 'staff.records.view',
   'staff.supervision.view', 'staff.training.view', 'staff.documents.view',
   'staff.reports.view', 'care_plans.view', 'risks.view', 'body_map.view',
-  'documents.view', 'reports.view', 'branches.view'
+  'documents.view', 'reports.view', 'branches.view', 'quality.view',
+  'clinical_governance.view', 'observations.view'
 ]);
 
 export const STANDARD_ROLE_PROFILES = Object.freeze({
@@ -190,7 +200,10 @@ export const PERMISSION_IMPLICATIONS = Object.freeze({
   'governance.launch.manage': ['governance.launch.view'],
   'governance.launch.approve': ['governance.launch.view'],
   'security.roles.manage': ['security.roles.view'], 'security.users.manage': ['security.users.view'],
-  'support.tickets.manage': ['support.tickets.view']
+  'support.tickets.manage': ['support.tickets.view'],
+  'quality.manage': ['quality.view'], 'quality.approve': ['quality.view'],
+  'clinical_governance.manage': ['clinical_governance.view'],
+  'observations.manage': ['observations.view']
 });
 
 export function standardPermissionsForRole(role) {

@@ -173,6 +173,47 @@ export function buildManagerAlerts(input = {}, now = new Date()) {
     });
   }
 
+  for (const exception of input.visitExceptions || []) {
+    if (['resolved', 'closed'].includes(lower(exception.status))) continue;
+    const severity = operationalSeverity(exception.severity);
+    add({
+      key: `visit-exception:${exception.id}:${severity}`, category: 'Visit exception', severity,
+      title: `${clean(exception.exception_type).replaceAll('_', ' ') || 'Visit exception'} · ${clientName(exception)}`,
+      message: clean(exception.summary) || 'This visit requires management action.',
+      page: 'rota', sourceType: 'visit_exception', sourceId: clean(exception.id),
+      occurredAt: exception.created_at, dueAt: exception.scheduled_start, branchId: exception.branch_id
+    });
+  }
+
+  for (const action of input.qualityActions || []) {
+    if (['completed', 'verified', 'cancelled'].includes(lower(action.status))) continue;
+    const due = time(action.due_at);
+    if (due === null || (due >= clock && !['critical', 'high'].includes(lower(action.priority)))) continue;
+    const severity = lower(action.priority) === 'critical' || due < clock ? 'critical' : 'warning';
+    add({
+      key: `quality-action:${action.id}:${severity}`, category: 'Quality action', severity,
+      title: `${due < clock ? 'Overdue' : 'Priority'} quality action · ${clean(action.title)}`,
+      message: clean(action.action_required) || 'Corrective action requires management attention.',
+      page: 'quality', sourceType: 'quality_action', sourceId: clean(action.id),
+      occurredAt: action.created_at, dueAt: action.due_at, branchId: action.branch_id
+    });
+  }
+
+  for (const feedback of input.feedbackCases || []) {
+    if (['resolved', 'closed', 'withdrawn'].includes(lower(feedback.status))) continue;
+    const acknowledgementOverdue = !feedback.acknowledged_at && time(feedback.acknowledgement_due_at) !== null && time(feedback.acknowledgement_due_at) < clock;
+    const responseOverdue = !feedback.response_sent_at && time(feedback.response_due_at) !== null && time(feedback.response_due_at) < clock;
+    if (!acknowledgementOverdue && !responseOverdue && !['critical', 'high'].includes(lower(feedback.risk_level))) continue;
+    const severity = responseOverdue || lower(feedback.risk_level) === 'critical' ? 'critical' : 'warning';
+    add({
+      key: `feedback:${feedback.id}:${severity}`, category: 'Feedback and complaints', severity,
+      title: `${clean(feedback.case_type) || 'Feedback'} ${clean(feedback.case_reference)} requires action`,
+      message: responseOverdue ? 'The response deadline has passed.' : acknowledgementOverdue ? 'The acknowledgement deadline has passed.' : clean(feedback.summary),
+      page: 'quality', sourceType: 'service_feedback', sourceId: clean(feedback.id),
+      occurredAt: feedback.created_at, dueAt: responseOverdue ? feedback.response_due_at : feedback.acknowledgement_due_at, branchId: feedback.branch_id
+    });
+  }
+
   return [...alerts.values()].sort((a, b) =>
     severityScore(b.severity) - severityScore(a.severity)
     || String(a.dueAt || a.occurredAt || '').localeCompare(String(b.dueAt || b.occurredAt || ''))
@@ -201,4 +242,3 @@ export function managerAlertSummary(alerts = []) {
     prompt: alerts.filter(alert => alert.requiresPrompt && !alert.acknowledged).length
   };
 }
-

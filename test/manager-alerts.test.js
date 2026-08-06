@@ -17,11 +17,14 @@ test('manager alerts cover urgent care-company operational exceptions', () => {
     careAlerts: [{ id: 'care-1', status: 'open', severity: 'warning', title: 'Care plan review overdue', client_name: 'Plan Client' }],
     medications: [{ id: 'med-1', status: 'active', name: 'Medicine', stock_quantity: 0, low_stock_threshold: 5, stock_unit: 'tablets', client_name: 'Medication Client' }],
     medicationExceptions: [{ id: 'mar-1', outcome: 'omitted', medication_name: 'Medicine', reason: 'Unavailable', administered_at: '2026-08-06T09:00:00Z', client_name: 'Medication Client' }],
-    accessReviews: [{ user_id: 'user-1', display_name: 'Manager User', access_level: 'organisation_admin', status: 'active', next_review_date: '2026-08-05' }]
+    accessReviews: [{ user_id: 'user-1', display_name: 'Manager User', access_level: 'organisation_admin', status: 'active', next_review_date: '2026-08-05' }],
+    visitExceptions: [{ id: 'exception-1', status: 'open', severity: 'critical', exception_type: 'short_team', summary: 'Double-handed visit has only one care worker.', client_name: 'Team Client' }],
+    qualityActions: [{ id: 'action-1', status: 'open', priority: 'high', title: 'Complete audit action', action_required: 'Review and evidence the corrective action.', due_at: '2026-08-05T12:00:00Z' }],
+    feedbackCases: [{ id: 'feedback-1', status: 'open', risk_level: 'critical', case_type: 'complaint', case_reference: 'FB-1', summary: 'Urgent complaint', response_due_at: '2026-08-05T12:00:00Z' }]
   }, now);
 
   const categories = new Set(alerts.map(alert => alert.category));
-  for (const category of ['Incident', 'Missed visit', 'Late arrival', 'Overrunning visit', 'Unallocated visit', 'Overdue task', 'Care governance', 'Medication stock', 'Medication exception', 'Access governance']) {
+  for (const category of ['Incident', 'Missed visit', 'Late arrival', 'Overrunning visit', 'Unallocated visit', 'Overdue task', 'Care governance', 'Medication stock', 'Medication exception', 'Access governance', 'Visit exception', 'Quality action', 'Feedback and complaints']) {
     assert.ok(categories.has(category), `missing ${category}`);
   }
   assert.equal(alerts.find(alert => alert.sourceId === 'inc-1').severity, 'critical');
@@ -49,4 +52,3 @@ test('acknowledgements are per-alert state and do not remove active alerts', () 
   assert.equal(acknowledged[0].acknowledged, true);
   assert.deepEqual(managerAlertSummary(acknowledged), { total: 1, critical: 1, warning: 0, unacknowledged: 0, prompt: 0 });
 });
-
