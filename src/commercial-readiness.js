@@ -42,7 +42,10 @@ export function assessStaffAllocation(input = {}) {
   if (clean(staff.status).toLowerCase() !== 'active') blockers.push({ code: 'STAFF_INACTIVE', message: 'This care worker is not active.' });
   if (input.branchMismatch) blockers.push({ code: 'BRANCH_MISMATCH', message: 'This care worker belongs to a different branch.' });
   if (input.allocationRestricted || staff.allocationRestricted || staff.allocation_restricted) blockers.push({ code: 'WORKFORCE_RESTRICTED', message: 'Critical workforce compliance prevents allocation.' });
-  if (input.absent) blockers.push({ code: 'STAFF_ABSENT', message: 'An approved or active absence overlaps this visit.' });
+  const absence = input.absence || (input.absent ? {} : null);
+  if (absence) blockers.push(clean(absence.leave_category).toLowerCase() === 'annual_leave'
+    ? { code: 'STAFF_ON_HOLIDAY', message: 'This care worker is on approved annual leave during the visit.' }
+    : { code: 'STAFF_ABSENT', message: 'An approved or active absence overlaps this visit.' });
   if (input.overlap) blockers.push({ code: 'ROTA_CLASH', message: 'Another visit overlaps this allocation.' });
   if (input.outsideWorkingPattern) blockers.push({ code: 'OUTSIDE_WORKING_PATTERN', message: 'The visit is outside the recorded working pattern.' });
   if (input.travelConflict) blockers.push({ code: 'TRAVEL_CONFLICT', message: 'There is not enough verified travel time between visits.' });

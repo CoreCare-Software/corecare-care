@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#0f766e">
   <meta name="description" content="CoreCare care management platform">
   <title>Sign in | CoreCare Care</title>
-  <link rel="stylesheet" href="styles.css?v=2.0.0">
-  <link rel="stylesheet" href="mfa.css?v=2.0.0">
+  <link rel="stylesheet" href="styles.css?v=2.0.1">
+  <link rel="stylesheet" href="mfa.css?v=2.0.1">
 </head>
 <body>
   <div id="login-view" class="login-shell">
@@ -82,7 +82,7 @@
         </div>
         <div id="organisation-navigation" class="organisation-navigation" aria-label="Workspace navigation"></div>
       </nav>
-      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>CoreCare Care</strong><small>Secure service <span id="dev-version">v2.0.0</span></small></div></div>
+      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>CoreCare Care</strong><small>Secure service <span id="dev-version">v2.0.1</span></small></div></div>
     </aside>
 
     <div class="workspace">
@@ -453,7 +453,7 @@
             <div class="staff-record-header"><button id="staff-record-back" class="secondary-button compact" type="button">← All staff</button><div class="staff-record-identity"><span id="staff-record-avatar" class="person-avatar large">CC</span><div><p class="eyebrow">Staff record</p><h2 id="staff-record-name">Staff member</h2><p id="staff-record-meta">Role and employment details</p></div></div><div class="toolbar-actions"><button id="staff-record-edit" class="secondary-button compact" type="button">Edit profile</button><button id="staff-record-refresh" class="primary-button compact" type="button">Refresh record</button></div></div>
             <section class="staff-readiness-strip"><article><span>Overall readiness</span><strong id="staff-record-readiness">—</strong></article><article><span>Recruitment</span><strong id="staff-record-recruitment">—</strong></article><article><span>Training</span><strong id="staff-record-training">—</strong></article><article><span>Supervision</span><strong id="staff-record-supervision">—</strong></article><article><span>Appraisal</span><strong id="staff-record-appraisal">—</strong></article></section>
             <nav class="staff-record-tabs" aria-label="Staff record sections">
-              <button type="button" class="active" data-staff-record-tab="overview">Overview</button><button type="button" data-staff-record-tab="recruitment" data-staff-recruitment-tab>Safer recruitment</button><button type="button" data-staff-record-tab="supervisions" data-staff-supervision-tab>Supervisions</button><button type="button" data-staff-record-tab="training" data-staff-training-tab>Training & competency</button><button type="button" data-staff-record-tab="appraisals" data-staff-supervision-tab>Appraisals & development</button><button type="button" data-staff-record-tab="documents" data-staff-documents-tab>Documents</button><button type="button" data-staff-record-tab="attendance" data-staff-hr-tab>Attendance & wellbeing</button><button type="button" data-staff-record-tab="hr" data-staff-hr-tab>Restricted HR</button>
+              <button type="button" class="active" data-staff-record-tab="overview">Overview</button><button type="button" data-staff-record-tab="recruitment" data-staff-recruitment-tab>Safer recruitment</button><button type="button" data-staff-record-tab="supervisions" data-staff-supervision-tab>Supervisions</button><button type="button" data-staff-record-tab="training" data-staff-training-tab>Training & competency</button><button type="button" data-staff-record-tab="appraisals" data-staff-supervision-tab>Appraisals & development</button><button type="button" data-staff-record-tab="documents" data-staff-documents-tab>Documents</button><button type="button" data-staff-record-tab="attendance" data-staff-hr-tab>Holidays & attendance</button><button type="button" data-staff-record-tab="hr" data-staff-hr-tab>Restricted HR</button>
             </nav>
             <div id="staff-record-content" class="staff-record-content" aria-live="polite"></div>
           </section>
@@ -799,8 +799,8 @@
 <dialog id="allergy-dialog" class="client-dialog"><form id="allergy-form"><div class="dialog-heading"><div><p class="eyebrow">Prominent safety information</p><h2>Record allergy</h2></div><button type="button" data-close-dialog="allergy-dialog" aria-label="Close">×</button></div><div class="form-grid"><label>Substance<input name="substance" required></label><label>Severity<select name="severity"><option value="unknown">Unknown</option><option value="mild">Mild</option><option value="moderate">Moderate</option><option value="severe">Severe</option><option value="life_threatening">Life-threatening</option></select></label><label class="wide">Reaction<textarea name="reaction" rows="3" required></textarea></label><label>Review date<input name="reviewDate" type="date"></label><label class="check-row"><input name="verified" type="checkbox"> Clinically verified</label><label class="wide">Notes<textarea name="notes" rows="2"></textarea></label></div><p class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="allergy-dialog">Cancel</button><button class="primary-button">Save allergy</button></div></form></dialog>
 
 <script src="/vendor/qrcode.min.js"></script>
-<script src="mfa.js?v=2.0.0"></script>
-<script src="app.js?v=2.0.0"></script>
+<script src="mfa.js?v=2.0.1"></script>
+<script src="app.js?v=2.0.1"></script>
 
 </body>
 </html>

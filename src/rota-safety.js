@@ -39,13 +39,14 @@ function timePart(value) {
 export async function assessStaffAllocationDb(db, session, staffId, visit, options = {}) {
   const org = session.organisation_id;
   const start = visit.scheduled_start || visit.scheduledStart;
-  const end = visit.scheduled_end || visit.scheduledEnd;
+  const suppliedEnd = visit.scheduled_end || visit.scheduledEnd;
+  const end = suppliedEnd || new Date(new Date(start).getTime() + 30 * 60_000).toISOString();
   const staff = await db.prepare('SELECT id,organisation_id,branch_id,first_name,last_name,preferred_name,job_title,status FROM staff WHERE id=? AND organisation_id=? LIMIT 1').bind(staffId, org).first();
   if (!staff) return { allowed: false, staff: null, blockers: [{ code: 'STAFF_NOT_FOUND', message: 'Care worker not found in this organisation.' }], warnings: [] };
   const [settings, absence, overlap, patterns, criticalTraining, criticalCompetencies, capabilityRows] = await Promise.all([
     db.prepare('SELECT block_expired_critical_competencies FROM workforce_settings WHERE organisation_id=? LIMIT 1').bind(org).first(),
-    db.prepare(`SELECT id,absence_type,started_at,ended_at FROM staff_absences WHERE organisation_id=? AND staff_id=? AND restricted=1 AND status IN ('planned','open') AND datetime(started_at)<datetime(?) AND datetime(COALESCE(ended_at,'9999-12-31'))>datetime(?) LIMIT 1`).bind(org, staffId, end, start).first(),
-    db.prepare(`SELECT DISTINCT v.id FROM care_visits v LEFT JOIN visit_staff_assignments a ON a.visit_id=v.id AND a.organisation_id=v.organisation_id AND a.staff_id=? AND a.allocation_status NOT IN ('removed','declined') WHERE v.organisation_id=? AND v.id<>? AND v.status!='cancelled' AND COALESCE(v.rota_status,'published')!='cancelled' AND (v.staff_id=? OR a.staff_id=?) AND datetime(v.scheduled_start)<datetime(?) AND datetime(COALESCE(v.scheduled_end,v.scheduled_start))>datetime(?) LIMIT 1`).bind(staffId, org, visit.id || '', staffId, staffId, end, start).first(),
+    db.prepare(`SELECT id,absence_type,leave_category,started_at,ended_at FROM staff_absences WHERE organisation_id=? AND staff_id=? AND restricted=1 AND status IN ('planned','open') AND datetime(started_at)<datetime(?) AND datetime(COALESCE(ended_at,'9999-12-31'))>datetime(?) ORDER BY CASE leave_category WHEN 'annual_leave' THEN 0 ELSE 1 END,datetime(started_at) LIMIT 1`).bind(org, staffId, end, start).first(),
+    db.prepare(`SELECT DISTINCT v.id FROM care_visits v LEFT JOIN visit_staff_assignments a ON a.visit_id=v.id AND a.organisation_id=v.organisation_id AND a.staff_id=? AND a.allocation_status NOT IN ('removed','declined') WHERE v.organisation_id=? AND v.id<>? AND v.status!='cancelled' AND COALESCE(v.rota_status,'published')!='cancelled' AND (v.staff_id=? OR a.staff_id=?) AND datetime(v.scheduled_start)<datetime(?) AND datetime(COALESCE(v.scheduled_end,datetime(v.scheduled_start,'+30 minutes')))>datetime(?) LIMIT 1`).bind(staffId, org, visit.id || '', staffId, staffId, end, start).first(),
     db.prepare("SELECT * FROM staff_working_patterns WHERE organisation_id=? AND staff_id=? AND status='active' ORDER BY cycle_weeks,week_number,day_of_week,start_time").bind(org, staffId).all(),
     db.prepare(`SELECT c.name,c.category,r.status,r.expiry_date,r.competency_confirmed FROM staff_training_catalog c LEFT JOIN staff_training_records r ON r.training_catalog_id=c.id AND r.organisation_id=c.organisation_id AND r.staff_id=? WHERE c.organisation_id=? AND c.active=1 AND c.critical_for_allocation=1 AND (r.id IS NULL OR r.status NOT IN ('completed','exempt') OR (r.expiry_date IS NOT NULL AND date(r.expiry_date)<date(?)) OR (c.evidence_required=1 AND r.status='completed' AND r.competency_confirmed=0))`).bind(staffId, org, String(start).slice(0, 10)).all(),
     db.prepare(`SELECT name,status,expiry_date FROM staff_competencies WHERE organisation_id=? AND staff_id=? AND critical_for_allocation=1 AND (status IN ('planned','development_required','restricted','expired') OR (expiry_date IS NOT NULL AND date(expiry_date)<date(?)))`).bind(org, staffId, String(start).slice(0, 10)).all(),
@@ -63,7 +64,7 @@ export async function assessStaffAllocationDb(db, session, staffId, visit, optio
     staffSkills,
     branchMismatch: Boolean(visit.branch_id && staff.branch_id && visit.branch_id !== staff.branch_id),
     allocationRestricted: Number(settings?.block_expired_critical_competencies ?? 1) === 1 && ((criticalTraining.results || []).length > 0 || (criticalCompetencies.results || []).length > 0),
-    absent: Boolean(absence),
+    absence: absence || null,
     overlap: Boolean(overlap),
     outsideWorkingPattern: patternRows.length > 0 && !matchingPattern,
     travelConflict: Boolean(options.travelConflict),
