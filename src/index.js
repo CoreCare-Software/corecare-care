@@ -18,10 +18,11 @@ import { assessStaffAllocationDb, candidateStaff, enrichVisitsWithTeams, getVisi
 import { clientAssurance, createAllergy, createFeedback, createGovernanceRecord, createJourneyEvent, createMedicationSupply, createObservation, createQualityAction, createQualityAudit, qualityDashboard, saveCommunicationProfile, updateFeedback, updateQualityAction, updateQualityAudit } from './quality-assurance.js';
 import { assessPrnAdministration, medicationDueSlots, validateMedicationSafetyProfile } from './commercial-readiness.js';
 import { recordRuntimeError } from './runtime-errors.js';
+import { MODULE_PERMISSION_MAP, ORGANISATION_MODULES, moduleForApiPath, normaliseOrganisationModuleUpdate, organisationModuleCatalogue, organisationModuleSetupStatements, organisationModuleState } from './organisation-modules.js';
 
-/** CoreCare Care 2.0.2 - Support-safe onboarding and branch archive */
-const VERSION = "2.0.2";
-const RELEASE = "CoreCare Care 2.0.2 - Support-safe onboarding and branch archive";
+/** CoreCare Care 2.0.3 - Organisation module controls */
+const VERSION = "2.0.3";
+const RELEASE = "CoreCare Care 2.0.3 - Organisation module controls";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 // Cloudflare Workers rejects PBKDF2 iteration counts above this runtime ceiling.
@@ -69,6 +70,8 @@ const application = {
         }
         const scopeError = await enforceBranchScope(request, env.DB, session, url);
         if (scopeError) return scopeError;
+        const moduleError = await enforceOrganisationModule(env.DB, session, url.pathname);
+        if (moduleError) return moduleError;
         if (session.support_mode && session.support_access_mode === 'read_only' && !['GET','HEAD','OPTIONS'].includes(request.method) && url.pathname !== '/api/platform/exit-support') {
           return json({ error: { code: 'SUPPORT_MODE_READ_ONLY', message: 'This Platform support session is read-only.' } }, 403);
         }
@@ -2598,6 +2601,7 @@ async function createOrganisation(request, db, session) {
   await db.batch([
     db.prepare("INSERT INTO organisations(id,name,slug,status,subscription_plan) VALUES(?,?,?,?,?)").bind(id,name,slug,"active",plan),
     db.prepare("INSERT INTO branches(id,organisation_id,name,code,status) VALUES(?,?,?,?,?)").bind(branchId,id,"Main Branch","MAIN","active"),
+    ...organisationModuleSetupStatements(db,id,session.user_id),
     ...workforceSetupStatements(db,id,session.user_id),
     auditStatement(db,session.organisation_id,session.user_id,"platform.organisation_created","organisation",id,{name})
   ]);
@@ -3222,35 +3226,40 @@ async function updateNotificationState(db,session,id,action){
 async function markAllNotificationsRead(db,session){if(!requirePlatform(session))return forbidden();await db.batch([db.prepare('UPDATE notifications SET read_at=COALESCE(read_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE archived_at IS NULL'),auditStatement(db,session.organisation_id,session.user_id,'platform.notifications_mark_all_read','notification','all',{})]);return json({ok:true});}
 
 
-const MODULE_PERMISSION_MAP = {
-  dashboard:'dashboard.view', operations:'operations.view', clients:'clients.view', staff:'staff.view',
-  family:'family_portal.manage', care:'care_plans.view', medication:'medication.view', visits:'visits.view',
-  rota:'rota.view', tasks:'tasks.view', incidents:'incidents.view', finance:'finance.view', reports:'reports.view',
-  quality:'quality.view', settings:'organisation.settings.view'
-};
+async function enforceOrganisationModule(db,session,pathname){
+  const moduleKey=moduleForApiPath(pathname);
+  if(!moduleKey||session.is_platform_user&&!session.support_mode)return null;
+  const row=await db.prepare('SELECT enabled FROM organisation_modules WHERE organisation_id=? AND module_key=?').bind(session.organisation_id,moduleKey).first();
+  if(!row||Boolean(row.enabled))return null;
+  const module=ORGANISATION_MODULES.find(item=>item.key===moduleKey);
+  return json({error:{code:'MODULE_DISABLED',message:`${module?.name||'This area'} is turned off in Organisation settings.`}},403);
+}
 async function buildAccessProfile(db,session){
   const catalog=await db.prepare('SELECT permission_key FROM permission_catalog ORDER BY permission_key').all();
   const permissions=[];
   for(const row of catalog.results||[]) if(await userHasPermission(db,session,row.permission_key)) permissions.push(row.permission_key);
   const moduleRows=await db.prepare('SELECT module_key,enabled FROM organisation_modules WHERE organisation_id=?').bind(session.organisation_id).all();
-  const configured=Object.fromEntries((moduleRows.results||[]).map(x=>[x.module_key,Boolean(x.enabled)]));
+  const configured=organisationModuleState(moduleRows.results||[]);
   const modules={};
-  for(const [module,key] of Object.entries(MODULE_PERMISSION_MAP)) modules[module]=(configured[module]!==false)&&permissions.includes(key);
-  if(session.is_platform_user) for(const module of Object.keys(MODULE_PERMISSION_MAP)) modules[module]=configured[module]!==false;
+  for(const [module,key] of Object.entries(MODULE_PERMISSION_MAP)) modules[module]=configured[module]&&permissions.includes(key);
+  if(session.is_platform_user) for(const module of Object.keys(MODULE_PERMISSION_MAP)) modules[module]=configured[module];
   return {permissions,modules};
 }
 async function listOrganisationModules(db,session){
   if(!canManageSecurity(session)&&!await userHasPermission(db,session,'organisation.settings.view'))return forbidden();
+  await db.batch(organisationModuleSetupStatements(db,session.organisation_id));
   const rows=await db.prepare('SELECT module_key,enabled,updated_at FROM organisation_modules WHERE organisation_id=? ORDER BY module_key').bind(session.organisation_id).all();
-  return json({modules:rows.results||[]});
+  const access=await buildAccessProfile(db,session);
+  const canManage=canManageSecurity(session)||await userHasPermission(db,session,'organisation.settings.manage');
+  return json({modules:organisationModuleCatalogue(rows.results||[]),effectiveModules:access.modules,canManage});
 }
 async function updateOrganisationModules(request,db,session){
   if(!canManageSecurity(session)&&!await userHasPermission(db,session,'organisation.settings.manage'))return forbidden();
-  const input=await readJson(request), modules=input.modules&&typeof input.modules==='object'?input.modules:{};
-  const allowed=Object.keys(MODULE_PERMISSION_MAP), statements=[];
-  for(const key of allowed){if(!(key in modules))continue;statements.push(db.prepare(`INSERT INTO organisation_modules(organisation_id,module_key,enabled,updated_by,updated_at) VALUES(?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(organisation_id,module_key) DO UPDATE SET enabled=excluded.enabled,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,key,modules[key]?1:0,session.user_id));}
+  const input=await readJson(request),modules=normaliseOrganisationModuleUpdate(input.modules),statements=[];
+  if(!Object.keys(modules).length)return json({error:{code:'VALIDATION_ERROR',message:'Choose at least one module setting to update.'}},400);
+  for(const [key,enabled] of Object.entries(modules))statements.push(db.prepare(`INSERT INTO organisation_modules(organisation_id,module_key,enabled,updated_by,updated_at) VALUES(?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(organisation_id,module_key) DO UPDATE SET enabled=excluded.enabled,updated_by=excluded.updated_by,updated_at=CURRENT_TIMESTAMP`).bind(session.organisation_id,key,enabled?1:0,session.user_id));
   statements.push(auditStatement(db,session.organisation_id,session.user_id,'security.modules_updated','organisation',session.organisation_id,{modules}));
-  await db.batch(statements);return json({ok:true});
+  await db.batch(statements);return listOrganisationModules(db,session);
 }
 async function getUserPermissionOverrides(db,session,userId){
   if(!canManageSecurity(session)&&!await userHasPermission(db,session,'security.users.manage'))return forbidden();

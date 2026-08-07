@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { assessRotaPublication, calculateLiveDashboard, normaliseFamilyAccess, visitLiveStatus } from '../src/operational-workspaces.js';
+import { MODULE_PERMISSION_MAP } from '../src/organisation-modules.js';
 
 const worker = readFileSync(new URL('../src/index.js', import.meta.url), 'utf8');
 const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
@@ -71,7 +72,7 @@ test('live rota, manager and family workspaces are wired through the Worker and 
   assert.match(app, /async function loadFamilyManagement/);
   assert.match(app, /async function loadFamilyPortalPage/);
   assert.match(app, /workspaceKey\(\)===['"]family['"]&&page===['"]family['"]/);
-  assert.match(worker, /family:'family_portal\.manage'/);
+  assert.equal(MODULE_PERMISSION_MAP.family, 'family_portal.manage');
   assert.match(app, /async function publishRotaWeek/);
 });
 

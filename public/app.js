@@ -189,8 +189,7 @@ const WORKSPACE_NAVIGATION = {
 
 function moduleAllowsPage(page){
   if(page==='dashboard'||page==='support') return true;
-  if(workspaceKey()==='family'&&page==='family') return true;
-  if(currentUser?.isPlatformUser && currentUser?.supportMode) return true;
+  if(workspaceKey()==='family'&&page==='family') return currentUser?.modules?.family!==false;
   return currentUser?.modules?.[page]===true;
 }
 
@@ -257,7 +256,7 @@ function updateIdentity() {
   if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':currentUser?.accessLevel==='area_manager'?'Area management workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '2.0.2';
+const CORECARE_FALLBACK_VERSION = '2.0.3';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -2697,6 +2696,36 @@ $('#routing-settings-form')?.addEventListener('submit',async e=>{e.preventDefaul
 async function loadOrganisationModules(){const el=$('#organisation-module-list');if(!el)return;clearSettingsSectionError('modules');try{const p=await api('/api/security/modules');const labels={dashboard:'Dashboard',operations:'Live operations',clients:'Clients',staff:'Staff',family:'Family portal',care:'Care plans',medication:'Medication',visits:'Visits',rota:'Scheduling & rota',tasks:'Tasks',incidents:'Incidents',finance:'Finance',reports:'Reports',settings:'Settings'};el.innerHTML=(p.modules||[]).map(m=>`<label class="module-toggle ${m.enabled?'is-enabled':'is-disabled'}"><span class="module-icon">${({dashboard:'⌂',operations:'◆',clients:'●',staff:'◉',family:'◇',care:'▤',medication:'✚',visits:'◷',rota:'▦',tasks:'✓',incidents:'!',finance:'£',reports:'▥',settings:'⚙'})[m.module_key]||'•'}</span><span class="module-copy"><b>${escapeHtml(labels[m.module_key]||m.module_key)}</b><small>${m.enabled?'Visible to users with permission':'Hidden for everyone in this organisation'}</small></span><span class="switch-control"><input type="checkbox" data-module-key="${escapeHtml(m.module_key)}" ${m.enabled?'checked':''}><i></i></span></label>`).join('');moduleSettingsDirty=false;const indicator=$('#module-unsaved-indicator');if(indicator)indicator.hidden=true;el.querySelectorAll('[data-module-key]').forEach(x=>x.addEventListener('change',()=>{x.closest('.module-toggle')?.classList.toggle('is-enabled',x.checked);moduleSettingsDirty=true;if(indicator)indicator.hidden=false;}));}catch(e){showSettingsSectionError('modules',e);el.innerHTML=`<p class="muted">${escapeHtml(e.message)}</p>`;}}
 $('#save-organisation-modules')?.addEventListener('click',async()=>{const modules={};$$('[data-module-key]').forEach(x=>modules[x.dataset.moduleKey]=x.checked);const m=$('#module-save-message');m.hidden=true;try{await api('/api/security/modules',{method:'PUT',body:JSON.stringify({modules})});moduleSettingsDirty=false;const indicator=$('#module-unsaved-indicator');if(indicator)indicator.hidden=true;m.textContent='Organisation modules updated. Users will see the change next time they sign in.';m.className='form-message success';m.hidden=false;}catch(e){m.textContent=e.message;m.className='form-message error';m.hidden=false;}});
 $('#load-user-permissions')?.addEventListener('click',async()=>{const userId=$('#permission-user')?.value,el=$('#user-permission-editor');if(!userId){el.innerHTML='<p class="muted">Select a user first.</p>';return;}try{const p=await api(`/api/security/users/${encodeURIComponent(userId)}/permissions`),state=Object.fromEntries((p.overrides||[]).map(x=>[x.permission_key,x.effect]));el.innerHTML=`<div class="effective-access-heading"><strong>${escapeHtml(p.user.display_name)}</strong><span>Individual overrides</span></div><div class="permission-override-grid">${permissionCatalogue.map(x=>`<div class="permission-override-row"><span><b>${escapeHtml(x.name)}</b><small>${escapeHtml(x.category)} · ${escapeHtml(x.description||'')}</small></span><div class="permission-segment"><label class="permission-state"><input type="radio" name="override-${escapeHtml(x.permission_key)}" value="inherit" ${!state[x.permission_key]?'checked':''}><span>Inherit</span></label><label class="permission-state allow"><input type="radio" name="override-${escapeHtml(x.permission_key)}" value="allow" ${state[x.permission_key]==='allow'?'checked':''}><span>Allow</span></label><label class="permission-state deny"><input type="radio" name="override-${escapeHtml(x.permission_key)}" value="deny" ${state[x.permission_key]==='deny'?'checked':''}><span>Deny</span></label></div></div>`).join('')}</div><button id="save-user-permissions" class="primary-button compact" type="button">Save user access</button><p id="user-permission-message" class="form-message" hidden></p>`;$('#save-user-permissions').addEventListener('click',async()=>{const allow=[],deny=[];permissionCatalogue.forEach(x=>{const checked=el.querySelector(`input[name="override-${CSS.escape(x.permission_key)}"]:checked`);if(checked?.value==='allow')allow.push(x.permission_key);if(checked?.value==='deny')deny.push(x.permission_key);});const msg=$('#user-permission-message');try{await api(`/api/security/users/${encodeURIComponent(userId)}/permissions`,{method:'PUT',body:JSON.stringify({allow,deny})});msg.textContent='User-specific access saved.';msg.hidden=false;}catch(e){msg.textContent=e.message;msg.hidden=false;}});}catch(e){el.innerHTML=`<p class="muted">${escapeHtml(e.message)}</p>`;}});
+
+// CoreCare Care 2.0.3 — complete organisation module controls.
+const ORGANISATION_MODULE_ICONS={dashboard:'⌂',operations:'◆',clients:'●',staff:'◎',family:'◇',care:'▤',medication:'✚',visits:'◷',rota:'▦',tasks:'✓',incidents:'!',quality:'Q',finance:'£',reports:'▥',settings:'⚙'};
+let organisationModuleControlCanManage=false;
+function renderOrganisationModuleControls(payload={}){
+  const el=$('#organisation-module-list');if(!el)return;
+  const modules=payload.modules||[];organisationModuleControlCanManage=Boolean(payload.canManage);
+  const enabledCount=modules.filter(module=>module.enabled).length;
+  const groups=new Map();for(const module of modules){const category=module.category||'Other';if(!groups.has(category))groups.set(category,[]);groups.get(category).push(module);}
+  el.innerHTML=`<div class="module-control-summary"><div><strong>${enabledCount} of ${modules.length} areas available</strong><span>Changes apply to every user immediately, while each user’s own permissions still apply.</span></div><span class="badge ${enabledCount===modules.length?'success':'neutral'}">${enabledCount===modules.length?'All available':`${modules.length-enabledCount} hidden`}</span></div>${[...groups].map(([category,items])=>`<section class="module-control-group"><h4>${escapeHtml(category)}</h4><div class="module-control-grid">${items.map(module=>`<label class="module-toggle ${module.enabled?'is-enabled':'is-disabled'} ${module.required?'is-required':''}"><span class="module-icon">${escapeHtml(ORGANISATION_MODULE_ICONS[module.module_key]||'•')}</span><span class="module-copy"><b>${escapeHtml(module.name||module.module_key)}${module.required?' <em>Always available</em>':''}</b><small>${escapeHtml(module.description||'Control visibility across this organisation.')}</small></span><span class="switch-control"><input type="checkbox" data-module-key="${escapeHtml(module.module_key)}" ${module.enabled?'checked':''} ${module.required||!organisationModuleControlCanManage?'disabled':''} aria-label="${module.enabled?'Turn off':'Turn on'} ${escapeHtml(module.name||module.module_key)}"><i></i></span></label>`).join('')}</div></section>`).join('')}`;
+  const save=$('#save-organisation-modules');if(save){save.hidden=!organisationModuleControlCanManage;save.disabled=true;save.textContent='Save module visibility';}
+  moduleSettingsDirty=false;const indicator=$('#module-unsaved-indicator');if(indicator)indicator.hidden=true;
+  el.querySelectorAll('[data-module-key]:not(:disabled)').forEach(input=>input.addEventListener('change',()=>{input.closest('.module-toggle')?.classList.toggle('is-enabled',input.checked);input.closest('.module-toggle')?.classList.toggle('is-disabled',!input.checked);moduleSettingsDirty=true;if(indicator)indicator.hidden=false;if(save)save.disabled=false;}));
+}
+async function loadOrganisationModuleControls(){
+  const el=$('#organisation-module-list');if(!el)return;clearSettingsSectionError('modules');
+  try{const payload=await api('/api/security/modules');renderOrganisationModuleControls(payload);}
+  catch(error){showSettingsSectionError('modules',error);el.innerHTML=`<div class="empty-state"><strong>Modules could not be loaded</strong><span>${escapeHtml(error.message)}</span></div>`;}
+}
+loadOrganisationModules=loadOrganisationModuleControls;
+$('#save-organisation-modules')?.addEventListener('click',async event=>{
+  event.preventDefault();event.stopImmediatePropagation();if(!organisationModuleControlCanManage)return;
+  const button=event.currentTarget,message=$('#module-save-message'),modules={};$$('#organisation-module-list [data-module-key]').forEach(input=>modules[input.dataset.moduleKey]=input.checked);
+  message.hidden=true;button.disabled=true;button.textContent='Saving…';
+  try{
+    const payload=await api('/api/security/modules',{method:'PUT',body:JSON.stringify({modules})});
+    currentUser.modules={...(currentUser.modules||{}),...(payload.effectiveModules||{})};renderOrganisationModuleControls(payload);applyAccessVisibility();
+    message.textContent='Module visibility updated. The change is active now for everyone in this organisation.';message.className='form-message success';message.hidden=false;showSuccessToast('Organisation modules updated.');
+  }catch(error){message.textContent=error.message;message.className='form-message error';message.hidden=false;button.disabled=false;button.textContent='Save module visibility';}
+},true);
 
 $('#add-visit-requirement')?.addEventListener('click',()=>addVisitRequirement());
 

@@ -1,4 +1,5 @@
 import { workforceSetupStatements } from './workforce-seed.js';
+import { organisationModuleSetupStatements } from './organisation-modules.js';
 
 const PRODUCT_CODE = 'CARE';
 const PASSWORD_ITERATIONS = 100000;
@@ -100,7 +101,10 @@ export async function handlePlatformOrganisation(request, env, requestedExternal
     const activeBranch = branch?.id || `${organisation.id}-main`;
     const initialUser = await upsertInitialUser(env, organisation, activeBranch, input.initialUser);
     if (initialUser?.error) return initialUser.error;
-    await env.DB.batch(workforceSetupStatements(env.DB, organisation.id, initialUser?.id || null));
+    await env.DB.batch([
+      ...organisationModuleSetupStatements(env.DB, organisation.id, initialUser?.id || null),
+      ...workforceSetupStatements(env.DB, organisation.id, initialUser?.id || null),
+    ]);
     const productSummary = await careSummary(env, organisation);
     return json({ ok: true, protocol: 'corecare-platform-organisation/1', organisation: { id: platformId, external_id: organisation.id, name: organisation.name, status: organisation.status }, initialUser, summary: productSummary.metrics }, 201);
   }
