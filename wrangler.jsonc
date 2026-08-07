@@ -33,6 +33,11 @@
     {
       "binding": "CORECARE_PLATFORM",
       "service": "corecare-platform"
+    },
+    {
+      "binding": "CORECARE_AI",
+      "service": "corecare-platform",
+      "entrypoint": "AiRewriteBroker"
     }
   ],
   "r2_buckets": [
@@ -65,7 +70,8 @@
       "preview_urls": true,
       "routes": [],
       "services": [
-        { "binding": "CORECARE_PLATFORM", "service": "corecare-platform-staging" }
+        { "binding": "CORECARE_PLATFORM", "service": "corecare-platform-staging" },
+        { "binding": "CORECARE_AI", "service": "corecare-platform-staging", "entrypoint": "AiRewriteBroker" }
       ],
       "r2_buckets": [
         { "binding": "CLIENT_FILES", "bucket_name": "corecare-care-staging-secure-files" }

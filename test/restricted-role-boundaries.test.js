@@ -10,6 +10,7 @@ const migration = readFileSync(new URL('../migrations/0060_staff_line_manager_ac
 test('family accounts are confined to deliberately shared portal routes', () => {
   assert.equal(restrictedRoleRouteAllowed('family', '/api/family/portal', 'GET'), true);
   assert.equal(restrictedRoleRouteAllowed('family', '/api/documents/document-1/file', 'GET'), true);
+  assert.equal(restrictedRoleRouteAllowed('family', '/api/ai/rewrite', 'POST'), true);
   assert.equal(restrictedRoleRouteAllowed('family', '/api/dashboard', 'GET'), false);
   assert.equal(restrictedRoleRouteAllowed('family', '/api/staff', 'GET'), false);
   assert.equal(restrictedRoleRouteAllowed('family', '/api/clients', 'GET'), false);
@@ -17,6 +18,7 @@ test('family accounts are confined to deliberately shared portal routes', () => 
 
 test('care workers are confined to their own delivery and development workflows', () => {
   assert.equal(restrictedRoleRouteAllowed('carer', '/api/carer/dashboard', 'GET', 'staff-1'), true);
+  assert.equal(restrictedRoleRouteAllowed('carer', '/api/ai/rewrite', 'POST', 'staff-1'), true);
   assert.equal(restrictedRoleRouteAllowed('carer', '/api/visits/visit-1/care-record', 'POST', 'staff-1'), true);
   assert.equal(restrictedRoleRouteAllowed('carer', '/api/staff/staff-1/documents/doc-1/file', 'GET', 'staff-1'), true);
   assert.equal(restrictedRoleRouteAllowed('carer', '/api/staff/staff-1/documents/doc-1/file', 'POST', 'staff-1'), false);

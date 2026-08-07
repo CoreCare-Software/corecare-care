@@ -258,7 +258,7 @@ function updateIdentity() {
   if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':currentUser?.accessLevel==='area_manager'?'Area management workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '2.0.5';
+const CORECARE_FALLBACK_VERSION = '2.1.0';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;

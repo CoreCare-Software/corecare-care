@@ -261,6 +261,7 @@ export function restrictedRoleRouteAllowed(accessLevel, pathname, method = 'GET'
   const verb = String(method || 'GET').toUpperCase();
   const path = String(pathname || '');
   if (accessLevel === 'family') {
+    if (path === '/api/ai/rewrite') return verb === 'POST';
     if (path === '/api/auth/change-password') return verb === 'POST';
     if (path === '/api/development/status') return verb === 'GET';
     if (path === '/api/family/portal') return verb === 'GET';
@@ -272,6 +273,7 @@ export function restrictedRoleRouteAllowed(accessLevel, pathname, method = 'GET'
     return /^\/api\/documents\/[^/]+\/file$/.test(path) && verb === 'GET';
   }
   if (accessLevel === 'carer') {
+    if (path === '/api/ai/rewrite') return verb === 'POST';
     if (path === '/api/auth/change-password') return verb === 'POST';
     if (path === '/api/development/status') return verb === 'GET';
     if (path === '/api/carer/dashboard') return verb === 'GET';

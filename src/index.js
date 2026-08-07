@@ -19,10 +19,11 @@ import { clientAssurance, createAllergy, createFeedback, createGovernanceRecord,
 import { assessPrnAdministration, medicationDueSlots, validateMedicationSafetyProfile } from './commercial-readiness.js';
 import { recordRuntimeError } from './runtime-errors.js';
 import { MODULE_PERMISSION_MAP, ORGANISATION_MODULES, moduleForApiPath, normaliseOrganisationModuleUpdate, organisationModuleCatalogue, organisationModuleSetupStatements, organisationModuleState } from './organisation-modules.js';
+import { handleAiRewrite } from './ai-rewrite-client.js';
 
-/** CoreCare Care 2.0.5 - Safer access and workforce management */
-const VERSION = "2.0.5";
-const RELEASE = "CoreCare Care 2.0.5 - Safer access and workforce management";
+/** CoreCare Care 2.1.0 - opt-in AI rewrite */
+const VERSION = "2.1.0";
+const RELEASE = "CoreCare Care 2.1.0 - opt-in AI rewrite";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 // Cloudflare Workers rejects PBKDF2 iteration counts above this runtime ceiling.
@@ -79,6 +80,7 @@ const application = {
 
         if (url.pathname === "/api/auth/change-password" && request.method === "POST") return changePassword(request, env, session);
         if (url.pathname === "/api/development/status") return developmentStatus(env, session);
+        if (url.pathname === "/api/ai/rewrite" && request.method === "POST") return handleAiRewrite(request, env, { organisationId: session.organisation_id, userId: session.user_id }, 'CARE');
         if (url.pathname === "/api/dashboard" && request.method === "GET") return await permitted(env.DB, session, "dashboard.view", () => session.access_level==='senior_carer'?carerDashboard(env.DB,session):dashboardSummary(env.DB, session));
         if (url.pathname === "/api/manager-alerts" && request.method === "GET") return await permitted(env.DB, session, "manager_alerts.view", () => managerAlerts(env.DB, session));
         if (url.pathname === "/api/manager-alerts/acknowledge" && request.method === "POST") return await permitted(env.DB, session, "manager_alerts.acknowledge", () => acknowledgeManagerAlert(request, env.DB, session));
@@ -427,7 +429,8 @@ const application = {
   }
 };
 
-const PASSWORD_RESET_MINUTES=30;
+export const PASSWORD_RESET_HOURS=48;
+export function passwordResetExpiresAt(now=Date.now()){return new Date(now+PASSWORD_RESET_HOURS*60*60*1000).toISOString();}
 const passwordResetResponse=()=>json({ok:true,message:'If an active account matches that email address, a reset link will be sent.'},202);
 async function requestPasswordReset(request,env){
   if(!env.DB)return databaseRequired();
@@ -438,7 +441,7 @@ async function requestPasswordReset(request,env){
   const ipHash=await sha256Base64(clean(request.headers.get('cf-connecting-ip'))||'unknown');
   const [byUser,byIp]=await Promise.all([env.DB.prepare("SELECT COUNT(*) total FROM password_reset_tokens WHERE user_id=? AND created_at>=datetime('now','-1 hour')").bind(user.id).first(),env.DB.prepare("SELECT COUNT(*) total FROM password_reset_tokens WHERE request_ip_hash=? AND created_at>=datetime('now','-1 hour')").bind(ipHash).first()]);
   if(Number(byUser?.total||0)>=3||Number(byIp?.total||0)>=10)return passwordResetResponse();
-  const id=crypto.randomUUID(),token=randomToken(),expiresAt=new Date(Date.now()+PASSWORD_RESET_MINUTES*60_000).toISOString();
+  const id=crypto.randomUUID(),token=randomToken(),expiresAt=passwordResetExpiresAt();
   await env.DB.batch([env.DB.prepare("INSERT INTO password_reset_tokens(id,user_id,token_hash,request_ip_hash,expires_at,purpose) VALUES(?,?,?,?,?,'reset')").bind(id,user.id,await sha256Base64(token),ipHash,expiresAt),auditStatement(env.DB,user.organisation_id,user.id,'user.password_reset_requested','user',user.id,{expiresAt})]);
   const actionUrl=new URL(request.url);actionUrl.pathname='/';actionUrl.search='';actionUrl.hash='';actionUrl.searchParams.set('reset',token);
   await sendCareAccountEmail(env,{organisation_id:user.organisation_id,user_id:user.id},{templateKey:'password_reset_link',sourceEventId:`care-password-reset:${id}`,userId:user.id,recipientEmail:user.email,recipientName:user.display_name,accessLabel:clean(user.access_level).replaceAll('_',' '),actionUrl:actionUrl.toString()});
@@ -457,7 +460,7 @@ async function resetPasswordWithToken(request,env){
   return json({ok:true,message:record.purpose==='activation'?'Your CoreCare account is active. Sign in with the password you just created.':'Your password has been changed. Sign in with your new password.'});
 }
 
-async function prepareAccountActivation(db,request,userId){const id=crypto.randomUUID(),token=randomToken(),expiresAt=new Date(Date.now()+48*3600000).toISOString(),actionUrl=new URL(request.url);actionUrl.pathname='/';actionUrl.search='';actionUrl.hash='';actionUrl.searchParams.set('reset',token);actionUrl.searchParams.set('activation','1');return {statement:db.prepare("INSERT INTO password_reset_tokens(id,user_id,token_hash,request_ip_hash,expires_at,purpose) VALUES(?,?,?,?,?,'activation')").bind(id,userId,await sha256Base64(token),await sha256Base64(clean(request.headers.get('cf-connecting-ip'))||'administrator-issued'),expiresAt),actionUrl:actionUrl.toString(),sourceEventId:`care-activation:${userId}:${id}`,expiresAt};}
+async function prepareAccountActivation(db,request,userId){const id=crypto.randomUUID(),token=randomToken(),expiresAt=passwordResetExpiresAt(),actionUrl=new URL(request.url);actionUrl.pathname='/';actionUrl.search='';actionUrl.hash='';actionUrl.searchParams.set('reset',token);actionUrl.searchParams.set('activation','1');return {statement:db.prepare("INSERT INTO password_reset_tokens(id,user_id,token_hash,request_ip_hash,expires_at,purpose) VALUES(?,?,?,?,?,'activation')").bind(id,userId,await sha256Base64(token),await sha256Base64(clean(request.headers.get('cf-connecting-ip'))||'administrator-issued'),expiresAt),actionUrl:actionUrl.toString(),sourceEventId:`care-activation:${userId}:${id}`,expiresAt};}
 async function bootstrapPassword(){return `${randomToken()}Aa1`;}
 
 export default {

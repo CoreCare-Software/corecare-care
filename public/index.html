@@ -6,8 +6,9 @@
   <meta name="theme-color" content="#0f766e">
   <meta name="description" content="CoreCare care management platform">
   <title>Sign in | CoreCare Care</title>
-  <link rel="stylesheet" href="styles.css?v=2.0.5">
-  <link rel="stylesheet" href="mfa.css?v=2.0.5">
+  <link rel="stylesheet" href="styles.css?v=2.1.0">
+  <link rel="stylesheet" href="mfa.css?v=2.1.0">
+  <link rel="stylesheet" href="ai-rewrite.css?v=2.1.0">
 </head>
 <body>
   <div id="login-view" class="login-shell">
@@ -34,7 +35,7 @@
         <p id="login-error" class="form-error" role="alert" aria-live="polite" hidden></p>
         <button class="primary-button login-submit" type="submit">Sign in to CoreCare Care</button>
       </form>
-      <form id="forgot-password-form" hidden novalidate><h2>Reset your password</h2><p class="login-access-help">Enter your account email. If it matches an active account, CoreCare will send a secure 30-minute reset link.</p><div class="login-field"><label for="forgot-email">Email address</label><input id="forgot-email" name="email" type="email" autocomplete="email" required></div><p id="forgot-password-message" class="form-error" role="status" hidden></p><button class="primary-button login-submit" type="submit">Send reset link</button><button class="text-button" data-back-to-login type="button">Back to sign in</button></form>
+      <form id="forgot-password-form" hidden novalidate><h2>Reset your password</h2><p class="login-access-help">Enter your account email. If it matches an active account, CoreCare will send a secure reset link that remains valid for 48 hours.</p><div class="login-field"><label for="forgot-email">Email address</label><input id="forgot-email" name="email" type="email" autocomplete="email" required></div><p id="forgot-password-message" class="form-error" role="status" hidden></p><button class="primary-button login-submit" type="submit">Send reset link</button><button class="text-button" data-back-to-login type="button">Back to sign in</button></form>
       <form id="reset-password-form" hidden novalidate><h2>Choose a new password</h2><p class="login-access-help">Use at least 12 characters with upper-case, lower-case and a number.</p><div class="login-field"><label for="reset-new-password">New password</label><input id="reset-new-password" name="newPassword" type="password" autocomplete="new-password" minlength="12" required></div><div class="login-field"><label for="reset-confirm-password">Confirm password</label><input id="reset-confirm-password" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required></div><p id="reset-password-message" class="form-error" role="status" hidden></p><button class="primary-button login-submit" type="submit">Change password</button><button class="text-button" data-back-to-login type="button">Back to sign in</button></form>
       <div id="login-security-note" class="login-security-note"><span aria-hidden="true">✓</span><p><strong>Protected access</strong><small>Secure sessions and audited activity help keep care information safe.</small></p></div>
       <p class="legal-copy">Authorised users only. Use fictional information in development environments.</p>
@@ -82,7 +83,7 @@
         </div>
         <div id="organisation-navigation" class="organisation-navigation" aria-label="Workspace navigation"></div>
       </nav>
-      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>CoreCare Care</strong><small>Secure service <span id="dev-version">v2.0.5</span></small></div></div>
+      <div class="sidebar-footer"><span class="status-dot"></span><div><strong>CoreCare Care</strong><small>Secure service <span id="dev-version">v2.1.0</span></small></div></div>
     </aside>
 
     <div class="workspace">
@@ -799,8 +800,9 @@
 <dialog id="allergy-dialog" class="client-dialog"><form id="allergy-form"><div class="dialog-heading"><div><p class="eyebrow">Prominent safety information</p><h2>Record allergy</h2></div><button type="button" data-close-dialog="allergy-dialog" aria-label="Close">×</button></div><div class="form-grid"><label>Substance<input name="substance" required></label><label>Severity<select name="severity"><option value="unknown">Unknown</option><option value="mild">Mild</option><option value="moderate">Moderate</option><option value="severe">Severe</option><option value="life_threatening">Life-threatening</option></select></label><label class="wide">Reaction<textarea name="reaction" rows="3" required></textarea></label><label>Review date<input name="reviewDate" type="date"></label><label class="check-row"><input name="verified" type="checkbox"> Clinically verified</label><label class="wide">Notes<textarea name="notes" rows="2"></textarea></label></div><p class="form-error" hidden></p><div class="dialog-actions"><button type="button" class="secondary-button" data-close-dialog="allergy-dialog">Cancel</button><button class="primary-button">Save allergy</button></div></form></dialog>
 
 <script src="/vendor/qrcode.min.js"></script>
-<script src="mfa.js?v=2.0.5"></script>
-<script src="app.js?v=2.0.5"></script>
+<script src="mfa.js?v=2.1.0"></script>
+<script src="app.js?v=2.1.0"></script>
+<script src="ai-rewrite.js?v=2.1.0"></script>
 
 </body>
 </html>
