@@ -5,6 +5,7 @@ import {
   STANDARD_ROLE_PROFILES,
   accessReviewState,
   canAssignStandardRole,
+  canSelfReviewAccess,
   impliedPermissionSources,
   standardPermissionsForRole
 } from '../src/access-control.js';
@@ -81,12 +82,21 @@ test('permission implications and review states are deterministic', () => {
   assert.equal(accessReviewState('2027-01-01', new Date('2026-08-06T12:00:00Z')), 'current');
 });
 
+test('only the sole active organisation owner can self-review access', () => {
+  assert.equal(canSelfReviewAccess('organisation_owner', 1), true);
+  assert.equal(canSelfReviewAccess('organisation_owner', 2), false);
+  assert.equal(canSelfReviewAccess('organisation_admin', 1), false);
+  assert.equal(canSelfReviewAccess('organisation_owner', 0), false);
+});
+
 test('access-review persistence is tenant guarded and exposed in the settings interface', () => {
   assert.match(migration, /CREATE TABLE IF NOT EXISTS user_access_reviews/);
   assert.match(migration, /tenant_guard_user_access_review_insert/);
   assert.match(worker, /\/api\/security\/access-governance/);
   assert.match(worker, /\/api\/security\/access-reviews/);
   assert.match(app, /Access review register/);
+  assert.match(app, /Review own access/);
+  assert.match(worker, /selfReview/);
   assert.equal(STANDARD_ROLE_PROFILES.office_staff.scope, 'assigned_branch');
 });
 

@@ -11,7 +11,7 @@ import { protectResponse, recordComplianceMutation } from './compliance-audit.js
 import { calculateStaffReadiness, calculateWorkforceOverview, normaliseSupervisionActions, normaliseWorkforceSettings } from './workforce-records.js';
 import { workforceSetupStatements } from './workforce-seed.js';
 import { familyAccessReviewState, normaliseFamilyPortalAccess, normaliseFamilyPreferences, validateFamilyMessage, validateFamilyUpdate } from './family-portal.js';
-import { accessReviewState, canAssignStandardRole, impliedPermissionSources, publicStandardRoleProfiles, roleScope, standardPermissionsForRole } from './access-control.js';
+import { accessReviewState, canAssignStandardRole, canSelfReviewAccess, impliedPermissionSources, publicStandardRoleProfiles, restrictedRoleRouteAllowed, roleRank, roleScope, standardPermissionsForRole } from './access-control.js';
 import { attachManagerAlertAcknowledgements, buildManagerAlerts, managerAlertSummary } from './manager-alerts.js';
 import { beginMfa, claimMfaChallenge, getMfaChallenge, mfaRequiredForUser, portalGrantFromLoginResponse, verifyMfa } from './native-mfa.js';
 import { assessStaffAllocationDb, candidateStaff, enrichVisitsWithTeams, getVisitAllocations, publicationReadiness, refreshVisitExceptions, replaceVisitAssignments, syncAssignmentClockEvents } from './rota-safety.js';
@@ -20,9 +20,9 @@ import { assessPrnAdministration, medicationDueSlots, validateMedicationSafetyPr
 import { recordRuntimeError } from './runtime-errors.js';
 import { MODULE_PERMISSION_MAP, ORGANISATION_MODULES, moduleForApiPath, normaliseOrganisationModuleUpdate, organisationModuleCatalogue, organisationModuleSetupStatements, organisationModuleState } from './organisation-modules.js';
 
-/** CoreCare Care 2.0.4 - Fixed client QR verification */
-const VERSION = "2.0.4";
-const RELEASE = "CoreCare Care 2.0.4 - Fixed client QR verification";
+/** CoreCare Care 2.0.5 - Safer access and workforce management */
+const VERSION = "2.0.5";
+const RELEASE = "CoreCare Care 2.0.5 - Safer access and workforce management";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 // Cloudflare Workers rejects PBKDF2 iteration counts above this runtime ceiling.
@@ -68,6 +68,7 @@ const application = {
           if(!access||access.mode==='locked')return json({error:{code:'SUBSCRIPTION_REQUIRED',message:'This subscription needs attention. Contact your CoreCare owner or support to restore access.'}},402);
           if(access?.mode==='read_only'&&!['GET','HEAD','OPTIONS'].includes(request.method))return json({error:{code:'SUBSCRIPTION_READ_ONLY',message:'This workspace is read-only while the subscription payment is overdue.'}},402);
         }
+        if(!session.is_platform_user&&!restrictedRoleRouteAllowed(session.access_level,url.pathname,request.method,session.staff_id||''))return forbidden(session.access_level==='family'?'Family accounts can only use information deliberately shared through the family portal.':'Care-worker accounts can only use their own visits and staff-development records.');
         const scopeError = await enforceBranchScope(request, env.DB, session, url);
         if (scopeError) return scopeError;
         const moduleError = await enforceOrganisationModule(env.DB, session, url.pathname);
@@ -78,7 +79,7 @@ const application = {
 
         if (url.pathname === "/api/auth/change-password" && request.method === "POST") return changePassword(request, env, session);
         if (url.pathname === "/api/development/status") return developmentStatus(env, session);
-        if (url.pathname === "/api/dashboard" && request.method === "GET") return await permitted(env.DB, session, "dashboard.view", () => dashboardSummary(env.DB, session));
+        if (url.pathname === "/api/dashboard" && request.method === "GET") return await permitted(env.DB, session, "dashboard.view", () => session.access_level==='senior_carer'?carerDashboard(env.DB,session):dashboardSummary(env.DB, session));
         if (url.pathname === "/api/manager-alerts" && request.method === "GET") return await permitted(env.DB, session, "manager_alerts.view", () => managerAlerts(env.DB, session));
         if (url.pathname === "/api/manager-alerts/acknowledge" && request.method === "POST") return await permitted(env.DB, session, "manager_alerts.acknowledge", () => acknowledgeManagerAlert(request, env.DB, session));
         if (url.pathname === "/api/carer/dashboard" && request.method === "GET") return await permitted(env.DB, session, "visits.view", () => carerDashboard(env.DB, session));
@@ -1692,31 +1693,42 @@ async function acknowledgeManagerAlert(request,db,session){
   return json({ok:true,alertKey:alert.key,acknowledgedAt:new Date().toISOString()});
 }
 
-const STAFF_COLUMNS = `s.id,s.first_name,s.last_name,s.preferred_name,s.job_title,s.employment_type,s.phone,s.email,s.start_date,s.status,s.dbs_expiry,s.training_expiry,s.notes,s.employee_number,s.line_manager_staff_id,s.contracted_hours,s.work_location,s.probation_end_date,s.end_date,s.emergency_contact_name,s.emergency_contact_relationship,s.emergency_contact_phone,s.supervision_frequency_days,s.next_supervision_date,s.next_appraisal_date,s.created_at,s.updated_at,
-  u.id AS login_user_id,u.email AS login_email,u.access_level AS login_access_level,u.status AS login_status,u.must_change_password,u.last_login_at`;
+const STAFF_COLUMNS = `s.id,s.branch_id,s.first_name,s.last_name,s.preferred_name,s.job_title,s.employment_type,s.phone,s.email,s.start_date,s.status,s.dbs_expiry,s.training_expiry,s.notes,s.employee_number,s.line_manager_staff_id,s.line_manager_user_id,s.contracted_hours,s.work_location,s.probation_end_date,s.end_date,s.emergency_contact_name,s.emergency_contact_relationship,s.emergency_contact_phone,s.supervision_frequency_days,s.next_supervision_date,s.next_appraisal_date,s.created_at,s.updated_at,
+  u.id AS login_user_id,u.email AS login_email,u.access_level AS login_access_level,u.status AS login_status,u.must_change_password,u.last_login_at,
+  (SELECT lm.display_name FROM users lm WHERE lm.id=s.line_manager_user_id AND lm.organisation_id=s.organisation_id) AS line_manager_name,
+  (SELECT lm.access_level FROM users lm WHERE lm.id=s.line_manager_user_id AND lm.organisation_id=s.organisation_id) AS line_manager_access_level`;
 async function listStaff(db, session, url) {
   const includeInactive = url.searchParams.get("includeInactive") === "true";
-  const result = await db.prepare(`SELECT ${STAFF_COLUMNS} FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.organisation_id=? ${branchRestricted(session)?"AND s.branch_id=?":""} ${includeInactive ? "" : "AND s.status='Active'"} ORDER BY s.last_name COLLATE NOCASE,s.first_name COLLATE NOCASE`).bind(session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).all();
-  return json({ staff: result.results.map(toStaff) });
+  const selfOnly=['carer','senior_carer'].includes(session.access_level),scoped=branchRestricted(session),branch=activeBranch(session);
+  const result = await db.prepare(`SELECT ${STAFF_COLUMNS} FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.organisation_id=? ${scoped?"AND s.branch_id=?":""} ${selfOnly?'AND s.id=?':''} ${includeInactive ? "" : "AND s.status='Active'"} ORDER BY s.last_name COLLATE NOCASE,s.first_name COLLATE NOCASE`).bind(session.organisation_id,...(scoped?[branch]:[]),...(selfOnly?[session.staff_id||'']:[])).all();
+  const mayManageStaff=await userHasPermission(db,session,'staff.create')||await userHasPermission(db,session,'staff.edit');
+  let managerCandidates=[];
+  if(mayManageStaff){
+    const managers=await db.prepare(`SELECT u.id,u.display_name,u.email,u.access_level,u.home_branch_id,u.staff_id,b.name branch_name FROM users u LEFT JOIN branches b ON b.id=u.home_branch_id AND b.organisation_id=u.organisation_id WHERE u.organisation_id=? AND u.status='active' AND u.access_level IN ('organisation_owner','area_manager','organisation_admin','deputy_manager','branch_manager','office_staff','senior_carer') ORDER BY u.display_name COLLATE NOCASE`).bind(session.organisation_id).all();
+    managerCandidates=(managers.results||[]).filter(row=>roleRank(row.access_level)>roleRank('carer')&&(!scoped||roleScope(row.access_level)==='organisation'||row.home_branch_id===branch)).map(row=>({id:row.id,displayName:row.display_name,email:row.email,accessLevel:row.access_level,scope:roleScope(row.access_level),branchId:row.home_branch_id||null,branchName:row.branch_name||'',staffId:row.staff_id||null,rank:roleRank(row.access_level)}));
+  }
+  return json({ staff: result.results.map(toStaff),managerCandidates });
 }
-async function validateStaffManager(db,session,managerId,staffId=''){
-  if(!managerId)return '';
-  if(staffId&&managerId===staffId)return 'A staff member cannot be their own line manager.';
-  const row=await db.prepare(`SELECT id FROM staff WHERE id=? AND organisation_id=? ${branchRestricted(session)?'AND branch_id=?':''}`).bind(managerId,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first();
-  return row?'':'Choose a line manager from this organisation and branch.';
+async function validateStaffManager(db,session,managerUserId,targetAccessLevel='carer',staffId='',targetBranchId=activeBranch(session)){
+  if(!managerUserId)return {user:null};
+  const user=await db.prepare("SELECT id,staff_id,access_level,home_branch_id,status FROM users WHERE id=? AND organisation_id=?").bind(managerUserId,session.organisation_id).first();
+  if(!user||user.status!=='active'||roleRank(user.access_level)<=roleRank(targetAccessLevel))return {error:'Choose an active line manager with a higher access level than this staff member.'};
+  if(staffId&&user.staff_id===staffId)return {error:'A staff member cannot be their own line manager.'};
+  if(roleScope(user.access_level)!=='organisation'&&user.home_branch_id!==targetBranchId)return {error:'Choose an organisation-wide manager or a line manager from this staff member’s branch.'};
+  return {user};
 }
 async function createStaff(request, env, session) {
   const db=env.DB;
   const input = await readJson(request); const v = validateStaff(input); if (v.error) return json({error:{code:"VALIDATION_ERROR",message:v.error}},400);
-  const managerError=await validateStaffManager(db,session,v.values[13]);if(managerError)return json({error:{code:'VALIDATION_ERROR',message:managerError}},400);
   const createLogin = input.createLogin === true || clean(input.createLogin)==='on' || clean(input.createLogin)==='true';
   const loginEmail = clean(input.loginEmail || input.email).toLowerCase();
   const accessLevel = clean(input.loginAccessLevel)||'carer';
+  const manager=await validateStaffManager(db,session,v.values[24],createLogin?accessLevel:'carer');if(manager.error)return json({error:{code:'VALIDATION_ERROR',message:manager.error}},400);v.values[13]=manager.user?.staff_id||null;v.values[24]=manager.user?.id||null;
   if(createLogin && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(loginEmail) || !allowedAccessLevels().includes(accessLevel))) return json({error:{code:'VALIDATION_ERROR',message:'Enter a valid login email and access level.'}},400);
   if(createLogin&&(!await userHasPermission(db,session,'security.users.manage')||!canAssignStandardRole(session.access_level||session.role,accessLevel)))return forbidden('You cannot assign that access level.');
   if(createLogin){const limitError=await subscriptionResourceLimitGuard(env,session.organisation_id,'users');if(limitError)return limitError;}
   const id=crypto.randomUUID(), statements=[];let invitation=null;
-  statements.push(db.prepare(`INSERT INTO staff (id,organisation_id,branch_id,first_name,last_name,preferred_name,job_title,employment_type,phone,email,start_date,status,dbs_expiry,training_expiry,notes,employee_number,line_manager_staff_id,contracted_hours,work_location,probation_end_date,end_date,emergency_contact_name,emergency_contact_relationship,emergency_contact_phone,supervision_frequency_days,next_supervision_date,next_appraisal_date) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,activeBranch(session),...v.values));
+  statements.push(db.prepare(`INSERT INTO staff (id,organisation_id,branch_id,first_name,last_name,preferred_name,job_title,employment_type,phone,email,start_date,status,dbs_expiry,training_expiry,notes,employee_number,line_manager_staff_id,contracted_hours,work_location,probation_end_date,end_date,emergency_contact_name,emergency_contact_relationship,emergency_contact_phone,supervision_frequency_days,next_supervision_date,next_appraisal_date,line_manager_user_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id,session.organisation_id,activeBranch(session),...v.values));
   if(createLogin){
     const secured=await hashPassword(await bootstrapPassword()), userId=crypto.randomUUID(), displayName=`${v.values[0]} ${v.values[1]}`.trim();
     statements.push(db.prepare(`INSERT INTO users (id,organisation_id,staff_id,email,display_name,role,access_level,home_branch_id,password_hash,password_salt,password_iterations,status,must_change_password) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',1)`).bind(userId,session.organisation_id,id,loginEmail,displayName,legacyRole(accessLevel),accessLevel,activeBranch(session),secured.hash,secured.salt,PASSWORD_ITERATIONS));
@@ -1732,11 +1744,11 @@ async function createStaff(request, env, session) {
 async function updateStaff(request, env, session, id) {
   const db=env.DB;
   const input=await readJson(request); const v=validateStaff(input); if(v.error) return json({error:{code:"VALIDATION_ERROR",message:v.error}},400);
-  const managerError=await validateStaffManager(db,session,v.values[13],id);if(managerError)return json({error:{code:'VALIDATION_ERROR',message:managerError}},400);
-  const existing=await db.prepare(`SELECT s.id,u.id login_user_id,u.status login_status,u.access_level login_access_level FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.id=? AND s.organisation_id=?`).bind(id,session.organisation_id).first();
+  const existing=await db.prepare(`SELECT s.id,s.branch_id,u.id login_user_id,u.status login_status,u.access_level login_access_level FROM staff s LEFT JOIN users u ON u.organisation_id=s.organisation_id AND u.staff_id=s.id WHERE s.id=? AND s.organisation_id=?`).bind(id,session.organisation_id).first();
   if(!existing)return json({error:{code:'STAFF_NOT_FOUND',message:'Staff record not found.'}},404);
-  const statements=[db.prepare(`UPDATE staff SET first_name=?,last_name=?,preferred_name=?,job_title=?,employment_type=?,phone=?,email=?,start_date=?,status=?,dbs_expiry=?,training_expiry=?,notes=?,employee_number=?,line_manager_staff_id=?,contracted_hours=?,work_location=?,probation_end_date=?,end_date=?,emergency_contact_name=?,emergency_contact_relationship=?,emergency_contact_phone=?,supervision_frequency_days=?,next_supervision_date=?,next_appraisal_date=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(...v.values,id,session.organisation_id)];let invitation=null;
   const createLogin=input.createLogin===true||clean(input.createLogin)==='on'||clean(input.createLogin)==='true';
+  const targetAccessLevel=existing.login_access_level||(createLogin?(clean(input.loginAccessLevel)||'carer'):'carer'),manager=await validateStaffManager(db,session,v.values[24],targetAccessLevel,id,existing.branch_id);if(manager.error)return json({error:{code:'VALIDATION_ERROR',message:manager.error}},400);v.values[13]=manager.user?.staff_id||null;v.values[24]=manager.user?.id||null;
+  const statements=[db.prepare(`UPDATE staff SET first_name=?,last_name=?,preferred_name=?,job_title=?,employment_type=?,phone=?,email=?,start_date=?,status=?,dbs_expiry=?,training_expiry=?,notes=?,employee_number=?,line_manager_staff_id=?,contracted_hours=?,work_location=?,probation_end_date=?,end_date=?,emergency_contact_name=?,emergency_contact_relationship=?,emergency_contact_phone=?,supervision_frequency_days=?,next_supervision_date=?,next_appraisal_date=?,line_manager_user_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(...v.values,id,session.organisation_id)];let invitation=null;
   if(createLogin&&!existing.login_user_id){
     const loginEmail=clean(input.loginEmail||input.email).toLowerCase(),accessLevel=clean(input.loginAccessLevel)||'carer';
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(loginEmail)||!allowedAccessLevels().includes(accessLevel))return json({error:{code:'VALIDATION_ERROR',message:'Enter a valid login email and access level.'}},400);
@@ -1763,12 +1775,12 @@ async function updateStaff(request, env, session, id) {
 }
 function validateStaff(input){
   const hours=clean(input.contractedHours),frequency=clean(input.supervisionFrequencyDays);
-  const values=[clean(input.firstName),clean(input.lastName),clean(input.preferredName),clean(input.jobTitle)||"Carer",clean(input.employmentType)||"Employee",clean(input.phone),clean(input.email),clean(input.startDate),clean(input.status)||"Active",clean(input.dbsExpiry),clean(input.trainingExpiry),clean(input.notes),clean(input.employeeNumber)||null,clean(input.lineManagerStaffId)||null,hours===''?null:Math.max(0,Math.min(168,Number(hours)||0)),clean(input.workLocation),clean(input.probationEndDate)||null,clean(input.endDate)||null,clean(input.emergencyContactName),clean(input.emergencyContactRelationship),clean(input.emergencyContactPhone),frequency===''?null:Math.max(7,Math.min(365,Number(frequency)||30)),clean(input.nextSupervisionDate)||null,clean(input.nextAppraisalDate)||null];
+  const values=[clean(input.firstName),clean(input.lastName),clean(input.preferredName),clean(input.jobTitle)||"Carer",clean(input.employmentType)||"Employee",clean(input.phone),clean(input.email),clean(input.startDate),clean(input.status)||"Active",clean(input.dbsExpiry),clean(input.trainingExpiry),clean(input.notes),clean(input.employeeNumber)||null,null,hours===''?null:Math.max(0,Math.min(168,Number(hours)||0)),clean(input.workLocation),clean(input.probationEndDate)||null,clean(input.endDate)||null,clean(input.emergencyContactName),clean(input.emergencyContactRelationship),clean(input.emergencyContactPhone),frequency===''?null:Math.max(7,Math.min(365,Number(frequency)||30)),clean(input.nextSupervisionDate)||null,clean(input.nextAppraisalDate)||null,clean(input.lineManagerUserId)||null];
   if(!values[0]||!values[1]) return {error:"Enter the staff member's first and last name."};
   if(!["Active","Inactive"].includes(values[8])) return {error:"Choose a valid staff status."};
   return {values};
 }
-function toStaff(row){return {id:row.id,firstName:row.first_name,lastName:row.last_name,preferredName:row.preferred_name||"",jobTitle:row.job_title,employmentType:row.employment_type,phone:row.phone||"",email:row.email||"",startDate:row.start_date||"",status:row.status,dbsExpiry:row.dbs_expiry||"",trainingExpiry:row.training_expiry||"",notes:row.notes||"",employeeNumber:row.employee_number||"",lineManagerStaffId:row.line_manager_staff_id||"",contractedHours:row.contracted_hours??"",workLocation:row.work_location||"",probationEndDate:row.probation_end_date||"",endDate:row.end_date||"",emergencyContactName:row.emergency_contact_name||"",emergencyContactRelationship:row.emergency_contact_relationship||"",emergencyContactPhone:row.emergency_contact_phone||"",supervisionFrequencyDays:row.supervision_frequency_days??"",nextSupervisionDate:row.next_supervision_date||"",nextAppraisalDate:row.next_appraisal_date||"",loginUserId:row.login_user_id||"",loginEmail:row.login_email||"",loginAccessLevel:row.login_access_level||"carer",loginStatus:row.login_status||"",mustChangePassword:Boolean(row.must_change_password),lastLoginAt:row.last_login_at||"",createdAt:row.created_at,updatedAt:row.updated_at};}
+function toStaff(row){return {id:row.id,branchId:row.branch_id||null,firstName:row.first_name,lastName:row.last_name,preferredName:row.preferred_name||"",jobTitle:row.job_title,employmentType:row.employment_type,phone:row.phone||"",email:row.email||"",startDate:row.start_date||"",status:row.status,dbsExpiry:row.dbs_expiry||"",trainingExpiry:row.training_expiry||"",notes:row.notes||"",employeeNumber:row.employee_number||"",lineManagerStaffId:row.line_manager_staff_id||"",lineManagerUserId:row.line_manager_user_id||"",lineManagerName:row.line_manager_name||"",lineManagerAccessLevel:row.line_manager_access_level||"",contractedHours:row.contracted_hours??"",workLocation:row.work_location||"",probationEndDate:row.probation_end_date||"",endDate:row.end_date||"",emergencyContactName:row.emergency_contact_name||"",emergencyContactRelationship:row.emergency_contact_relationship||"",emergencyContactPhone:row.emergency_contact_phone||"",supervisionFrequencyDays:row.supervision_frequency_days??"",nextSupervisionDate:row.next_supervision_date||"",nextAppraisalDate:row.next_appraisal_date||"",loginUserId:row.login_user_id||"",loginEmail:row.login_email||"",loginAccessLevel:row.login_access_level||"carer",loginStatus:row.login_status||"",mustChangePassword:Boolean(row.must_change_password),lastLoginAt:row.last_login_at||"",createdAt:row.created_at,updatedAt:row.updated_at};}
 
 const WORKFORCE_TABLES={recruitment:'staff_recruitment_checks',employment:'staff_employment_history',supervisions:'staff_supervisions',training:'staff_training_records',competencies:'staff_competencies',qualifications:'staff_qualifications',appraisals:'staff_appraisals',absences:'staff_absences',hr:'staff_hr_cases'};
 function workforcePermission(section,mode='view'){
@@ -3093,19 +3105,34 @@ async function accessGovernance(db,session){
     LEFT JOIN users reviewer ON reviewer.id=r.reviewer_id AND reviewer.organisation_id=r.organisation_id
     WHERE u.organisation_id=? AND u.access_level!='family' ${scoped?'AND u.home_branch_id=?':''}
     ORDER BY u.display_name COLLATE NOCASE`).bind(session.organisation_id,...(scoped?[activeBranch(session)]:[])).all();
-  const users=(rows.results||[]).map(row=>({id:row.id,displayName:row.display_name,email:row.email,accessLevel:row.access_level,status:row.status,branchId:row.home_branch_id||null,lastLoginAt:row.last_login_at||null,review:{outcome:row.review_outcome||null,summary:row.review_summary||'',reviewedAt:row.reviewed_at||null,nextReviewDate:row.next_review_date||null,reviewerName:row.reviewer_name||'',state:accessReviewState(row.next_review_date)}}));
-  return json({profiles:publicStandardRoleProfiles(),users});
+  const canReviewAccess=await userHasPermission(db,session,'security.users.manage');
+  const ownerCountRow=await db.prepare("SELECT COUNT(*) total FROM users WHERE organisation_id=? AND access_level='organisation_owner' AND status='active'").bind(session.organisation_id).first();
+  const activeOwnerCount=Number(ownerCountRow?.total||0),selfReviewAllowed=canReviewAccess&&canSelfReviewAccess(session.access_level||session.role,activeOwnerCount);
+  const users=(rows.results||[]).map(row=>{
+    const isCurrent=row.id===session.user_id;
+    const canReview=canReviewAccess&&(isCurrent?selfReviewAllowed:mayManageUser(session,row));
+    let reviewActionNote='';
+    if(isCurrent&&!canReview)reviewActionNote=row.access_level==='organisation_owner'&&activeOwnerCount>1?'Ask another active organisation owner to complete this review.':'Ask an authorised manager to complete this review.';
+    return {id:row.id,displayName:row.display_name,email:row.email,accessLevel:row.access_level,status:row.status,branchId:row.home_branch_id||null,lastLoginAt:row.last_login_at||null,isCurrent,canReview,reviewActionNote,review:{outcome:row.review_outcome||null,summary:row.review_summary||'',reviewedAt:row.reviewed_at||null,nextReviewDate:row.next_review_date||null,reviewerName:row.reviewer_name||'',state:accessReviewState(row.next_review_date)}};
+  });
+  return json({profiles:publicStandardRoleProfiles(),users,reviewPolicy:{activeOwnerCount,selfReviewAllowed}});
 }
 async function recordUserAccessReview(request,db,session){
   if(!await userHasPermission(db,session,'security.users.manage'))return forbidden();
   const input=await readJson(request),userId=clean(input.userId),outcome=clean(input.outcome),summary=clean(input.reviewSummary),nextReviewDate=clean(input.nextReviewDate);
   if(!userId||!['confirmed','changed','disabled'].includes(outcome)||summary.length<8||!/^\d{4}-\d{2}-\d{2}$/.test(nextReviewDate))return json({error:{code:'VALIDATION_ERROR',message:'Choose an outcome, enter a clear review summary and set the next review date.'}},400);
   const due=new Date(`${nextReviewDate}T23:59:59Z`);if(!Number.isFinite(due.getTime())||due.getTime()<Date.now())return json({error:{code:'VALIDATION_ERROR',message:'The next access review must be in the future.'}},400);
-  if(userId===session.user_id)return json({error:{code:'SELF_REVIEW_BLOCKED',message:'A different authorised manager must review your access.'}},400);
   const user=await db.prepare('SELECT id,role,access_level,home_branch_id,status FROM users WHERE id=? AND organisation_id=?').bind(userId,session.organisation_id).first();if(!user)return notFound('User');
+  const selfReview=userId===session.user_id;
+  if(selfReview){
+    const ownerCountRow=await db.prepare("SELECT COUNT(*) total FROM users WHERE organisation_id=? AND access_level='organisation_owner' AND status='active'").bind(session.organisation_id).first();
+    const activeOwnerCount=Number(ownerCountRow?.total||0);
+    if(!canSelfReviewAccess(user.access_level,activeOwnerCount))return json({error:{code:'SELF_REVIEW_BLOCKED',message:user.access_level==='organisation_owner'?'Another active organisation owner must review your access.':'A different authorised manager must review your access.'}},400);
+    if(outcome==='disabled')return forbidden('You cannot disable your own account during an access review.');
+  }
   if((branchRestricted(session)&&user.home_branch_id!==activeBranch(session))||!mayManageUser(session,user))return forbidden();
   if(user.access_level==='organisation_owner'&&outcome==='disabled')return forbidden('Organisation owner access must be transferred through the user account controls.');
-  const id=crypto.randomUUID(),statements=[db.prepare('INSERT INTO user_access_reviews(id,organisation_id,user_id,reviewer_id,outcome,review_summary,next_review_date) VALUES(?,?,?,?,?,?,?)').bind(id,session.organisation_id,userId,session.user_id,outcome,summary,nextReviewDate),auditStatement(db,session.organisation_id,session.user_id,'security.access_reviewed','user',userId,{outcome,nextReviewDate,summary})];
+  const id=crypto.randomUUID(),statements=[db.prepare('INSERT INTO user_access_reviews(id,organisation_id,user_id,reviewer_id,outcome,review_summary,next_review_date) VALUES(?,?,?,?,?,?,?)').bind(id,session.organisation_id,userId,session.user_id,outcome,summary,nextReviewDate),auditStatement(db,session.organisation_id,session.user_id,'security.access_reviewed','user',userId,{outcome,nextReviewDate,summary,selfReview})];
   if(outcome==='disabled'){statements.push(db.prepare("UPDATE users SET status='disabled',updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(userId,session.organisation_id),db.prepare('DELETE FROM sessions WHERE user_id=? AND organisation_id=?').bind(userId,session.organisation_id));}
   await db.batch(statements);return json({ok:true,id},201);
 }

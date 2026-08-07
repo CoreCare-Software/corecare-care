@@ -252,3 +252,44 @@ export function accessReviewState(nextReviewDate, now = new Date()) {
   if (remaining <= 30 * 86400000) return 'due_soon';
   return 'current';
 }
+
+export function canSelfReviewAccess(accessLevel, activeOwnerCount) {
+  return accessLevel === 'organisation_owner' && Number(activeOwnerCount) === 1;
+}
+
+export function restrictedRoleRouteAllowed(accessLevel, pathname, method = 'GET', staffId = '') {
+  const verb = String(method || 'GET').toUpperCase();
+  const path = String(pathname || '');
+  if (accessLevel === 'family') {
+    if (path === '/api/auth/change-password') return verb === 'POST';
+    if (path === '/api/development/status') return verb === 'GET';
+    if (path === '/api/family/portal') return verb === 'GET';
+    if (path === '/api/family/preferences') return ['GET', 'PUT'].includes(verb);
+    if (path === '/api/family/messages') return ['GET', 'POST'].includes(verb);
+    if (/^\/api\/family\/messages\/[^/]+$/.test(path)) return verb === 'PATCH';
+    if (path === '/api/family/notifications/read-all') return verb === 'POST';
+    if (/^\/api\/family\/notifications\/[^/]+$/.test(path)) return verb === 'PATCH';
+    return /^\/api\/documents\/[^/]+\/file$/.test(path) && verb === 'GET';
+  }
+  if (accessLevel === 'carer') {
+    if (path === '/api/auth/change-password') return verb === 'POST';
+    if (path === '/api/development/status') return verb === 'GET';
+    if (path === '/api/carer/dashboard') return verb === 'GET';
+    if (path === '/api/visits/sync') return verb === 'POST';
+    if (/^\/api\/visits\/[^/]+\/care-record$/.test(path)) return ['GET', 'POST'].includes(verb);
+    if (path === '/api/staff/me/workforce') return verb === 'GET';
+    const documentPath = path.match(/^\/api\/staff\/([^/]+)\/documents\/[^/]+\/file$/);
+    const acknowledgementPath = path.match(/^\/api\/staff\/([^/]+)\/workforce\/(?:supervisions|appraisals)\/[^/]+\/acknowledge$/);
+    const staffPath = documentPath || acknowledgementPath;
+    if (!staffPath || !staffId) return false;
+    let requestedStaffId = '';
+    try {
+      requestedStaffId = decodeURIComponent(staffPath[1]);
+    } catch {
+      return false;
+    }
+    if (requestedStaffId !== staffId) return false;
+    return documentPath ? verb === 'GET' : verb === 'POST';
+  }
+  return true;
+}
