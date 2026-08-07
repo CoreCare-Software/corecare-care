@@ -122,7 +122,7 @@ const WORKSPACE_CONFIG = {
   coordinator: {
     label: 'Care coordinator workspace',
     roles: ['office_staff'],
-    pages: ['dashboard','clients','staff','care','visits','rota','tasks','incidents','support']
+    pages: ['dashboard','clients','staff','family','care','visits','rota','tasks','incidents','reports','support']
   },
   senior: {
     label: 'Senior carer workspace',
@@ -155,9 +155,9 @@ const WORKSPACE_NAVIGATION = {
   ],
   coordinator: [
     ['Overview', [['dashboard','⌂','Coordinator dashboard']]],
-    ['People', [['clients','◉','Clients'],['staff','◎','Staff']]],
+    ['People', [['clients','◉','Clients'],['staff','◎','Staff'],['family','◇','Family portal']]],
     ['Care delivery', [['care','▤','Care plans'],['visits','◷','Visits']]],
-    ['Planning', [['rota','▦','Rota'],['tasks','✓','Tasks'],['incidents','!','Incidents'],['support','?','Support']]]
+    ['Planning', [['rota','▦','Rota'],['tasks','✓','Tasks'],['incidents','!','Incidents'],['reports','▥','Reports'],['support','?','Support']]]
   ],
   senior: [
     ['Overview', [['dashboard','⌂','Senior dashboard']]],
@@ -245,7 +245,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.38.0';
+const CORECARE_FALLBACK_VERSION = '1.38.5';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -1393,8 +1393,12 @@ $('#toggle-password').addEventListener('click', event => {
 
 $('#sign-out').addEventListener('click', async () => {
   closeUserAccountMenu();
-  try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
-  showLogin();
+  try {
+    await api('/api/auth/logout', { method: 'POST' });
+    window.location.replace(location.pathname);
+  } catch (error) {
+    showToastError(new Error('CoreCare could not sign you out. Please try again.'));
+  }
 });
 
 $('#forgot-password')?.addEventListener('click',()=>showLoginPanel('forgot'));
@@ -1405,20 +1409,21 @@ $('#reset-password-form')?.addEventListener('submit',async event=>{event.prevent
 function closeUserAccountMenu(){const menu=$('#user-account-menu'),trigger=$('#user-menu-trigger');if(menu)menu.hidden=true;if(trigger)trigger.setAttribute('aria-expanded','false');}
 $('#user-menu-trigger')?.addEventListener('click',event=>{event.stopPropagation();const menu=$('#user-account-menu'),trigger=event.currentTarget,opening=menu?.hidden!==false;if(menu)menu.hidden=!opening;trigger.setAttribute('aria-expanded',opening?'true':'false');});
 document.addEventListener('click',event=>{if(!event.target.closest?.('.user-menu'))closeUserAccountMenu();});
-document.addEventListener('keydown',event=>{if(event.key==='Escape')closeUserAccountMenu();});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeUserAccountMenu();setMobileNavigationOpen(false);}});
 
-menuButton.addEventListener('click', () => {
-  const open = sidebar.classList.toggle('open');
+function setMobileNavigationOpen(open){
+  sidebar.classList.toggle('open', open);
   menuButton.setAttribute('aria-expanded', String(open));
-});
+}
+menuButton.addEventListener('click', () => setMobileNavigationOpen(!sidebar.classList.contains('open')));
+$('#close-navigation')?.addEventListener('click', () => setMobileNavigationOpen(false));
 
 document.querySelector('.sidebar nav')?.addEventListener('click', event => {
   const button=event.target.closest('.nav-item');
   if(!button)return;
   $$('.nav-item').forEach(item => item.classList.remove('active'));
   button.classList.add('active');
-  sidebar.classList.remove('open');
-  menuButton.setAttribute('aria-expanded', 'false');
+  setMobileNavigationOpen(false);
   if(button.dataset.page)showPage(button.dataset.page);
 });
 
@@ -1433,7 +1438,13 @@ $('#staff-status-filter').addEventListener('change', renderStaff);
 staffForm.addEventListener('submit', saveStaff);
 $('#staff-create-login')?.addEventListener('change',toggleStaffLoginFields);
 $('#quick-add').addEventListener('click', () => quickAddDialog.showModal());
-$('#open-attention-centre').addEventListener('click', () => navigateTo('operations'));
+function openAttentionCentre(){
+  if(canOpenPage('operations')) return showPage('operations');
+  if(canOpenPage('tasks')) return showPage('tasks');
+  if(canOpenPage('family')) return showPage('family');
+  showPage('dashboard');
+}
+$('#open-attention-centre').addEventListener('click', openAttentionCentre);
 $('#close-quick-add').addEventListener('click', () => quickAddDialog.close());
 $$('[data-quick]').forEach(button => button.addEventListener('click', () => {
   quickAddDialog.close();

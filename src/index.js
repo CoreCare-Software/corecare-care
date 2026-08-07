@@ -8,9 +8,9 @@ import { LAUNCH_GOVERNANCE_DOMAINS, deriveLaunchDomainStatus, deriveOverallLaunc
 import { requestPlatformSupportTicket, requestPlatformTransactionalEmail } from './platform-email.js';
 import { protectResponse, recordComplianceMutation } from './compliance-audit.js';
 
-/** CoreCare Care 1.38.0 - transactional security and support email */
-const VERSION = "1.38.0";
-const RELEASE = "CoreCare Care 1.38.0 - transactional security and support email";
+/** CoreCare Care 1.38.5 - production completion hardening */
+const VERSION = "1.38.5";
+const RELEASE = "CoreCare Care 1.38.5 - production completion hardening";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -697,7 +697,7 @@ function visitRequirementStatements(db, session, clientId, requirement) {
   const statements=[db.prepare(`INSERT INTO client_visit_requirements(id,organisation_id,client_id,visit_type,days_json,preferred_time,window_minutes,duration_minutes,carers_required,notes,start_date,end_date,created_by,scheduling_rule,time_critical_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(requirementId,session.organisation_id,clientId,requirement.visitType,JSON.stringify(requirement.days),requirement.preferredTime,requirement.windowMinutes,requirement.durationMinutes,requirement.carersRequired,requirement.notes,requirement.startDate,requirement.endDate,session.user_id,requirement.schedulingRule,requirement.timeCriticalReason)];
   for(const date of generatedDates(requirement)){
     const day=date.toISOString().slice(0,10), start=new Date(`${day}T${requirement.preferredTime}:00`), end=new Date(start.getTime()+requirement.durationMinutes*60000);
-    statements.push(db.prepare(`INSERT OR IGNORE INTO care_visits(id,organisation_id,branch_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,requirement_id,requirement_occurrence_date,created_by,protected_time_rule,protected_time_reason,protected_window_minutes) VALUES(?, ?, (SELECT branch_id FROM clients WHERE id=? AND organisation_id=?), ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,clientId,session.organisation_id,clientId,null,requirement.visitType,start.toISOString(),end.toISOString(),'scheduled','requirement','draft',requirementId,'requirement',requirementId,day,session.user_id,requirement.schedulingRule,requirement.timeCriticalReason,requirement.windowMinutes));
+    statements.push(db.prepare(`INSERT OR IGNORE INTO care_visits(id,organisation_id,branch_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,requirement_id,requirement_occurrence_date,created_by,protected_time_rule,protected_time_reason,protected_window_minutes) VALUES(?, ?, (SELECT branch_id FROM clients WHERE id=? AND organisation_id=?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(crypto.randomUUID(),session.organisation_id,clientId,session.organisation_id,clientId,null,requirement.visitType,start.toISOString(),end.toISOString(),'scheduled','requirement','draft',requirementId,'requirement',requirementId,day,session.user_id,requirement.schedulingRule,requirement.timeCriticalReason,requirement.windowMinutes));
   }
   return statements;
 }
@@ -2405,7 +2405,7 @@ const STANDARD_PERMISSION_MAP = {
   branch_manager: ['dashboard.view','operations.view','operations.manage','rota.view','rota.create','rota.edit','rota.publish','visits.view','visits.clock','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','family_portal.manage','organisation.settings.view','governance.launch.view','security.roles.view','security.users.view','clients.view','clients.create','clients.edit','staff.view','staff.create','staff.edit','care_plans.view','care_plans.create','care_plans.edit','risks.view','risks.manage','documents.view','documents.manage','reports.view'],
   senior_carer: ['dashboard.view','operations.view','visits.view','visits.clock','medication.view','medication.manage','tasks.view','tasks.manage','incidents.view','incidents.manage','clients.view','clients.edit','staff.view','care_plans.view','care_plans.create','care_plans.edit','risks.view','risks.manage','documents.view','documents.manage'],
   carer: ['dashboard.view','visits.view','visits.clock','tasks.view','medication.view','clients.view','staff.view','care_plans.view','risks.view','documents.view'],
-  office_staff: ['dashboard.view','operations.view','rota.view','rota.create','rota.edit','rota.publish','visits.view','tasks.view','tasks.manage','incidents.view','family_portal.manage','organisation.settings.view','clients.view','clients.create','clients.edit','staff.view','staff.create','staff.edit','reports.view'],
+  office_staff: ['dashboard.view','operations.view','rota.view','rota.create','rota.edit','rota.publish','visits.view','tasks.view','tasks.manage','incidents.view','family_portal.manage','organisation.settings.view','clients.view','clients.create','clients.edit','staff.view','staff.create','staff.edit','care_plans.view','risks.view','documents.view','reports.view'],
   auditor: ['dashboard.view','operations.view','rota.view','visits.view','medication.view','tasks.view','incidents.view','finance.view','organisation.settings.view','governance.launch.view','security.roles.view','security.users.view','security.audit.view','clients.view','staff.view','care_plans.view','risks.view','documents.view','reports.view'],
   family: [], platform_owner: ['*'], platform_admin: ['*']
 };
