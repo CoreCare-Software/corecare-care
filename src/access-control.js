@@ -8,7 +8,7 @@ export const CARE_PERMISSION_GROUPS = Object.freeze({
     'rota.view', 'rota.create', 'rota.edit', 'rota.publish', 'rota.cancel',
     'rota.templates.view', 'rota.templates.manage', 'rota.templates.generate',
     'rota.travel.override', 'rota.travel.settings', 'rota.visit.lock',
-    'rota.visit.override_lock', 'rota.time_critical.override'
+    'rota.visit.override_lock', 'rota.time_critical.override', 'rota.cross_branch.cover'
   ],
   visits: [
     'visits.view', 'visits.create', 'visits.clock', 'visits.records.view',
@@ -67,7 +67,7 @@ const registeredManager = group(
 const branchManager = without(registeredManager, [
   'organisation.settings.manage', 'governance.launch.approve',
   'security.roles.manage', 'security.sessions.manage',
-  'finance.settings.manage', 'data.export'
+  'finance.settings.manage', 'data.export', 'rota.cross_branch.cover'
 ]);
 const coordinator = unique([
   ...group('dashboard', 'operations', 'tasks', 'family', 'support'),
