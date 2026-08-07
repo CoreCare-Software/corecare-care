@@ -63,6 +63,7 @@ export async function assessStaffAllocationDb(db, session, staffId, visit, optio
     requiredSkills,
     staffSkills,
     branchMismatch: Boolean(visit.branch_id && staff.branch_id && visit.branch_id !== staff.branch_id),
+    allowCrossBranch: Boolean(options.allowCrossBranch),
     allocationRestricted: Number(settings?.block_expired_critical_competencies ?? 1) === 1 && ((criticalTraining.results || []).length > 0 || (criticalCompetencies.results || []).length > 0),
     absence: absence || null,
     overlap: Boolean(overlap),
@@ -101,41 +102,47 @@ export async function getVisitAllocations(db, session, visitId, scope = {}) {
   return team ? json(team) : failure('NOT_FOUND', 'Rota visit not found.', 404);
 }
 
-export async function candidateStaff(db, session, visitId, scope = {}) {
+export async function candidateStaff(db, session, visitId, scope = {}, options = {}) {
   const team = await visitTeam(db, session, visitId, scope, false);
   if (!team) return failure('NOT_FOUND', 'Rota visit not found.', 404);
   const staff = (await db.prepare(`SELECT id FROM staff WHERE organisation_id=?${scope?.restricted ? ' AND branch_id=?' : ''} AND status='Active' ORDER BY first_name,last_name`).bind(session.organisation_id, ...scopeValues(scope)).all()).results || [];
   const candidates = [];
-  for (const row of staff) candidates.push(await assessStaffAllocationDb(db, session, row.id, team.visit, { requiredSkills: team.visit.requirement_skills_json }));
+  for (const row of staff) candidates.push(await assessStaffAllocationDb(db, session, row.id, team.visit, { requiredSkills: team.visit.requirement_skills_json, allowCrossBranch: Boolean(options.allowCrossBranch) }));
   candidates.sort((a, b) => Number(b.allowed) - Number(a.allowed) || a.blockers.length - b.blockers.length || a.warnings.length - b.warnings.length || clean(a.staff?.display_name).localeCompare(clean(b.staff?.display_name)));
   return json({ visit: team.visit, current: team.assignments, candidates });
 }
 
-export async function replaceVisitAssignments(request, db, session, visitId, scope, makeAudit) {
+export async function replaceVisitAssignments(request, db, session, visitId, scope, makeAudit, options = {}) {
   const current = await visitTeam(db, session, visitId, scope, false);
   if (!current) return failure('NOT_FOUND', 'Rota visit not found.', 404);
   let input; try { input = await readObject(request); } catch (reason) { return failure('VALIDATION_ERROR', reason.message); }
   const requested = Array.isArray(input.assignments) ? input.assignments : [];
+  const crossBranchReason = clean(input.crossBranchReason, 1_000);
   const normalised = requested.map((row, index) => ({ staffId: clean(row.staffId, 160), role: index === 0 ? 'lead' : clean(row.role, 40) === 'lead' ? 'support' : 'support' })).filter(row => row.staffId);
   if (new Set(normalised.map(row => row.staffId)).size !== normalised.length) return failure('DUPLICATE_CARE_WORKER', 'The same care worker cannot fill more than one team position.', 409);
   const required = Math.max(1, Math.min(4, Number(input.carersRequired ?? current.visit.carers_required ?? 1) || 1));
   if (normalised.length > required) return failure('CARE_TEAM_OVERSUBSCRIBED', `This visit requires ${required} care worker${required === 1 ? '' : 's'}.`, 409);
   const assessed = [];
-  for (const row of normalised) assessed.push({ ...row, readiness: await assessStaffAllocationDb(db, session, row.staffId, current.visit, { requiredSkills: current.visit.requirement_skills_json }) });
+  for (const row of normalised) assessed.push({ ...row, readiness: await assessStaffAllocationDb(db, session, row.staffId, current.visit, { requiredSkills: current.visit.requirement_skills_json, allowCrossBranch: Boolean(options.allowCrossBranch && crossBranchReason) }) });
   const blocked = assessed.filter(row => !row.readiness.allowed);
   if (blocked.length) return failure('UNSAFE_ALLOCATION', 'One or more care workers cannot be safely allocated.', 409, { staff: blocked.map(row => ({ staffId: row.staffId, name: row.readiness.staff?.display_name, blockers: row.readiness.blockers })) });
+  const crossBranch = assessed.filter(row => row.readiness.staff?.branch_id && current.visit.branch_id && row.readiness.staff.branch_id !== current.visit.branch_id);
+  if (crossBranch.length && !options.allowCrossBranch) return failure('CROSS_BRANCH_FORBIDDEN', 'You are not authorised to allocate cross-branch cover.', 403);
+  if (crossBranch.length && !crossBranchReason) return failure('CROSS_BRANCH_REASON_REQUIRED', 'Enter why cross-branch cover is required before saving the care team.', 400);
   const state = normalised.length === 0 ? 'unallocated' : normalised.length < required ? 'partial' : 'ready';
   const statements = [
     db.prepare("UPDATE visit_staff_assignments SET allocation_status='removed',updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND visit_id=? AND allocation_status NOT IN ('removed','declined')").bind(session.organisation_id, visitId),
   ];
   for (let index = 0; index < normalised.length; index += 1) {
     const row = normalised[index];
-    statements.push(db.prepare(`INSERT INTO visit_staff_assignments(id,organisation_id,branch_id,visit_id,staff_id,assignment_role,allocation_status,allocation_version,allocated_by,allocated_at,updated_at)
-      VALUES(?,?,?,?,?,?, 'allocated',1,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
-      ON CONFLICT(organisation_id,visit_id,staff_id) DO UPDATE SET assignment_role=excluded.assignment_role,allocation_status='allocated',allocation_version=visit_staff_assignments.allocation_version+1,allocated_by=excluded.allocated_by,allocated_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP`).bind(crypto.randomUUID(), session.organisation_id, current.visit.branch_id || null, visitId, row.staffId, index === 0 ? 'lead' : 'support', session.user_id));
+    const staffBranch = assessed.find(item => item.staffId === row.staffId)?.readiness?.staff?.branch_id || null;
+    const isCrossBranch = Boolean(staffBranch && current.visit.branch_id && staffBranch !== current.visit.branch_id);
+    statements.push(db.prepare(`INSERT INTO visit_staff_assignments(id,organisation_id,branch_id,home_branch_id,is_cross_branch,cross_branch_reason,visit_id,staff_id,assignment_role,allocation_status,allocation_version,allocated_by,allocated_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?, 'allocated',1,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+      ON CONFLICT(organisation_id,visit_id,staff_id) DO UPDATE SET assignment_role=excluded.assignment_role,allocation_status='allocated',home_branch_id=excluded.home_branch_id,is_cross_branch=excluded.is_cross_branch,cross_branch_reason=excluded.cross_branch_reason,allocation_version=visit_staff_assignments.allocation_version+1,allocated_by=excluded.allocated_by,allocated_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP`).bind(crypto.randomUUID(), session.organisation_id, current.visit.branch_id || null, staffBranch, isCrossBranch ? 1 : 0, isCrossBranch ? crossBranchReason : '', visitId, row.staffId, index === 0 ? 'lead' : 'support', session.user_id));
   }
-  statements.push(db.prepare('UPDATE care_visits SET staff_id=?,carers_required=?,allocation_state=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?').bind(normalised[0]?.staffId || null, required, state, visitId, session.organisation_id));
-  audit(statements, makeAudit, session, 'rota.care_team_updated', 'visit', visitId, { required, assigned: normalised.map(row => row.staffId), state });
+  statements.push(db.prepare("UPDATE care_visits SET staff_id=?,carers_required=?,allocation_state=?,rota_status=CASE WHEN rota_status='published' THEN 'draft' ELSE rota_status END,rota_revision=rota_revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?").bind(normalised[0]?.staffId || null, required, state, visitId, session.organisation_id));
+  audit(statements, makeAudit, session, 'rota.care_team_updated', 'visit', visitId, { required, assigned: normalised.map(row => row.staffId), state, crossBranchStaffIds: crossBranch.map(row => row.staffId), crossBranchReason: crossBranch.length ? crossBranchReason : '' });
   await db.batch(statements);
   return getVisitAllocations(db, session, visitId, scope);
 }

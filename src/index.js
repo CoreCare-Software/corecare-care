@@ -21,9 +21,9 @@ import { recordRuntimeError } from './runtime-errors.js';
 import { MODULE_PERMISSION_MAP, ORGANISATION_MODULES, moduleForApiPath, normaliseOrganisationModuleUpdate, organisationModuleCatalogue, organisationModuleSetupStatements, organisationModuleState } from './organisation-modules.js';
 import { handleAiRewrite } from './ai-rewrite-client.js';
 
-/** CoreCare Care 2.1.0 - opt-in AI rewrite */
-const VERSION = "2.1.0";
-const RELEASE = "CoreCare Care 2.1.0 - opt-in AI rewrite";
+/** CoreCare Care 2.2.0 - Multi-branch rota command centre */
+const VERSION = "2.2.0";
+const RELEASE = "CoreCare Care 2.2.0 - Multi-branch rota command centre";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 // Cloudflare Workers rejects PBKDF2 iteration counts above this runtime ceiling.
@@ -88,17 +88,19 @@ const application = {
         if (url.pathname === "/api/operations/board" && request.method === "GET") return operationsBoard(env.DB, session);
         if (url.pathname === "/api/rota" && request.method === "GET") return await permitted(env.DB, session, "rota.view", () => rotaBoard(env.DB, session, url));
         if (url.pathname === "/api/rota" && request.method === "POST") return await permitted(env.DB, session, "rota.create", () => createRotaVisit(request, env, session));
-        if (url.pathname === "/api/rota/publish" && request.method === "POST") return await permitted(env.DB, session, "rota.publish", () => publishRota(request, env.DB, session));
-        if (url.pathname === "/api/rota/templates" && request.method === "GET") return await permitted(env.DB, session, "rota.templates.view", () => listRotaTemplates(env.DB, session));
+        if (url.pathname === "/api/rota/publish" && request.method === "POST") return await permitted(env.DB, session, "rota.publish", () => publishRota(request, env, session));
+        if (url.pathname === "/api/rota/templates" && request.method === "GET") return await permitted(env.DB, session, "rota.templates.view", () => listRotaTemplates(env.DB, session, url));
         if (url.pathname === "/api/rota/templates/visit" && request.method === "POST") return await permitted(env.DB, session, "rota.templates.manage", () => saveRotaVisitTemplate(request, env.DB, session));
         if (url.pathname === "/api/rota/templates/working-pattern" && request.method === "POST") return await permitted(env.DB, session, "rota.templates.manage", () => saveWorkingPattern(request, env.DB, session));
         if (url.pathname === "/api/rota/templates/exception" && request.method === "POST") return await permitted(env.DB, session, "rota.templates.manage", () => saveRotaException(request, env.DB, session));
         if (url.pathname === "/api/rota/templates/generate" && request.method === "POST") return await permitted(env.DB, session, "rota.templates.generate", () => generateRotaFromTemplates(request, env, session));
         const rotaAllocationMatch=url.pathname.match(/^\/api\/rota\/([^/]+)\/allocations$/);
         if(rotaAllocationMatch&&request.method==="GET")return await permitted(env.DB,session,"rota.view",()=>getVisitAllocations(env.DB,session,decodeURIComponent(rotaAllocationMatch[1]),careScope(session)));
-        if(rotaAllocationMatch&&request.method==="PUT")return await permitted(env.DB,session,"rota.edit",()=>replaceVisitAssignments(request,env.DB,session,decodeURIComponent(rotaAllocationMatch[1]),careScope(session),careAudit(env.DB)));
+        if(rotaAllocationMatch&&request.method==="PUT")return await permitted(env.DB,session,"rota.edit",async()=>replaceVisitAssignments(request,env.DB,session,decodeURIComponent(rotaAllocationMatch[1]),careScope(session),careAudit(env.DB),{allowCrossBranch:await userHasPermission(env.DB,session,'rota.cross_branch.cover')}));
         const rotaCandidateMatch=url.pathname.match(/^\/api\/rota\/([^/]+)\/candidates$/);
-        if(rotaCandidateMatch&&request.method==="GET")return await permitted(env.DB,session,"rota.view",()=>candidateStaff(env.DB,session,decodeURIComponent(rotaCandidateMatch[1]),careScope(session)));
+        if(rotaCandidateMatch&&request.method==="GET")return await permitted(env.DB,session,"rota.view",async()=>candidateStaff(env.DB,session,decodeURIComponent(rotaCandidateMatch[1]),careScope(session),{allowCrossBranch:await userHasPermission(env.DB,session,'rota.cross_branch.cover')}));
+        const rotaNotificationMatch=url.pathname.match(/^\/api\/carer\/rota-notifications\/([^/]+)\/acknowledge$/);
+        if(rotaNotificationMatch&&request.method==="POST")return acknowledgeRotaNotification(env.DB,session,decodeURIComponent(rotaNotificationMatch[1]));
         const templateDeleteMatch=url.pathname.match(/^\/api\/rota\/templates\/(visit|working-pattern|exception)\/([^/]+)$/);
         if(templateDeleteMatch&&request.method === "DELETE") return await permitted(env.DB, session, "rota.templates.manage", () => deleteRotaTemplateItem(env.DB,session,templateDeleteMatch[1],decodeURIComponent(templateDeleteMatch[2])));
         if (url.pathname === "/api/routing/settings") {
@@ -792,6 +794,24 @@ function activeBranch(session){ return session.active_branch_id || session.home_
 function careScope(session){return {restricted:branchRestricted(session),branchId:activeBranch(session)};}
 function careAudit(db){return (organisationId,userId,action,entityType,entityId,detail)=>auditStatement(db,organisationId,userId,action,entityType,entityId,detail);}
 
+async function resolveRotaBranchScope(db,session,requestedBranchId=''){
+  const result=await db.prepare("SELECT id,name,code,address,status FROM branches WHERE organisation_id=? AND archived_at IS NULL AND status='active' ORDER BY name COLLATE NOCASE").bind(session.organisation_id).all();
+  const restricted=branchRestricted(session),branches=restricted?(result.results||[]).filter(branch=>branch.id===activeBranch(session)):(result.results||[]);
+  const selectedBranchId=restricted?activeBranch(session):(clean(requestedBranchId)&&clean(requestedBranchId)!=='all'?clean(requestedBranchId):null);
+  if(selectedBranchId&&!branches.some(branch=>branch.id===selectedBranchId))return {error:json({error:{code:'BRANCH_NOT_FOUND',message:'Choose an active branch in your organisation.'}},404)};
+  return {branches,restricted,selectedBranchId,allBranches:!selectedBranchId};
+}
+
+async function crossBranchAllocationContext(db,session,visitBranchId,staffId,reason=''){
+  if(!staffId)return {staff:null,crossBranch:false,reason:''};
+  const staff=await db.prepare("SELECT id,branch_id,first_name,last_name,preferred_name FROM staff WHERE id=? AND organisation_id=? AND status='Active' LIMIT 1").bind(staffId,session.organisation_id).first();
+  if(!staff)return {error:json({error:{code:'STAFF_NOT_FOUND',message:'Choose an active care worker in this organisation.'}},404)};
+  const crossBranch=Boolean(visitBranchId&&staff.branch_id&&visitBranchId!==staff.branch_id),coverReason=clean(reason).slice(0,1000);
+  if(crossBranch&&(!await userHasPermission(db,session,'rota.cross_branch.cover')||branchRestricted(session)))return {error:json({error:{code:'CROSS_BRANCH_FORBIDDEN',message:'Only an organisation-wide manager can authorise cross-branch cover.'}},403)};
+  if(crossBranch&&!coverReason)return {error:json({error:{code:'CROSS_BRANCH_REASON_REQUIRED',message:'Enter why cross-branch cover is required before allocating this care worker.'}},400)};
+  return {staff,crossBranch,reason:crossBranch?coverReason:''};
+}
+
 function mutationOriginAllowed(request) {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return true;
   const fetchSite=clean(request.headers.get('sec-fetch-site')).toLowerCase();
@@ -1043,9 +1063,11 @@ async function rotaBoard(db, session, url) {
   const org=session.organisation_id;
   const from=clean(url.searchParams.get('from'))||new Date().toISOString().slice(0,10);
   const to=clean(url.searchParams.get('to'))||new Date(Date.now()+6*86400000).toISOString().slice(0,10);
-  const scoped=branchRestricted(session),branch=activeBranch(session);
-  const [visits,clients,staff,patterns,requirements,assignments]=await Promise.all([
+  const scope=await resolveRotaBranchScope(db,session,url.searchParams.get('branchId'));if(scope.error)return scope.error;
+  const branch=scope.selectedBranchId,visitScoped=Boolean(branch),staffScoped=scope.restricted;
+  const [visits,clients,staff,patterns,requirements,assignments,branchOverview,communication]=await Promise.all([
     db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,s.first_name||' '||s.last_name staff_name,
+      vb.name branch_name,vb.code branch_code,s.branch_id staff_branch_id,sb.name staff_branch_name,sb.code staff_branch_code,
       (SELECT rt.status FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_status,
       (SELECT rt.interval_weeks FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_interval_weeks,
       (SELECT rt.effective_from FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) recurrence_effective_from,
@@ -1054,26 +1076,38 @@ async function rotaBoard(db, session, url) {
       (SELECT GROUP_CONCAT(rt.day_of_week) FROM rota_visit_templates rt WHERE rt.series_id=v.recurrence_group_id AND rt.organisation_id=v.organisation_id) recurrence_days,
       CASE WHEN (SELECT rt.preferred_staff_id FROM rota_visit_templates rt WHERE rt.id=v.template_id AND rt.organisation_id=v.organisation_id) IS NULL THEN 0 ELSE 1 END recurrence_keep_carer,
       COALESCE(v.protected_time_rule,'flexible') protected_time_rule, v.protected_time_reason, COALESCE(v.protected_window_minutes,0) protected_window_minutes
-      FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN staff s ON s.id=v.staff_id AND s.organisation_id=v.organisation_id
-      WHERE v.organisation_id=? ${scoped?'AND v.branch_id=?':''} AND date(v.scheduled_start) BETWEEN date(?,'-1 day') AND date(?,'+1 day') AND v.rota_status!='cancelled'
-      ORDER BY v.scheduled_start`).bind(org,...(scoped?[branch]:[]),from,to).all(),
-    db.prepare(`SELECT id,first_name,last_name,preferred_name FROM clients WHERE organisation_id=? ${scoped?'AND branch_id=?':''} AND archived_at IS NULL ORDER BY first_name,last_name`).bind(org,...(scoped?[branch]:[])).all(),
-    db.prepare(`SELECT id,first_name,last_name,preferred_name,job_title FROM staff WHERE organisation_id=? ${scoped?'AND branch_id=?':''} AND status='Active' ORDER BY first_name,last_name`).bind(org,...(scoped?[branch]:[])).all(),
-    db.prepare(`SELECT w.* FROM staff_working_patterns w JOIN staff s ON s.id=w.staff_id AND s.organisation_id=w.organisation_id WHERE w.organisation_id=? ${scoped?'AND s.branch_id=?':''} AND w.status='active' ORDER BY w.staff_id,w.week_number,w.day_of_week,w.start_time`).bind(org,...(scoped?[branch]:[])).all(),
-    db.prepare(`SELECT r.* FROM client_visit_requirements r JOIN clients c ON c.id=r.client_id AND c.organisation_id=r.organisation_id WHERE r.organisation_id=? ${scoped?'AND c.branch_id=?':''} AND r.status='active'`).bind(org,...(scoped?[branch]:[])).all(),
-    db.prepare(`SELECT a.client_id,a.staff_id FROM client_staff_assignments a JOIN clients c ON c.id=a.client_id AND c.organisation_id=a.organisation_id WHERE a.organisation_id=? ${scoped?'AND c.branch_id=?':''}`).bind(org,...(scoped?[branch]:[])).all()
+      FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN staff s ON s.id=v.staff_id AND s.organisation_id=v.organisation_id LEFT JOIN branches vb ON vb.id=v.branch_id AND vb.organisation_id=v.organisation_id LEFT JOIN branches sb ON sb.id=s.branch_id AND sb.organisation_id=s.organisation_id
+      WHERE v.organisation_id=? ${visitScoped?'AND v.branch_id=?':''} AND date(v.scheduled_start) BETWEEN date(?,'-1 day') AND date(?,'+1 day') AND v.rota_status!='cancelled'
+      ORDER BY vb.name,v.scheduled_start`).bind(org,...(visitScoped?[branch]:[]),from,to).all(),
+    db.prepare(`SELECT c.id,c.first_name,c.last_name,c.preferred_name,c.branch_id,b.name branch_name,b.code branch_code FROM clients c LEFT JOIN branches b ON b.id=c.branch_id AND b.organisation_id=c.organisation_id WHERE c.organisation_id=? ${visitScoped?'AND c.branch_id=?':''} AND c.archived_at IS NULL ORDER BY b.name,c.first_name,c.last_name`).bind(org,...(visitScoped?[branch]:[])).all(),
+    db.prepare(`SELECT s.id,s.first_name,s.last_name,s.preferred_name,s.job_title,s.branch_id,b.name branch_name,b.code branch_code FROM staff s LEFT JOIN branches b ON b.id=s.branch_id AND b.organisation_id=s.organisation_id WHERE s.organisation_id=? ${staffScoped?'AND s.branch_id=?':''} AND s.status='Active' ORDER BY b.name,s.first_name,s.last_name`).bind(org,...(staffScoped?[activeBranch(session)]:[])).all(),
+    db.prepare(`SELECT w.* FROM staff_working_patterns w JOIN staff s ON s.id=w.staff_id AND s.organisation_id=w.organisation_id WHERE w.organisation_id=? ${staffScoped?'AND s.branch_id=?':''} AND w.status='active' ORDER BY w.staff_id,w.week_number,w.day_of_week,w.start_time`).bind(org,...(staffScoped?[activeBranch(session)]:[])).all(),
+    db.prepare(`SELECT r.* FROM client_visit_requirements r JOIN clients c ON c.id=r.client_id AND c.organisation_id=r.organisation_id WHERE r.organisation_id=? ${visitScoped?'AND c.branch_id=?':''} AND r.status='active'`).bind(org,...(visitScoped?[branch]:[])).all(),
+    db.prepare(`SELECT a.client_id,a.staff_id FROM client_staff_assignments a JOIN clients c ON c.id=a.client_id AND c.organisation_id=a.organisation_id WHERE a.organisation_id=? ${visitScoped?'AND c.branch_id=?':''}`).bind(org,...(visitScoped?[branch]:[])).all(),
+    db.prepare(`SELECT b.id,b.name,b.code,b.address,b.status,
+      COUNT(v.id) total,
+      SUM(CASE WHEN v.id IS NOT NULL AND COALESCE(v.allocation_state,'unallocated')!='ready' THEN 1 ELSE 0 END) unallocated,
+      SUM(CASE WHEN v.rota_status='draft' THEN 1 ELSE 0 END) draft,
+      SUM(CASE WHEN v.rota_status='published' THEN 1 ELSE 0 END) published,
+      SUM(CASE WHEN COALESCE(v.travel_conflict,0)=1 THEN 1 ELSE 0 END) travel_risks,
+      SUM(CASE WHEN v.id IS NOT NULL AND EXISTS (SELECT 1 FROM visit_staff_assignments va WHERE va.organisation_id=v.organisation_id AND va.visit_id=v.id AND va.is_cross_branch=1 AND va.allocation_status NOT IN ('removed','declined')) THEN 1 ELSE 0 END) cross_branch_cover
+      FROM branches b LEFT JOIN care_visits v ON v.organisation_id=b.organisation_id AND v.branch_id=b.id AND v.status!='cancelled' AND v.rota_status!='cancelled' AND datetime(v.scheduled_start)>=datetime(?||'T06:00:00.000Z') AND datetime(v.scheduled_start)<datetime(?||'T06:00:00.000Z','+1 day')
+      WHERE b.organisation_id=? AND b.archived_at IS NULL AND b.status='active'
+      GROUP BY b.id,b.name,b.code,b.address,b.status ORDER BY b.name COLLATE NOCASE`).bind(from,to,org).all(),
+    db.prepare(`SELECT COUNT(*) pending,COUNT(DISTINCT user_id) affected_carers FROM notifications WHERE organisation_id=? AND source='rota_change' AND requires_acknowledgement=1 AND acknowledged_at IS NULL AND archived_at IS NULL ${visitScoped?'AND branch_id=?':''}`).bind(org,...(visitScoped?[branch]:[])).first()
   ]);
   const rows=await enrichVisitsWithTeams(db,session,visits.results||[],careScope(session),false), now=Date.now();
   rows.forEach(v=>{const start=new Date(v.scheduled_start).getTime(),end=v.scheduled_end?new Date(v.scheduled_end).getTime():start+3600000;v.live_status=v.status==='scheduled'&&start<now?'late':v.status==='in_progress'&&end<now?'overrunning':v.status;});
   const serviceDay=value=>new Date(new Date(value).getTime()-6*60*60*1000).toISOString().slice(0,10),periodRows=rows.filter(row=>{const day=serviceDay(row.scheduled_start);return day>=from&&day<=to;});
   const publication=assessRotaPublication(periodRows);
   const teamBlockers=periodRows.flatMap(x=>(x.allocation_blockers||[]).map(blocker=>({visitId:x.id,clientName:x.client_name,...blocker})));
-  const stats={total:periodRows.length,unallocated:periodRows.filter(x=>x.allocation_state!=='ready').length,late:periodRows.filter(x=>x.live_status==='late').length,inProgress:periodRows.filter(x=>x.status==='in_progress').length,completed:periodRows.filter(x=>x.status==='completed').length,draft:publication.draft,published:periodRows.filter(x=>String(x.rota_status||'published').toLowerCase()==='published').length,readyToPublish:publication.ready&&!teamBlockers.length?publication.draft:0,unallocatedDraft:periodRows.filter(x=>x.rota_status==='draft'&&x.allocation_state!=='ready').length,publicationBlockers:[...publication.blockers,...teamBlockers.map(x=>x.message)]};
-  return json({from,to,visits:rows,clients:clients.results||[],staff:staff.results||[],workingPatterns:patterns.results||[],requirements:requirements.results||[],preferredAssignments:assignments.results||[],stats});
+  const stats={total:periodRows.length,unallocated:periodRows.filter(x=>x.allocation_state!=='ready').length,late:periodRows.filter(x=>x.live_status==='late').length,inProgress:periodRows.filter(x=>x.status==='in_progress').length,completed:periodRows.filter(x=>x.status==='completed').length,draft:publication.draft,published:periodRows.filter(x=>String(x.rota_status||'published').toLowerCase()==='published').length,readyToPublish:publication.ready&&!teamBlockers.length?publication.draft:0,unallocatedDraft:periodRows.filter(x=>x.rota_status==='draft'&&x.allocation_state!=='ready').length,crossBranchCover:periodRows.filter(x=>(x.assignments||[]).some(assignment=>Number(assignment.is_cross_branch)===1)).length,publicationBlockers:[...publication.blockers,...teamBlockers.map(x=>x.message)]};
+  const branchSummaries=(branchOverview.results||[]).filter(item=>!scope.restricted||item.id===branch).map(item=>({...item,total:Number(item.total||0),unallocated:Number(item.unallocated||0),draft:Number(item.draft||0),published:Number(item.published||0),travelRisks:Number(item.travel_risks||0),crossBranchCover:Number(item.cross_branch_cover||0)}));
+  return json({from,to,visits:rows,clients:clients.results||[],staff:staff.results||[],workingPatterns:patterns.results||[],requirements:requirements.results||[],preferredAssignments:assignments.results||[],stats,branches:scope.branches,selectedBranchId:branch||'all',canViewAllBranches:!scope.restricted,canCrossBranchCover:await userHasPermission(db,session,'rota.cross_branch.cover'),branchSummaries,communication:{pendingAcknowledgements:Number(communication?.pending||0),affectedCarers:Number(communication?.affected_carers||0)}});
 }
 
-async function listRotaTemplates(db,session){
-  const org=session.organisation_id,scoped=branchRestricted(session),branch=activeBranch(session);
+async function listRotaTemplates(db,session,url){
+  const org=session.organisation_id,scope=await resolveRotaBranchScope(db,session,url?.searchParams?.get('branchId'));if(scope.error)return scope.error;const branch=scope.selectedBranchId,scoped=Boolean(branch);
   const [visitTemplates,patterns,exceptions,runs,clients,staff]=await Promise.all([
     db.prepare(`SELECT t.*,c.first_name||' '||c.last_name client_name,p.first_name||' '||p.last_name preferred_staff_name,b.first_name||' '||b.last_name backup_staff_name FROM rota_visit_templates t LEFT JOIN clients c ON c.id=t.client_id AND c.organisation_id=t.organisation_id LEFT JOIN staff p ON p.id=t.preferred_staff_id AND p.organisation_id=t.organisation_id LEFT JOIN staff b ON b.id=t.backup_staff_id AND b.organisation_id=t.organisation_id WHERE t.organisation_id=? ${scoped?'AND c.branch_id=?':''} ORDER BY t.day_of_week,t.preferred_time,c.last_name`).bind(org,...(scoped?[branch]:[])).all(),
     db.prepare(`SELECT w.*,s.first_name||' '||s.last_name staff_name FROM staff_working_patterns w LEFT JOIN staff s ON s.id=w.staff_id AND s.organisation_id=w.organisation_id WHERE w.organisation_id=? ${scoped?'AND s.branch_id=?':''} ORDER BY s.last_name,w.week_number,w.day_of_week,w.start_time`).bind(org,...(scoped?[branch]:[])).all(),
@@ -1105,7 +1139,7 @@ async function deleteRotaTemplateItem(db,session,type,id){
 function mondayOf(value){const d=new Date(`${value}T00:00:00`);const shift=(d.getDay()+6)%7;d.setDate(d.getDate()-shift);return d;}
 async function generateRotaFromTemplates(request,env,session){
   const db=env.DB;
-  const i=await readJson(request),weekValue=clean(i.weekCommencing);if(!weekValue)return json({error:{code:'VALIDATION_ERROR',message:'Select a week to generate.'}},400);const week=mondayOf(weekValue),weekEnd=new Date(week);weekEnd.setDate(weekEnd.getDate()+7);const mode=['fill','regenerate'].includes(clean(i.mode))?clean(i.mode):'fill',scoped=branchRestricted(session),branch=activeBranch(session);
+  const i=await readJson(request),weekValue=clean(i.weekCommencing);if(!weekValue)return json({error:{code:'VALIDATION_ERROR',message:'Select a week to generate.'}},400);const week=mondayOf(weekValue),weekEnd=new Date(week);weekEnd.setDate(weekEnd.getDate()+7);const mode=['fill','regenerate'].includes(clean(i.mode))?clean(i.mode):'fill',scope=await resolveRotaBranchScope(db,session,i.branchId);if(scope.error)return scope.error;const branch=scope.selectedBranchId,scoped=Boolean(branch);
   if(mode==='regenerate')await db.prepare(`DELETE FROM care_visits WHERE organisation_id=? ${scoped?'AND branch_id=?':''} AND rota_source='template' AND status='scheduled' AND datetime(scheduled_start)>=datetime(?) AND datetime(scheduled_start)<datetime(?) AND COALESCE(manually_overridden,0)=0`).bind(session.organisation_id,...(scoped?[branch]:[]),week.toISOString(),weekEnd.toISOString()).run();
   const templates=(await db.prepare(`SELECT t.*,c.branch_id client_branch_id FROM rota_visit_templates t JOIN clients c ON c.id=t.client_id AND c.organisation_id=t.organisation_id WHERE t.organisation_id=? ${scoped?'AND c.branch_id=?':''} AND t.status='active' ORDER BY t.day_of_week,t.preferred_time`).bind(session.organisation_id,...(scoped?[branch]:[])).all()).results||[];let created=0,skipped=0,unallocated=0;const warnings=[],statements=[];
   for(const t of templates){const day=new Date(week);day.setDate(day.getDate()+Number(t.day_of_week)-1);const date=day.toISOString().slice(0,10);if(t.effective_from&&date<t.effective_from){skipped++;continue}if(t.effective_to&&date>t.effective_to){skipped++;continue}const interval=Math.max(1,Number(t.interval_weeks)||1);if(interval>1&&t.effective_from){const origin=mondayOf(t.effective_from),weeks=Math.floor((week-origin)/(7*86400000));if(weeks<0||weeks%interval!==0){skipped++;continue}}if(Number(t.end_after_occurrences)>0){const made=await db.prepare(`SELECT COUNT(*) count FROM care_visits WHERE organisation_id=? AND template_id=? AND status!='cancelled'`).bind(session.organisation_id,t.id).first();if(Number(made?.count||0)>=Number(t.end_after_occurrences)){skipped++;continue}}
@@ -1117,7 +1151,7 @@ async function generateRotaFromTemplates(request,env,session){
     if(staffId&&!await available(staffId))staffId=t.backup_staff_id&&await available(t.backup_staff_id)?t.backup_staff_id:null;
     if(!staffId){unallocated++;warnings.push(`${t.name}: left in allocation queue`)}
     const id=crypto.randomUUID(),required=Math.max(1,Math.min(4,Number(t.carers_required)||1)),allocationState=staffId?(required===1?'ready':'partial'):'unallocated';statements.push(db.prepare(`INSERT INTO care_visits(id,organisation_id,branch_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,template_id,published_at,created_by,carers_required,allocation_state) VALUES(?, ?, (SELECT branch_id FROM clients WHERE id=? AND organisation_id=?), ?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,?,?)`).bind(id,session.organisation_id,t.client_id,session.organisation_id,t.client_id,staffId,t.visit_type,start.toISOString(),end.toISOString(),'scheduled','template','draft',t.id,'weekly_template',t.id,session.user_id,required,allocationState));
-    if(staffId)statements.push(db.prepare(`INSERT INTO visit_staff_assignments(id,organisation_id,branch_id,visit_id,staff_id,assignment_role,allocation_status,allocated_by) VALUES(?,?,(SELECT branch_id FROM clients WHERE id=? AND organisation_id=?),?,?,'lead','allocated',?)`).bind(crypto.randomUUID(),session.organisation_id,t.client_id,session.organisation_id,id,staffId,session.user_id));created++;
+    if(staffId)statements.push(db.prepare(`INSERT INTO visit_staff_assignments(id,organisation_id,branch_id,home_branch_id,is_cross_branch,cross_branch_reason,visit_id,staff_id,assignment_role,allocation_status,allocated_by) VALUES(?,?,(SELECT branch_id FROM clients WHERE id=? AND organisation_id=?),(SELECT branch_id FROM staff WHERE id=? AND organisation_id=?),0,'',?,?,'lead','allocated',?)`).bind(crypto.randomUUID(),session.organisation_id,t.client_id,session.organisation_id,staffId,session.organisation_id,id,staffId,session.user_id));created++;
   }
   const runId=crypto.randomUUID();statements.push(db.prepare(`INSERT INTO rota_generation_runs(id,organisation_id,branch_id,week_commencing,templates_considered,visits_created,visits_skipped,visits_unallocated,warnings_json,generated_by) VALUES(?,?,?,?,?,?,?,?,?,?)`).bind(runId,session.organisation_id,scoped?branch:null,week.toISOString().slice(0,10),templates.length,created,skipped,unallocated,JSON.stringify(warnings),session.user_id));statements.push(auditStatement(db,session.organisation_id,session.user_id,'rota.week_generated','rota_generation',runId,{week:weekValue,created,skipped,unallocated,mode,branchId:scoped?branch:null}));if(statements.length)await db.batch(statements);
   const staffDays=(await db.prepare(`SELECT DISTINCT staff_id,date(scheduled_start) day FROM care_visits WHERE organisation_id=? ${scoped?'AND branch_id=?':''} AND staff_id IS NOT NULL AND datetime(scheduled_start)>=datetime(?) AND datetime(scheduled_start)<datetime(?)`).bind(session.organisation_id,...(scoped?[branch]:[]),week.toISOString(),weekEnd.toISOString()).all()).results||[];for(const x of staffDays)await recalculateStaffTravel(env,session,x.staff_id,x.day);
@@ -1133,36 +1167,58 @@ async function createRotaVisit(request,env,session){
   if(!Number.isFinite(startTime)||!Number.isFinite(endTime)||endTime<=startTime)return json({error:{code:'VALIDATION_ERROR',message:'Enter a valid start and end time. The visit must end after it starts.'}},400);
   const client=await db.prepare(`SELECT id,branch_id FROM clients WHERE id=? AND organisation_id=? ${branchRestricted(session)?'AND branch_id=?':''} AND archived_at IS NULL`).bind(clientId,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first();
   if(!client)return json({error:{code:'CLIENT_NOT_FOUND',message:'Choose an active client from your current organisation or branch.'}},404);
+  const cover=await crossBranchAllocationContext(db,session,client.branch_id||activeBranch(session),staffId,i.crossBranchReason);if(cover.error)return cover.error;
   const requirement=await db.prepare(`SELECT carers_required,skills_json FROM client_visit_requirements WHERE organisation_id=? AND client_id=? AND status='active' AND lower(visit_type)=lower(?) ORDER BY updated_at DESC LIMIT 1`).bind(session.organisation_id,clientId,visitType).first();
   const carersRequired=Math.max(1,Math.min(4,Number(i.carersRequired??requirement?.carers_required)||1));
   const id=crypto.randomUUID(),recurrence=clean(i.recurrence)||'none',group=recurrence==='none'?null:crypto.randomUUID();
   const occurrences=[];let cursor=new Date(start),finish=new Date(end),count=recurrence==='weekly'?Math.min(Number(i.occurrences)||4,52):1;
   for(let n=0;n<count;n++){const vid=n===0?id:crypto.randomUUID(),visit={id:vid,branch_id:client.branch_id||activeBranch(session),scheduled_start:cursor.toISOString(),scheduled_end:finish.toISOString(),skills_json:requirement?.skills_json};
-    if(staffId){const readiness=await assessStaffAllocationDb(db,session,staffId,visit,{requiredSkills:requirement?.skills_json});if(!readiness.allowed)return json({error:{code:'UNSAFE_ALLOCATION',message:`${readiness.staff?.display_name||'This care worker'} cannot be allocated safely.`,details:readiness}},409);}
+    if(staffId){const readiness=await assessStaffAllocationDb(db,session,staffId,visit,{requiredSkills:requirement?.skills_json,allowCrossBranch:cover.crossBranch});if(!readiness.allowed)return json({error:{code:'UNSAFE_ALLOCATION',message:`${readiness.staff?.display_name||'This care worker'} cannot be allocated safely.`,details:readiness}},409);}
     const allocationState=staffId?(carersRequired===1?'ready':'partial'):'unallocated';
     occurrences.push(db.prepare(`INSERT INTO care_visits(id,organisation_id,branch_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,status,rota_source,rota_status,recurrence_group_id,recurrence_pattern,created_by,carers_required,allocation_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(vid,session.organisation_id,client.branch_id||activeBranch(session),clientId,staffId,visitType,cursor.toISOString(),finish.toISOString(),'scheduled','rota','draft',group,recurrence,session.user_id,carersRequired,allocationState));
-    if(staffId)occurrences.push(db.prepare(`INSERT INTO visit_staff_assignments(id,organisation_id,branch_id,visit_id,staff_id,assignment_role,allocation_status,allocated_by) VALUES(?,?,?,?,?,'lead','allocated',?)`).bind(crypto.randomUUID(),session.organisation_id,client.branch_id||activeBranch(session),vid,staffId,session.user_id));
+    if(staffId)occurrences.push(db.prepare(`INSERT INTO visit_staff_assignments(id,organisation_id,branch_id,home_branch_id,is_cross_branch,cross_branch_reason,visit_id,staff_id,assignment_role,allocation_status,allocated_by) VALUES(?,?,?,?,?,?,?,?,?,'allocated',?)`).bind(crypto.randomUUID(),session.organisation_id,client.branch_id||activeBranch(session),cover.staff?.branch_id||null,cover.crossBranch?1:0,cover.reason,vid,staffId,'lead',session.user_id));
     cursor=new Date(cursor.getTime()+7*86400000);finish=new Date(finish.getTime()+7*86400000);}
-  occurrences.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_created','visit',id,{clientId,staffId,carersRequired,recurrence,count,publicationStatus:'draft'}));
+  occurrences.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_created','visit',id,{clientId,staffId,carersRequired,recurrence,count,publicationStatus:'draft',branchId:client.branch_id||null,crossBranch:cover.crossBranch,crossBranchReason:cover.reason}));
   await db.batch(occurrences);return json({ok:true,id,created:count});
 }
 
-async function publishRota(request,db,session){
+function publishedRotaSnapshot(row,staffIds){return {branchId:row.branch_id||null,clientId:row.client_id||null,staffIds:[...new Set((staffIds||[]).filter(Boolean))].sort(),visitType:row.visit_type||'Care visit',scheduledStart:row.scheduled_start,scheduledEnd:row.scheduled_end||null};}
+function parsePublishedRotaSnapshot(value){try{const parsed=JSON.parse(value||'');return parsed&&typeof parsed==='object'?{...parsed,staffIds:Array.isArray(parsed.staffIds)?parsed.staffIds.filter(Boolean).sort():[]}:null;}catch{return null;}}
+function publishedRotaChanges(before,after){if(!before)return ['new'];const changes=[];if(before.scheduledStart!==after.scheduledStart||before.scheduledEnd!==after.scheduledEnd)changes.push('time');if(before.visitType!==after.visitType)changes.push('visit type');if(before.branchId!==after.branchId)changes.push('branch');if(JSON.stringify(before.staffIds)!==JSON.stringify(after.staffIds))changes.push('care worker allocation');return changes;}
+function rotaNotificationDueAt(start){const soon=new Date(Date.now()+24*60*60*1000),beforeVisit=new Date(new Date(start).getTime()-2*60*60*1000);return new Date(Math.max(Date.now(),Math.min(soon.getTime(),beforeVisit.getTime()))).toISOString();}
+
+async function publishRota(request,env,session){
+  const db=env.DB;
   const i=await readJson(request),from=clean(i.from),to=clean(i.to);
   if(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to))return json({error:{code:'VALIDATION_ERROR',message:'Choose a valid rota week before publishing.'}},400);
   const start=new Date(`${from}T06:00:00.000Z`),end=new Date(`${to}T06:00:00.000Z`);end.setUTCDate(end.getUTCDate()+1);
   if(!Number.isFinite(start.getTime())||!Number.isFinite(end.getTime())||end<=start||end-start>32*86400000)return json({error:{code:'VALIDATION_ERROR',message:'The publication period must be between one and 31 service days.'}},400);
-  const scoped=branchRestricted(session),branch=activeBranch(session);
-  const rows=(await db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,r.skills_json requirement_skills_json FROM care_visits v JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN client_visit_requirements r ON r.id=v.requirement_id AND r.organisation_id=v.organisation_id WHERE v.organisation_id=? ${scoped?'AND v.branch_id=?':''} AND v.rota_status='draft' AND v.status!='cancelled' AND datetime(v.scheduled_start)>=datetime(?) AND datetime(v.scheduled_start)<datetime(?) ORDER BY v.scheduled_start`).bind(session.organisation_id,...(scoped?[branch]:[]),start.toISOString(),end.toISOString()).all()).results||[];
+  const scope=await resolveRotaBranchScope(db,session,i.branchId);if(scope.error)return scope.error;const branch=scope.selectedBranchId,scoped=Boolean(branch);
+  const rows=(await db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,b.name branch_name,r.skills_json requirement_skills_json FROM care_visits v JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN branches b ON b.id=v.branch_id AND b.organisation_id=v.organisation_id LEFT JOIN client_visit_requirements r ON r.id=v.requirement_id AND r.organisation_id=v.organisation_id WHERE v.organisation_id=? ${scoped?'AND v.branch_id=?':''} AND v.rota_status='draft' AND v.status!='cancelled' AND datetime(v.scheduled_start)>=datetime(?) AND datetime(v.scheduled_start)<datetime(?) ORDER BY v.scheduled_start`).bind(session.organisation_id,...(scoped?[branch]:[]),start.toISOString(),end.toISOString()).all()).results||[];
   const readiness=assessRotaPublication(rows);
-  const teamReadiness=await publicationReadiness(db,session,rows,careScope(session));
+  const teamReadiness=await publicationReadiness(db,session,rows,{restricted:scoped,branchId:branch});
   if(!readiness.draft)return json({error:{code:'NO_DRAFT_VISITS',message:'There are no draft visits to publish in this period.'}},409);
   if(!readiness.ready||!teamReadiness.ready){const blockers=[...readiness.blockers,...teamReadiness.blockers.map(x=>`${x.clientName||'Visit'}: ${x.message}`)];return json({error:{code:'ROTA_NOT_READY',message:`The rota cannot be published: ${[...new Set(blockers)].join('; ')}.`,details:{...readiness,team:teamReadiness.blockers}}},409);}
-  const result=await db.batch([
-    db.prepare(`UPDATE care_visits SET rota_status='published',published_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? ${scoped?'AND branch_id=?':''} AND rota_status='draft' AND status!='cancelled' AND datetime(scheduled_start)>=datetime(?) AND datetime(scheduled_start)<datetime(?)`).bind(session.organisation_id,...(scoped?[branch]:[]),start.toISOString(),end.toISOString()),
-    auditStatement(db,session.organisation_id,session.user_id,'rota.period_published','rota',`${from}:${to}`,{from,to,count:readiness.draft,branchId:scoped?branch:null})
-  ]);
-  return json({ok:true,published:Number(result[0]?.meta?.changes||readiness.draft),from,to});
+  const statements=[];let notificationCount=0,changedVisitCount=0;
+  for(const row of rows){
+    const assignments=(await db.prepare("SELECT staff_id FROM visit_staff_assignments WHERE organisation_id=? AND visit_id=? AND allocation_status NOT IN ('removed','declined') ORDER BY CASE assignment_role WHEN 'lead' THEN 0 ELSE 1 END").bind(session.organisation_id,row.id).all()).results||[];
+    const current=publishedRotaSnapshot(row,assignments.map(item=>item.staff_id)),previous=parsePublishedRotaSnapshot(row.published_snapshot_json),changes=publishedRotaChanges(previous,current),isChange=Boolean(previous&&changes.length);
+    if(isChange)changedVisitCount++;
+    const recipientStaffIds=[...new Set([...(previous?.staffIds||[]),...current.staffIds])];
+    if(recipientStaffIds.length&&(isChange||!previous)){
+      const placeholders=recipientStaffIds.map(()=>'?').join(','),users=(await db.prepare(`SELECT id,staff_id FROM users WHERE organisation_id=? AND status='active' AND staff_id IN (${placeholders})`).bind(session.organisation_id,...recipientStaffIds).all()).results||[];
+      for(const user of users){
+        const removed=Boolean(isChange&&previous.staffIds.includes(user.staff_id)&&!current.staffIds.includes(user.staff_id)),source=isChange?'rota_change':'rota_publish',requiresAck=isChange?1:0,priority=isChange?'high':'information';
+        const when=new Date(row.scheduled_start).toLocaleString('en-GB',{weekday:'short',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Europe/London'}),branchName=row.branch_name||'your branch';
+        const message=isChange?(removed?`A visit previously on your rota for ${row.client_name} at ${when} (${branchName}) has been removed or reassigned. Review and acknowledge this change.`:`Your published rota changed for ${row.client_name} at ${when} (${branchName}). Changed: ${changes.join(', ')}. Review and acknowledge this change.`):`A visit for ${row.client_name} at ${when} (${branchName}) has been published to your rota.`;
+        statements.push(db.prepare(`INSERT INTO notifications(id,organisation_id,user_id,category,priority,title,message,source,source_id,action_url,requires_acknowledgement,branch_id,due_at) SELECT ?,?,?,?,?,?,?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM notifications WHERE organisation_id=? AND user_id=? AND source=? AND source_id=?)`).bind(crypto.randomUUID(),session.organisation_id,user.id,'rota',priority,isChange?'Published rota changed':'New rota published',message,source,`${row.id}:${row.rota_revision}`,'#dashboard',requiresAck,row.branch_id||null,isChange?rotaNotificationDueAt(row.scheduled_start):null,session.organisation_id,user.id,source,`${row.id}:${row.rota_revision}`));notificationCount++;
+      }
+    }
+    statements.push(db.prepare("UPDATE care_visits SET rota_status='published',published_at=CURRENT_TIMESTAMP,published_snapshot_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND rota_status='draft'").bind(JSON.stringify(current),row.id,session.organisation_id));
+  }
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,'rota.period_published','rota',`${from}:${to}`,{from,to,count:readiness.draft,branchId:branch||null,changedVisitCount,notificationCount,acknowledgementRequired:changedVisitCount>0}));
+  await db.batch(statements);
+  return json({ok:true,published:rows.length,from,to,changedVisitCount,notificationCount});
 }
 
 async function manageVisitRecurrence(request,db,session,id){
@@ -1211,15 +1267,16 @@ async function updateRotaVisit(request,env,session,id){
   const requestedLocked=i.plannerLocked===true||i.plannerLocked===1||i.plannerLocked==='1';
   if(Number(row.planner_locked)===1){const allowed=await userHasPermission(db,session,'rota.visit.override_lock');if(!allowed)return json({error:{code:'VISIT_LOCKED',message:'This visit is locked. An authorised planner or manager must unlock or change it.'}},409);}
   const staffId=clean(i.staffId)||null,start=clean(i.scheduledStart)||row.scheduled_start,end=clean(i.scheduledEnd)||row.scheduled_end,scope=['single','future','series'].includes(clean(i.scope))?clean(i.scope):'single',reason=clean(i.reason)||'Planner adjustment',plannerNotes=clean(i.plannerNotes)||row.planner_notes||'';
+  const cover=await crossBranchAllocationContext(db,session,row.branch_id,staffId,i.crossBranchReason);if(cover.error)return cover.error;
   const protectedRule=clean(row.protected_time_rule)||'flexible',timeChanged=new Date(start).getTime()!==new Date(row.scheduled_start).getTime();
   let protectedAuth=null;
   if(timeChanged&&protectedRule!=='flexible'){
     if(protectedRule==='window'){const delta=Math.abs(new Date(start)-new Date(row.scheduled_start))/60000;if(delta<=Number(row.protected_window_minutes||0)){/* permitted within window */}else{protectedAuth=await authoriseProtectedVisitChange(db,session,row,i,start);if(protectedAuth.error)return protectedAuth.error;}}
     else {protectedAuth=await authoriseProtectedVisitChange(db,session,row,i,start);if(protectedAuth.error)return protectedAuth.error;}
   }
-  const activeTeam=(await db.prepare("SELECT staff_id,assignment_role FROM visit_staff_assignments WHERE organisation_id=? AND visit_id=? AND allocation_status NOT IN ('removed','declined') ORDER BY CASE assignment_role WHEN 'lead' THEN 0 ELSE 1 END").bind(session.organisation_id,id).all()).results||[];
+  const activeTeam=(await db.prepare("SELECT staff_id,assignment_role,is_cross_branch,cross_branch_reason FROM visit_staff_assignments WHERE organisation_id=? AND visit_id=? AND allocation_status NOT IN ('removed','declined') ORDER BY CASE assignment_role WHEN 'lead' THEN 0 ELSE 1 END").bind(session.organisation_id,id).all()).results||[];
   const proposedTeam=staffId?[staffId,...activeTeam.filter(member=>member.assignment_role!=='lead'&&member.staff_id!==staffId).map(member=>member.staff_id)]:[];
-  for(const proposedStaffId of proposedTeam){const readiness=await assessStaffAllocationDb(db,session,proposedStaffId,{...row,id,scheduled_start:start,scheduled_end:end,staff_id:staffId});if(!readiness.allowed)return json({error:{code:'UNSAFE_ALLOCATION',message:`${readiness.staff?.display_name||'This care worker'} cannot be safely allocated: ${readiness.blockers.map(item=>item.message).join(' ')}`,details:{staffId:proposedStaffId,blockers:readiness.blockers}}},409);}
+  for(const proposedStaffId of proposedTeam){const existingMember=activeTeam.find(member=>member.staff_id===proposedStaffId),allowCrossBranch=proposedStaffId===staffId?cover.crossBranch:Boolean(Number(existingMember?.is_cross_branch)&&existingMember?.cross_branch_reason);const readiness=await assessStaffAllocationDb(db,session,proposedStaffId,{...row,id,scheduled_start:start,scheduled_end:end,staff_id:staffId},{allowCrossBranch});if(!readiness.allowed)return json({error:{code:'UNSAFE_ALLOCATION',message:`${readiness.staff?.display_name||'This care worker'} cannot be safely allocated: ${readiness.blockers.map(item=>item.message).join(' ')}`,details:{staffId:proposedStaffId,blockers:readiness.blockers}}},409);}
   let travelAssessment=null;
   const overrideReason=clean(i.travelOverrideReason);
   if(staffId){
@@ -1233,13 +1290,13 @@ async function updateRotaVisit(request,env,session,id){
   const after=JSON.stringify({staffId,start,end,visitType:clean(i.visitType)||row.visit_type,plannerLocked:requestedLocked?1:0,plannerNotes});
   const statements=[];
   if(protectedAuth?.statement)statements.push(protectedAuth.statement);
-  if(scope==='single'||!row.requirement_id){statements.push(db.prepare(`UPDATE care_visits SET client_id=?,staff_id=?,visit_type=?,scheduled_start=?,scheduled_end=?,rota_source='planner',rota_status='draft',change_reason=?,manually_overridden=1,travel_override=?,travel_override_reason=?,planner_locked=?,planner_notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.clientId)||row.client_id,staffId,clean(i.visitType)||row.visit_type,start,end,reason,travelAssessment?.conflict?1:0,overrideReason,requestedLocked?1:0,plannerNotes,id,session.organisation_id));}
+  if(scope==='single'||!row.requirement_id){statements.push(db.prepare(`UPDATE care_visits SET client_id=?,staff_id=?,visit_type=?,scheduled_start=?,scheduled_end=?,rota_source='planner',rota_status='draft',rota_revision=rota_revision+1,change_reason=?,manually_overridden=1,travel_override=?,travel_override_reason=?,planner_locked=?,planner_notes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.clientId)||row.client_id,staffId,clean(i.visitType)||row.visit_type,start,end,reason,travelAssessment?.conflict?1:0,overrideReason,requestedLocked?1:0,plannerNotes,id,session.organisation_id));}
   else {
     const time=new Date(start).toISOString().slice(11,16),duration=Math.max(15,Math.round((new Date(end)-new Date(start))/60000));
     statements.push(db.prepare(`UPDATE client_visit_requirements SET visit_type=?,preferred_time=?,duration_minutes=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.visitType)||row.visit_type,time,duration,row.requirement_id,session.organisation_id));
     const condition=scope==='future'?'AND date(scheduled_start)>=date(?)':'';
     const bind=[staffId,clean(i.visitType)||row.visit_type,reason,requestedLocked?1:0,plannerNotes,row.requirement_id,session.organisation_id];if(scope==='future')bind.push(row.scheduled_start);
-    statements.push(db.prepare(`UPDATE care_visits SET staff_id=?,visit_type=?,rota_source='planner',rota_status='draft',change_reason=?,manually_overridden=1,planner_locked=?,planner_notes=?,updated_at=CURRENT_TIMESTAMP WHERE requirement_id=? AND organisation_id=? AND status='scheduled' ${condition}`).bind(...bind));
+    statements.push(db.prepare(`UPDATE care_visits SET staff_id=?,visit_type=?,rota_source='planner',rota_status='draft',rota_revision=rota_revision+1,change_reason=?,manually_overridden=1,planner_locked=?,planner_notes=?,updated_at=CURRENT_TIMESTAMP WHERE requirement_id=? AND organisation_id=? AND status='scheduled' ${condition}`).bind(...bind));
   }
   let teamVisitRows=[{id,branch_id:row.branch_id}];
   if(scope!=='single'&&row.requirement_id){const condition=scope==='future'?'AND date(scheduled_start)>=date(?)':'';teamVisitRows=(await db.prepare(`SELECT id,branch_id FROM care_visits WHERE requirement_id=? AND organisation_id=? AND status='scheduled' ${condition}`).bind(row.requirement_id,session.organisation_id,...(scope==='future'?[row.scheduled_start]:[])).all()).results||teamVisitRows;}
@@ -1247,19 +1304,30 @@ async function updateRotaVisit(request,env,session,id){
     if(!staffId)statements.push(db.prepare("UPDATE visit_staff_assignments SET allocation_status='removed',updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND visit_id=? AND allocation_status NOT IN ('removed','declined')").bind(session.organisation_id,teamVisit.id));
     else{
       statements.push(db.prepare("UPDATE visit_staff_assignments SET allocation_status='removed',updated_at=CURRENT_TIMESTAMP WHERE organisation_id=? AND visit_id=? AND assignment_role='lead' AND staff_id!=? AND allocation_status NOT IN ('removed','declined')").bind(session.organisation_id,teamVisit.id,staffId));
-      statements.push(db.prepare(`INSERT INTO visit_staff_assignments(id,organisation_id,branch_id,visit_id,staff_id,assignment_role,allocation_status,allocation_version,allocated_by,allocated_at,updated_at) VALUES(?,?,?,?,?,'lead','allocated',1,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(organisation_id,visit_id,staff_id) DO UPDATE SET assignment_role='lead',allocation_status='allocated',allocation_version=visit_staff_assignments.allocation_version+1,allocated_by=excluded.allocated_by,allocated_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP`).bind(crypto.randomUUID(),session.organisation_id,teamVisit.branch_id||row.branch_id||null,teamVisit.id,staffId,session.user_id));
+      statements.push(db.prepare(`INSERT INTO visit_staff_assignments(id,organisation_id,branch_id,home_branch_id,is_cross_branch,cross_branch_reason,visit_id,staff_id,assignment_role,allocation_status,allocation_version,allocated_by,allocated_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'allocated',1,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) ON CONFLICT(organisation_id,visit_id,staff_id) DO UPDATE SET assignment_role='lead',allocation_status='allocated',home_branch_id=excluded.home_branch_id,is_cross_branch=excluded.is_cross_branch,cross_branch_reason=excluded.cross_branch_reason,allocation_version=visit_staff_assignments.allocation_version+1,allocated_by=excluded.allocated_by,allocated_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP`).bind(crypto.randomUUID(),session.organisation_id,teamVisit.branch_id||row.branch_id||null,cover.staff?.branch_id||null,cover.crossBranch?1:0,cover.reason,teamVisit.id,staffId,'lead',session.user_id));
     }
     statements.push(db.prepare(`UPDATE care_visits SET allocation_state=CASE WHEN (SELECT COUNT(*) FROM visit_staff_assignments a WHERE a.organisation_id=care_visits.organisation_id AND a.visit_id=care_visits.id AND a.allocation_status NOT IN ('removed','declined'))=0 THEN 'unallocated' WHEN (SELECT COUNT(*) FROM visit_staff_assignments a WHERE a.organisation_id=care_visits.organisation_id AND a.visit_id=care_visits.id AND a.allocation_status NOT IN ('removed','declined'))<carers_required THEN 'partial' ELSE 'ready' END WHERE id=? AND organisation_id=?`).bind(teamVisit.id,session.organisation_id));
   }
   statements.push(db.prepare(`INSERT INTO visit_change_history(id,organisation_id,visit_id,requirement_id,change_scope,reason,before_json,after_json,changed_by) VALUES(?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,id,row.requirement_id,scope,reason,before,after,session.user_id));
-  statements.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_updated','visit',id,{staffId,start,end,scope,reason,protectedOverride:Boolean(protectedAuth),authorisedBy:protectedAuth?.manager?.id||null}));
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_updated','visit',id,{staffId,start,end,scope,reason,branchId:row.branch_id||null,crossBranch:cover.crossBranch,crossBranchReason:cover.reason,protectedOverride:Boolean(protectedAuth),authorisedBy:protectedAuth?.manager?.id||null}));
   if(travelAssessment?.conflict){statements.push(db.prepare(`INSERT INTO travel_override_history(id,organisation_id,visit_id,calculated_minutes,available_minutes,shortfall_minutes,reason,overridden_by) VALUES(?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,id,travelAssessment.required,travelAssessment.available,travelAssessment.shortfall,overrideReason,session.user_id));}
   await db.batch(statements);
   const affectedDays=new Set([String(start).slice(0,10),String(row.scheduled_start).slice(0,10)]);
   for(const day of affectedDays){if(staffId)await recalculateStaffTravel(env,session,staffId,day);if(row.staff_id&&row.staff_id!==staffId)await recalculateStaffTravel(env,session,row.staff_id,day);}
   return json({ok:true,scope,travel:travelAssessment});
 }
-async function cancelRotaVisit(request,db,session,id){const i=await readJson(request);const row=await db.prepare(`SELECT status FROM care_visits WHERE id=? AND organisation_id=? ${branchRestricted(session)?'AND branch_id=?':''}`).bind(id,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first();if(!row)return notFound('Rota visit');if(row.status==='completed')return json({error:{code:'VISIT_COMPLETED',message:'A completed visit cannot be cancelled.'}},409);await db.batch([db.prepare(`UPDATE care_visits SET status='cancelled',rota_status='cancelled',cancelled_at=CURRENT_TIMESTAMP,cancellation_reason=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(clean(i.reason)||'Cancelled from rota',id,session.organisation_id),auditStatement(db,session.organisation_id,session.user_id,'rota.visit_cancelled','visit',id,{reason:i.reason})]);return json({ok:true});}
+async function cancelRotaVisit(request,db,session,id){
+  const i=await readJson(request),row=await db.prepare(`SELECT v.*,c.first_name||' '||c.last_name client_name,b.name branch_name FROM care_visits v LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id LEFT JOIN branches b ON b.id=v.branch_id AND b.organisation_id=v.organisation_id WHERE v.id=? AND v.organisation_id=? ${branchRestricted(session)?'AND v.branch_id=?':''}`).bind(id,session.organisation_id,...(branchRestricted(session)?[activeBranch(session)]:[])).first();
+  if(!row)return notFound('Rota visit');if(row.status==='completed')return json({error:{code:'VISIT_COMPLETED',message:'A completed visit cannot be cancelled.'}},409);
+  const reason=clean(i.reason)||'Cancelled from rota',statements=[db.prepare(`UPDATE care_visits SET status='cancelled',rota_status='cancelled',rota_revision=rota_revision+1,cancelled_at=CURRENT_TIMESTAMP,cancellation_reason=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=?`).bind(reason,id,session.organisation_id)];
+  let notificationCount=0;
+  if(String(row.rota_status||'published')==='published'){
+    const users=(await db.prepare("SELECT DISTINCT u.id FROM visit_staff_assignments a JOIN users u ON u.staff_id=a.staff_id AND u.organisation_id=a.organisation_id WHERE a.organisation_id=? AND a.visit_id=? AND a.allocation_status NOT IN ('removed','declined') AND u.status='active'").bind(session.organisation_id,id).all()).results||[];
+    const when=new Date(row.scheduled_start).toLocaleString('en-GB',{weekday:'short',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',timeZone:'Europe/London'}),message=`A published visit for ${row.client_name||'a client'} at ${when} (${row.branch_name||'your branch'}) has been cancelled. Reason: ${reason}. Review and acknowledge this change.`;
+    for(const user of users){statements.push(db.prepare(`INSERT INTO notifications(id,organisation_id,user_id,category,priority,title,message,source,source_id,action_url,requires_acknowledgement,branch_id,due_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(crypto.randomUUID(),session.organisation_id,user.id,'rota','high','Published visit cancelled',message,'rota_change',`${id}:${Number(row.rota_revision||1)+1}`,'#dashboard',1,row.branch_id||null,rotaNotificationDueAt(row.scheduled_start)));notificationCount++;}
+  }
+  statements.push(auditStatement(db,session.organisation_id,session.user_id,'rota.visit_cancelled','visit',id,{reason,wasPublished:String(row.rota_status||'published')==='published',notificationCount}));await db.batch(statements);return json({ok:true,notificationCount});
+}
 
 
 async function routingSettings(db,organisationId){
@@ -1341,7 +1409,7 @@ async function createVisit(request,db,session){
   const startDate=new Date(start),safeEnd=end?new Date(end):new Date(startDate.getTime()+30*60*1000),scheduledStart=startDate.toISOString(),scheduledEnd=safeEnd.toISOString();
   if(staffId){const readiness=await assessStaffAllocationDb(db,session,staffId,{id:'',branch_id:client.branch_id||activeBranch(session),scheduled_start:scheduledStart,scheduled_end:scheduledEnd});if(!readiness.allowed)return json({error:{code:'UNSAFE_ALLOCATION',message:`${readiness.staff?.display_name||'This care worker'} cannot be safely allocated: ${readiness.blockers.map(item=>item.message).join(' ')}`,details:{staffId,blockers:readiness.blockers}}},409);}
   const id=crypto.randomUUID(),statements=[db.prepare(`INSERT INTO care_visits(id,organisation_id,branch_id,client_id,staff_id,visit_type,scheduled_start,scheduled_end,rota_source,rota_status,published_at,created_by,carers_required,allocation_state) VALUES(?,?,?,?,?,?,?,?,'manual','published',CURRENT_TIMESTAMP,?,1,?)`).bind(id,session.organisation_id,client.branch_id||null,clientId,staffId,clean(i.visitType)||'Care visit',scheduledStart,scheduledEnd,session.user_id,staffId?'ready':'unallocated')];
-  if(staffId)statements.push(db.prepare(`INSERT INTO visit_staff_assignments(id,organisation_id,branch_id,visit_id,staff_id,assignment_role,allocation_status,allocated_by) VALUES(?,?,?,?,?,'lead','allocated',?)`).bind(crypto.randomUUID(),session.organisation_id,client.branch_id||null,id,staffId,session.user_id));
+  if(staffId)statements.push(db.prepare(`INSERT INTO visit_staff_assignments(id,organisation_id,branch_id,home_branch_id,is_cross_branch,cross_branch_reason,visit_id,staff_id,assignment_role,allocation_status,allocated_by) VALUES(?,?,?,(SELECT branch_id FROM staff WHERE id=? AND organisation_id=?),0,'',?,?,'lead','allocated',?)`).bind(crypto.randomUUID(),session.organisation_id,client.branch_id||null,staffId,session.organisation_id,id,staffId,session.user_id));
   statements.push(auditStatement(db,session.organisation_id,session.user_id,'visits.created','visit',id,{clientId,staffId,holidayProtected:true}));await db.batch(statements);return json({ok:true,id});
 }
 async function getVisitCareRecord(db,session,visitId){
@@ -1593,7 +1661,7 @@ async function acknowledgeCareAlert(db,session,id){const result=await db.prepare
 async function carerDashboard(db,session){
   const isCarer=['carer','senior_carer'].includes(session.access_level);
   if(!isCarer)return forbidden();
-  if(!session.staff_id)return json({linked:false,staffId:null,visits:[],history:[],metrics:{today:0,completed:0,inProgress:0,late:0},message:'Your CoreCare login is not linked to a staff record. Ask a manager to open your staff profile and link this login.'});
+  if(!session.staff_id)return json({linked:false,staffId:null,visits:[],history:[],rotaNotifications:[],metrics:{today:0,completed:0,inProgress:0,late:0},message:'Your CoreCare login is not linked to a staff record. Ask a manager to open your staff profile and link this login.'});
 
   // CoreCare service days run from 06:00 to 06:00. Build UTC boundaries in
   // application code rather than relying on SQLite localtime behaviour in D1.
@@ -1606,9 +1674,10 @@ async function carerDashboard(db,session){
   const base=`SELECT v.*,a.id assignment_id,a.assignment_role,a.actual_start assignment_actual_start,a.actual_end assignment_actual_end,c.first_name||' '||c.last_name client_name,c.preferred_name client_preferred_name,c.address_line_1,c.address_line_2,c.town,c.postcode
     FROM care_visits v JOIN visit_staff_assignments a ON a.visit_id=v.id AND a.organisation_id=v.organisation_id AND a.allocation_status NOT IN ('removed','declined') LEFT JOIN clients c ON c.id=v.client_id AND c.organisation_id=v.organisation_id
     WHERE v.organisation_id=? AND a.staff_id=? AND COALESCE(v.rota_status,'published')='published'`;
-  const [todayRows,historyRows]=await Promise.all([
+  const [todayRows,historyRows,notificationRows]=await Promise.all([
     db.prepare(`${base} AND datetime(v.scheduled_start)>=datetime(?) AND datetime(v.scheduled_start)<datetime(?) AND COALESCE(v.rota_status,'')!='cancelled' AND v.status!='cancelled' ORDER BY datetime(v.scheduled_start)`).bind(session.organisation_id,session.staff_id,serviceStart.toISOString(),serviceEnd.toISOString()).all(),
-    db.prepare(`${base} AND v.status='completed' AND datetime(v.scheduled_start)<datetime(?) ORDER BY datetime(COALESCE(v.actual_end,v.scheduled_end,v.scheduled_start)) DESC LIMIT 20`).bind(session.organisation_id,session.staff_id,serviceStart.toISOString()).all()
+    db.prepare(`${base} AND v.status='completed' AND datetime(v.scheduled_start)<datetime(?) ORDER BY datetime(COALESCE(v.actual_end,v.scheduled_end,v.scheduled_start)) DESC LIMIT 20`).bind(session.organisation_id,session.staff_id,serviceStart.toISOString()).all(),
+    db.prepare("SELECT id,priority,title,message,source,source_id,requires_acknowledgement,read_at,acknowledged_at,due_at,created_at FROM notifications WHERE organisation_id=? AND user_id=? AND source IN ('rota_publish','rota_change') AND archived_at IS NULL ORDER BY CASE WHEN acknowledged_at IS NULL AND requires_acknowledgement=1 THEN 0 ELSE 1 END,datetime(created_at) DESC LIMIT 30").bind(session.organisation_id,session.user_id).all()
   ]);
 
   const visits=todayRows.results||[],history=historyRows.results||[];
@@ -1638,7 +1707,15 @@ async function carerDashboard(db,session){
     else v.live_status=v.assignment_status;
   }
   const active=visits.find(v=>v.assignment_status==='in_progress')||null,next=visits.find(v=>v.assignment_status==='scheduled')||null;
-  return json({linked:true,staffId:session.staff_id,serviceDay:{start:serviceStart.toISOString(),end:serviceEnd.toISOString()},visits,history,activeVisitId:active?.id||null,nextVisitId:next?.id||null,metrics:{today:visits.length,completed:visits.filter(v=>v.status==='completed').length,inProgress:visits.filter(v=>v.status==='in_progress').length,late:visits.filter(v=>v.live_status==='late'||v.live_status==='overrunning').length}});
+  return json({linked:true,staffId:session.staff_id,serviceDay:{start:serviceStart.toISOString(),end:serviceEnd.toISOString()},visits,history,rotaNotifications:notificationRows.results||[],activeVisitId:active?.id||null,nextVisitId:next?.id||null,metrics:{today:visits.length,completed:visits.filter(v=>v.status==='completed').length,inProgress:visits.filter(v=>v.status==='in_progress').length,late:visits.filter(v=>v.live_status==='late'||v.live_status==='overrunning').length}});
+}
+
+async function acknowledgeRotaNotification(db,session,id){
+  if(!['carer','senior_carer'].includes(session.access_level))return forbidden('Only the notified care worker can acknowledge this rota change.');
+  const result=await db.prepare("UPDATE notifications SET read_at=COALESCE(read_at,CURRENT_TIMESTAMP),acknowledged_at=COALESCE(acknowledged_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE id=? AND organisation_id=? AND user_id=? AND source='rota_change' AND requires_acknowledgement=1").bind(id,session.organisation_id,session.user_id).run();
+  if(!result.meta.changes)return notFound('Rota notification');
+  await auditStatement(db,session.organisation_id,session.user_id,'rota.change_acknowledged','notification',id,{}).run();
+  return json({ok:true,id});
 }
 
 async function dashboardSummary(db, session) {

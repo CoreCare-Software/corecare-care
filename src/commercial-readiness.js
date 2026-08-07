@@ -40,7 +40,8 @@ export function assessStaffAllocation(input = {}) {
   const blockers = [];
   const warnings = [];
   if (clean(staff.status).toLowerCase() !== 'active') blockers.push({ code: 'STAFF_INACTIVE', message: 'This care worker is not active.' });
-  if (input.branchMismatch) blockers.push({ code: 'BRANCH_MISMATCH', message: 'This care worker belongs to a different branch.' });
+  if (input.branchMismatch && !input.allowCrossBranch) blockers.push({ code: 'BRANCH_MISMATCH', message: 'This care worker belongs to a different branch.' });
+  if (input.branchMismatch && input.allowCrossBranch) warnings.push({ code: 'CROSS_BRANCH_COVER', message: 'Cross-branch cover must be explicitly authorised and communicated.' });
   if (input.allocationRestricted || staff.allocationRestricted || staff.allocation_restricted) blockers.push({ code: 'WORKFORCE_RESTRICTED', message: 'Critical workforce compliance prevents allocation.' });
   const absence = input.absence || (input.absent ? {} : null);
   if (absence) blockers.push(clean(absence.leave_category).toLowerCase() === 'annual_leave'
