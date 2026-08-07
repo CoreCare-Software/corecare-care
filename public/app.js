@@ -256,7 +256,7 @@ function updateIdentity() {
   if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':currentUser?.accessLevel==='area_manager'?'Area management workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '2.0.3';
+const CORECARE_FALLBACK_VERSION = '2.0.4';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -1380,7 +1380,7 @@ function collectVisitRequirements(){return [...document.querySelectorAll('.visit
 
 let activeClientVerification=null;
 async function loadClientVerification(clientId){const section=$('#client-verification-section');if(!section)return;section.hidden=!clientId;if(!clientId)return;const payload=await api('/api/visits/client-code',{method:'POST',body:JSON.stringify({clientId})});activeClientVerification={...payload,clientId};renderClientVerification(payload);}
-function renderClientVerification(payload){setVisitText('#client-verification-code',payload.code||'—');setVisitText('#client-verification-created',payload.createdAt?`Created ${new Date(payload.createdAt).toLocaleString('en-GB')}`:'');const el=$('#client-qr-code');if(!el)return;el.innerHTML='';if(window.QRCode)new QRCode(el,{text:payload.code,width:196,height:196,correctLevel:QRCode.CorrectLevel.H});else el.innerHTML='<div class="qr-fallback">QR library unavailable<br><strong>'+escapeHtml(payload.code||'')+'</strong></div>';}
+function renderClientVerification(payload){setVisitText('#client-verification-code',payload.code||'—');setVisitText('#client-verification-created',payload.createdAt?`Fixed to this client · created ${new Date(payload.createdAt).toLocaleString('en-GB')} · no expiry`:'');const el=$('#client-qr-code');if(!el)return;el.innerHTML='';if(window.QRCode)new QRCode(el,{text:payload.code,width:196,height:196,correctLevel:QRCode.CorrectLevel.H});else el.innerHTML='<div class="qr-fallback">QR library unavailable<br><strong>'+escapeHtml(payload.code||'')+'</strong></div>';}
 function printClientQr(){if(!activeClientVerification)return;const qr=$('#client-qr-code')?.innerHTML||'',name=activeClientVerification.clientName||'Client',code=activeClientVerification.code||'';const w=window.open('','_blank','width=760,height=900');if(!w)return;w.document.write(`<!doctype html><html><head><title>${escapeHtml(name)} QR code</title><style>body{font-family:Arial,sans-serif;padding:48px;text-align:center;color:#10212a}.sheet{border:2px solid #173b43;border-radius:18px;padding:42px;max-width:560px;margin:auto}h1{margin:0 0 8px}.qr{display:flex;justify-content:center;margin:30px}.code{font-size:24px;font-weight:700;letter-spacing:2px;background:#eef7f5;padding:14px;border-radius:10px}.note{margin-top:28px;font-size:14px;line-height:1.5}@media print{button{display:none}}</style></head><body><div class="sheet"><p>CoreCare visit verification</p><h1>${escapeHtml(name)}</h1><div class="qr">${qr}</div><div class="code">${escapeHtml(code)}</div><p class="note">Care workers: scan this code when arriving and leaving. Keep this sheet securely inside the client’s home.</p><button onclick="window.print()">Print</button></div></body></html>`);w.document.close();setTimeout(()=>w.print(),350);}
 async function openClientDialog(id = '') {
   if(!hasAccess(id?'clients.edit':'clients.create')){denyPage();return;}
