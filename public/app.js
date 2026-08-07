@@ -49,14 +49,14 @@ const carePlanDomainDefinitions = [
 
 
 const labels = {
-  family: ['Family portal', 'Secure family access, updates and messaging will be introduced in a later milestone.'],
+  family: ['Family portal', 'Manage secure family access, shared updates and permitted records.'],
   medication: ['Medication', 'Medication profiles and electronic MAR.'],
-  visits: ['Visits', 'Live visits, daily notes, outcomes and evidence of care will be managed here.'],
-  rota: ['Rota', 'Scheduling, recurring calls, assignments, travel and availability will be managed here.'],
-  tasks: ['Tasks', 'Operational tasks, reminders, ownership and escalation will be managed here.'],
-  incidents: ['Incidents', 'Incident reporting, investigation, actions and audit history will be managed here.'],
-  finance: ['Finance', 'Invoices, rates, funding arrangements and payment tracking will be built here.'],
-  reports: ['Reports', 'Operational, quality, compliance and management reporting will be built here.']
+  visits: ['Visits', 'Review scheduled and completed visits, care records and call-monitoring outcomes.'],
+  rota: ['Rota', 'Plan recurring calls, assignments, availability, travel and publication.'],
+  tasks: ['Tasks', 'Manage operational actions, ownership, priorities and escalation.'],
+  incidents: ['Incidents', 'Record, investigate and close incidents with accountable actions and audit history.'],
+  finance: ['Finance', 'Manage rates, funding arrangements, invoices and payment tracking.'],
+  reports: ['Reports', 'Review operational, quality, compliance and management information.']
 };
 
 let clients = [];
@@ -564,7 +564,7 @@ function showPage(page) {
     return;
   }
   activatePage('#placeholder-page');
-  const [title, copy] = labels[page] || ['Module', 'This CoreCare module is planned for a future build.'];
+  const [title, copy] = labels[page] || ['Workspace unavailable', 'This workspace is not available for your current access or organisation configuration.'];
   $('#placeholder-title').textContent = title;
   $('#placeholder-copy').textContent = copy;
   pageKicker.textContent = 'CoreCare module';
@@ -1433,6 +1433,7 @@ $('#staff-status-filter').addEventListener('change', renderStaff);
 staffForm.addEventListener('submit', saveStaff);
 $('#staff-create-login')?.addEventListener('change',toggleStaffLoginFields);
 $('#quick-add').addEventListener('click', () => quickAddDialog.showModal());
+$('#open-attention-centre').addEventListener('click', () => navigateTo('operations'));
 $('#close-quick-add').addEventListener('click', () => quickAddDialog.close());
 $$('[data-quick]').forEach(button => button.addEventListener('click', () => {
   quickAddDialog.close();
