@@ -18,6 +18,7 @@ import { assessStaffAllocationDb, candidateStaff, enrichVisitsWithTeams, getVisi
 import { clientAssurance, createAllergy, createFeedback, createGovernanceRecord, createJourneyEvent, createMedicationSupply, createObservation, createQualityAction, createQualityAudit, qualityDashboard, saveCommunicationProfile, updateFeedback, updateQualityAction, updateQualityAudit } from './quality-assurance.js';
 import { assessPrnAdministration, medicationDueSlots, validateMedicationSafetyProfile } from './commercial-readiness.js';
 import { recordRuntimeError } from './runtime-errors.js';
+import { issueOrganisationOnboardingInvitation, listOrganisationOnboardingUsers } from './platform-onboarding.js';
 import { MODULE_PERMISSION_MAP, ORGANISATION_MODULES, moduleForApiPath, normaliseOrganisationModuleUpdate, organisationModuleCatalogue, organisationModuleSetupStatements, organisationModuleState } from './organisation-modules.js';
 import { handleAiRewrite } from './ai-rewrite-client.js';
 
@@ -482,6 +483,14 @@ export class IdentityBroker extends WorkerEntrypoint {
 
   async createPortalGrant(input) {
     return createPortalLoginGrant(this.env, input);
+  }
+
+  async listOrganisationUsers(input) {
+    return listOrganisationOnboardingUsers(this.env, input);
+  }
+
+  async issueOnboardingInvitation(input) {
+    return issueOrganisationOnboardingInvitation(this.env, input);
   }
 }
 
