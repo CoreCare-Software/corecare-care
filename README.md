@@ -1,8 +1,8 @@
 # CoreCare Care
 
-CoreCare Care is a multi-tenant care-management web application deployed as a Cloudflare Worker with static browser assets and a Cloudflare D1 database. The current package version is `1.38.5`.
+CoreCare Care is a multi-tenant care-management web application deployed as a Cloudflare Worker with static browser assets and a Cloudflare D1 database. The current package version is `1.38.6`.
 
-Release 1.38.5 hardens the responsive account menu, adds explicit mobile-navigation dismissal and a full browser-state reset after sign-out, completes the role-aware attention route, repairs recurring visit creation during client onboarding, aligns coordinator navigation with existing Care, Family Portal and reporting permissions, preserves operational actions on mobile and removes obsolete unfinished-module wording.
+Release 1.38.6 aligns the exact Platform support origin for production and staging and adds the minimum target-scoped, non-login support principal required by the authenticated exchange, while preserving tenant isolation, grant protection, audit and read-only enforcement.
 
 > Release boundary: version 1.35.0 provides a controlled workflow for data-protection, clinical-safety, recovery, continuity, training and production-acceptance evidence. CoreCare cannot provide those organisational approvals; authorised people must review and sign each domain in Settings → Launch governance before real personal, medical or care data is entered.
 
