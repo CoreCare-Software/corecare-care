@@ -1,4 +1,4 @@
-import { exchangePlatformAccess } from './platform-access.js';
+import { exchangePlatformAccess, isPlatformSupportPrincipal, platformOrigin, supportMutationDenied } from './platform-access.js';
 import { handlePlatformOrganisation } from './platform-organisations.js';
 import { subscriptionAccess, subscriptionLimit, syncPlatformEntitlements } from './platform-entitlements.js';
 import { carePlanReadiness, validateAdministration, validateBodyMap, validateMedicationProfile } from './clinical-records.js';
@@ -8,9 +8,9 @@ import { LAUNCH_GOVERNANCE_DOMAINS, deriveLaunchDomainStatus, deriveOverallLaunc
 import { requestPlatformSupportTicket, requestPlatformTransactionalEmail } from './platform-email.js';
 import { protectResponse, recordComplianceMutation } from './compliance-audit.js';
 
-/** CoreCare Care 1.38.5 - production completion hardening */
-const VERSION = "1.38.5";
-const RELEASE = "CoreCare Care 1.38.5 - production completion hardening";
+/** CoreCare Care 1.38.6 - Platform support-origin compatibility */
+const VERSION = "1.38.6";
+const RELEASE = "CoreCare Care 1.38.6 - Platform support-origin compatibility";
 const SESSION_COOKIE = "corecare_session";
 const SESSION_HOURS = 12;
 const PASSWORD_ITERATIONS = 100000;
@@ -49,7 +49,7 @@ const application = {
         }
         const scopeError = await enforceBranchScope(request, env.DB, session, url);
         if (scopeError) return scopeError;
-        if (session.support_mode && session.support_access_mode === 'read_only' && !['GET','HEAD','OPTIONS'].includes(request.method) && url.pathname !== '/api/platform/exit-support') {
+        if (supportMutationDenied(request, session, url)) {
           return json({ error: { code: 'SUPPORT_MODE_READ_ONLY', message: 'This Platform support session is read-only.' } }, 403);
         }
 
@@ -167,7 +167,7 @@ const application = {
         if (orgMatch && request.method === "GET") return getPlatformOrganisation(env.DB, session, decodeURIComponent(orgMatch[1]));
         if (orgMatch && request.method === "PUT") return updateOrganisationAdmin(request, env.DB, session, decodeURIComponent(orgMatch[1]));
         if (url.pathname === "/api/platform/switch-organisation" && request.method === "POST") return switchOrganisation(request, env.DB, session);
-        if (url.pathname === "/api/platform/exit-support" && request.method === "POST") return exitSupportMode(env.DB, session);
+        if (url.pathname === "/api/platform/exit-support" && request.method === "POST") return exitSupportMode(env, session);
         if (url.pathname === "/api/organisation/profile" && request.method === "GET") return getOrganisationProfile(env.DB, session);
         if (url.pathname === "/api/organisation/profile" && request.method === "PUT") return updateOrganisationProfile(request, env.DB, session);
         if (url.pathname === "/api/launch-governance" && request.method === "GET") return getLaunchGovernance(env, session);
@@ -2153,9 +2153,20 @@ async function switchOrganisation(request,db,session){
   ]);
   return json({ok:true,organisation:org,supportMode:true});
 }
-async function exitSupportMode(db,session){
+export async function exitSupportMode(env,session){
+  const db=env.DB;
   if(!requirePlatformIdentity(session)) return forbidden();
   if(!session.support_mode) return json({ok:true,supportMode:false});
+  if(isPlatformSupportPrincipal(session)){
+    const returnOrigin=platformOrigin(env);
+    if(!returnOrigin)return json({error:{code:'PLATFORM_RETURN_NOT_CONFIGURED',message:'The Platform return address is not configured.'}},503);
+    await db.batch([
+      db.prepare("UPDATE support_sessions SET ended_at=CURRENT_TIMESTAMP WHERE session_id=? AND ended_at IS NULL").bind(session.session_id),
+      auditStatement(db,session.organisation_id,session.user_id,"platform.support_mode_exited","organisation",session.organisation_id,{returnedToPlatform:true}),
+      db.prepare("DELETE FROM sessions WHERE id=?").bind(session.session_id)
+    ]);
+    return json({ok:true,supportMode:false,returnUrl:`${returnOrigin}/`},200,{"set-cookie":expiredSessionCookie()});
+  }
   const origin=session.support_origin_organisation_id;
   const org=origin?await db.prepare("SELECT id,name,status FROM organisations WHERE id=?").bind(origin).first():null;
   const fallback=org||await db.prepare("SELECT id,name,status FROM organisations WHERE status='active' ORDER BY created_at LIMIT 1").first();

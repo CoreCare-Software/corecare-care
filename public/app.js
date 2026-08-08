@@ -245,7 +245,7 @@ function updateIdentity() {
   const workspaceBadge=$('#workspace-label'); if(workspaceBadge) workspaceBadge.textContent=platformWorkspace?'Platform workspace':workspaceConfig().label;
 }
 
-const CORECARE_FALLBACK_VERSION = '1.38.5';
+const CORECARE_FALLBACK_VERSION = '1.38.6';
 
 async function loadApplicationVersion() {
   let version = CORECARE_FALLBACK_VERSION;
@@ -1926,7 +1926,7 @@ $('#workflow-reset')?.addEventListener('click',resetWorkflowForm);$('#workflow-r
 
 if(new URLSearchParams(location.search).get('reset')){showLogin();showLoginPanel('reset')}else restoreSession();
 
-$('#exit-support-mode')?.addEventListener('click',async()=>{try{await api('/api/platform/exit-support',{method:'POST'});location.reload();}catch(error){alert(error.message);}});
+$('#exit-support-mode')?.addEventListener('click',async()=>{try{const result=await api('/api/platform/exit-support',{method:'POST'});if(result.returnUrl)location.assign(result.returnUrl);else location.reload();}catch(error){alert(error.message);}});
 
 $('#platform-global-search')?.addEventListener('input',()=>{clearTimeout(platformSearchTimer);platformSearchTimer=setTimeout(runPlatformSearch,300);});
 
